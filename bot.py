@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""ربات زرکوین (بات زر) - نسخه کامل با MySQL"""
+"""ربات زرکوین (بات زر) - نسخه نهایی با MySQL + رفع باگ‌ها"""
 import asyncio
 import html
 import logging
@@ -79,7 +79,7 @@ WORKERS = {
 
 GAMES = {
     "rps":     {"name": "سنگ کاغذ قیچی", "emoji": "✊", "min": 100, "players": 2, "mult": 1.5},
-    "ttt":     {"name": "دوزه", "emoji": "❌", "min": 1_000, "players": 2, "mult": 1.7},
+    "ttt":     {"name": "دوز", "emoji": "❌", "min": 1_000, "players": 2, "mult": 1.7},
     "quiz":    {"name": "کوییز", "emoji": "🧠", "min": 5_000, "players": 2, "mult": 1.8},
     "penalty": {"name": "پنالتی", "emoji": "⚽", "min": 10_000, "players": 1, "mult": 2.0},
     "luck":    {"name": "شانسی", "emoji": "🍀", "min": 20_000, "players": 1, "mult": 2.0},
@@ -512,7 +512,7 @@ def workers_menu_kb():
 def games_menu_kb():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("✊ سنگ کاغذ قیچی", callback_data="game:rps"),
-         InlineKeyboardButton("❌ دوزه", callback_data="game:ttt")],
+         InlineKeyboardButton("❌ دوز", callback_data="game:ttt")],
         [InlineKeyboardButton("🧠 کوییز", callback_data="game:quiz"),
          InlineKeyboardButton("⚽ پنالتی", callback_data="game:penalty")],
         [InlineKeyboardButton("🍀 شانسی", callback_data="game:luck")],
@@ -632,6 +632,9 @@ async def cmd_zarbazi(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data or ""
+
+    # ✅ رفع باگ ۱: پاک کردن استیت هر بار که دکمه‌ای زده می‌شه
+    user_states.pop(query.from_user.id, None)
 
     if data == "menu:main":
         await query.answer()
@@ -914,7 +917,7 @@ async def rps_choose(query, context, room_id, choice):
 async def render_ttt(query, room):
     p1, p2 = room["players"]
     turn = room["turn"]
-    text = (f"❌ <b>دوزه</b>\n"
+    text = (f"❌ <b>دوز</b>\n"
             f"💰 ورودی: {fmt(room['entry'])}\n\n"
             f"👤 {escape(room['user_names'][p1])} ❌\n"
             f"👤 {escape(room['user_names'][p2])} ⭕\n\n"
@@ -930,10 +933,13 @@ async def ttt_move(query, context, room_id, idx):
         await query.answer("⏳ نوبت تو نیست", show_alert=True); return
     if room["board"][idx]:
         await query.answer("❌ خانه پر است", show_alert=True); return
+
+    # ✅ رفع باگ ۲: p1 و p2 قبل از استفاده تعریف می‌شن
+    p1, p2 = room["players"]
     room["board"][idx] = room["symbols"][user_id]
     winner_symbol = ttt_check_win(room["board"])
+
     if winner_symbol:
-        p1, p2 = room["players"]
         if winner_symbol == "draw":
             await add_balance(p1, room["entry"])
             await add_balance(p2, room["entry"])
@@ -947,6 +953,7 @@ async def ttt_move(query, context, room_id, idx):
         rooms.pop(room_id, None)
         await safe_edit(query, text, back_games_kb())
         return
+
     room["turn"] = p2 if room["turn"] == p1 else p1
     await render_ttt(query, room)
 
@@ -1243,12 +1250,14 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(
                 f"❌ موجودی کافی نیست (نیاز: {fmt(total)})"); return
         user_states[user_id] = {"action": "transfer_card", "amount": amount, "fee": fee}
+        # ✅ رفع باگ ۱: دکمه بازگشت اضافه شد
         await update.message.reply_text(
             f"💸 مبلغ: <b>{fmt(amount)}</b>\n"
             f"💵 کارمزد: <b>{fmt(fee)}</b>\n"
             f"📊 مجموع کسر: <b>{fmt(total)}</b>\n\n"
             f"شماره کارت مقصد رو بفرست:",
-            parse_mode=ParseMode.HTML)
+            parse_mode=ParseMode.HTML,
+            reply_markup=back_main_kb())
         return
 
     if action == "transfer_card":
@@ -1335,7 +1344,7 @@ HELP_TEXT = (
     "🤖 متخصص AI ۲M → ۲۰۰K/روز\n\n"
     "🎮 <b>بازی‌ها</b>\n"
     "✊ سنگ کاغذ قیچی (حداقل ۱۰۰)\n"
-    "❌ دوزه (حداقل ۱۰۰۰)\n"
+    "❌ دوز (حداقل ۱۰۰۰)\n"
     "🧠 کوییز (حداقل ۵۰۰۰)\n"
     "⚽ پنالتی (حداقل ۱۰,۰۰۰)\n"
     "🍀 شانسی (حداقل ۲۰,۰۰۰)\n\n"
