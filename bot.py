@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""ربات زرکوین (بات زر) - نسخه نهایی با کازینو و تاس اصلاح‌شده"""
+"""ربات زرکوین (بات زر) - نسخه نهایی کامل و بدون نقص"""
 import asyncio
 import html
 import logging
@@ -1306,4 +1306,494 @@ async def ttt_move(query, context, room_id, idx):
                     f"✅ دریافتی: <b>{fmt(prize)}</b>")
         room["status"] = "finished"
         rooms.pop(room_id, None)
-        await safe_edit(query
+        await safe_edit(query, text, back_games_kb())
+        return
+    room["turn"] = p2 if room["turn"] == p1 else p1
+    await render_ttt(query, room)
+
+async def quiz_answer(query, room_id, idx):
+    room = rooms.get(room_id)
+    if not room or room["status"] != "playing" or room.get("answered"):
+        await query.answer("❌ بازی تمام شد", show_alert=True); return
+    user_id = query.from_user.id
+    if user_id not in room["players"]:
+        await query.answer("❌ تو بازیکن نیستی", show_alert=True); return
+    q = room["question"]
+    if idx == q["ans"]:
+        room["answered"] = True
+        full_prize = int(room["entry"] * GAMES["quiz"]["mult"])
+        prize, comm = apply_commission(full_prize)
+        await add_balance(user_id, prize)
+        room["status"] = "finished"
+        rooms.pop(room_id, None)
+        await query.answer("✅ درست بود!", show_alert=True)
+        text = (f"🧠 <b>نتیجه کوییز</b>\n"
+                f"❓ {escape(q['q'])}\n\n"
+                f"🏆 برنده: <b>{escape(query.from_user.first_name)}</b>\n"
+                f"💰 جایزه: {fmt(full_prize)}\n"
+                f"💵 کارمزد ۱۰٪: {fmt(comm)}\n"
+                f"✅ دریافتی: <b>{fmt(prize)}</b>")
+        await safe_edit(query, text, back_games_kb())
+    else:
+        await query.answer("❌ اشتباه! دوباره تلاش کن", show_alert=True)
+
+async def penalty_entry_done(update, entry: int):
+    user_id = update.effective_user.id
+    penalty_games[user_id] = {"entry": entry, "chat_id": update.effective_chat.id}
+    await update.message.reply_text(
+        f"⚽ <b>پنالتی</b>\n"
+        f"💰 ورودی: {fmt(entry)}\n\n"
+        f"آماده‌ای؟ شوت کن!",
+        parse_mode=ParseMode.HTML, reply_markup=penalty_kb())
+
+async def penalty_shoot(query, context):
+    user_id = query.from_user.id
+    game = penalty_games.get(user_id)
+    if not game:
+        await query.answer("❌ بازی فعالی نداری", show_alert=True); return
+    penalty_games.pop(user_id, None)
+    if random.random() < 0.5:
+        full_prize = game["entry"] * 2
+        prize, comm = apply_commission(full_prize)
+        await add_balance(user_id, prize)
+        await safe_edit(query,
+            f"⚽ <b>گل!!!</b> 🎉\n\n"
+            f"💰 جایزه: {fmt(full_prize)}\n"
+            f"💵 کارمزد ۱۰٪: {fmt(comm)}\n"
+            f"✅ دریافتی: <b>{fmt(prize)}</b> زرکوین",
+            back_games_kb())
+    else:
+        await safe_edit(query,
+            f"⚽ <b>دروازه‌بان گرفت!</b> 😢\n\n"
+            f"💸 متأسفانه {fmt(game['entry'])} زرکوین از دست رفت.",
+            back_games_kb())
+
+
+# ============================== بازی کازینو ==============================
+async def play_slots_message(update, user_id: int, entry: int):
+    reels = [random.choice(SLOT_SYMBOLS) for _ in range(3)]
+    reels_str = " | ".join(reels)
+    if reels[0] == reels[1] == reels[2]:
+        if reels[0] == "7️⃣":
+            mult = 15
+        elif reels[0] == "⭐":
+            mult = 8
+        else:
+            mult = 4
+    elif reels[0] == reels[1] or reels[1] == reels[2] or reels[0] == reels[2]:
+        mult = 1.7
+    else:
+        mult = 0
+
+    if mult > 0:
+        full_prize = int(entry * mult)
+        prize, comm = apply_commission(full_prize)
+        await add_balance(user_id, prize)
+        text = (
+            f"🎰 <b>اسلات</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"<b>{reels_str}</b>\n\n"
+            f"🎉 <b>بردی!</b>\n"
+            f"💰 جایزه: {fmt(full_prize)}\n"
+            f"💵 کارمزد ۱۰٪: {fmt(comm)}\n"
+            f"✅ دریافتی: <b>{fmt(prize)}</b> زرکوین"
+        )
+    else:
+        text = (
+            f"🎰 <b>اسلات</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"<b>{reels_str}</b>\n\n"
+            f"😢 باختی! {fmt(entry)} زرکوین از دست رفت."
+        )
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=casino_back_kb())
+
+async def resolve_dice(query, entry: int, choice: str):
+    try:
+        user_num = int(choice)
+        if user_num < 1 or user_num > 6:
+            user_num = 1
+    except ValueError:
+        user_num = 1
+
+    dice = random.randint(1, 6)
+    header = (
+        f"🎲 <b>تاس</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🎯 تاس: <b>{DICE_EMOJIS[dice]}</b>\n"
+        f"انتخاب تو: {DICE_EMOJIS[user_num]}\n\n"
+    )
+
+    if dice == user_num:
+        full_prize = entry * 6
+        prize, comm = apply_commission(full_prize)
+        await add_balance(query.from_user.id, prize)
+        text = header + (
+            f"🎉 <b>بردی!</b>\n"
+            f"💰 جایزه: {fmt(full_prize)}\n"
+            f"💵 کارمزد ۱۰٪: {fmt(comm)}\n"
+            f"✅ دریافتی: <b>{fmt(prize)}</b> زرکوین"
+        )
+    else:
+        text = header + f"😢 باختی! {fmt(entry)} زرکوین از دست رفت."
+    await safe_edit(query, text, casino_back_kb())
+
+async def resolve_coin(query, entry: int, choice: str):
+    result = random.choice(["heads", "tails"])
+    result_name = "شیر 🦁" if result == "heads" else "خط ✖️"
+    choice_name = "شیر 🦁" if choice == "heads" else "خط ✖️"
+    header = (
+        f"🪙 <b>شیر یا خط</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🎯 نتیجه: <b>{result_name}</b>\n"
+        f"انتخاب تو: {choice_name}\n\n"
+    )
+    if result == choice:
+        full_prize = entry * 2
+        prize, comm = apply_commission(full_prize)
+        await add_balance(query.from_user.id, prize)
+        text = header + (
+            f"🎉 <b>بردی!</b>\n"
+            f"💰 جایزه: {fmt(full_prize)}\n"
+            f"💵 کارمزد ۱۰٪: {fmt(comm)}\n"
+            f"✅ دریافتی: <b>{fmt(prize)}</b> زرکوین"
+        )
+    else:
+        text = header + f"😢 باختی! {fmt(entry)} زرکوین از دست رفت."
+    await safe_edit(query, text, casino_back_kb())
+
+async def resolve_card(query, entry: int, choice: str):
+    result = random.choice(list(CARD_SUITS.keys()))
+    header = (
+        f"🃏 <b>کارت شانس</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🎯 کارت: <b>{CARD_SUITS[result]}</b> ({CARD_SUITS_FA[result]})\n"
+        f"انتخاب تو: {CARD_SUITS[choice]} ({CARD_SUITS_FA[choice]})\n\n"
+    )
+    if result == choice:
+        full_prize = entry * 4
+        prize, comm = apply_commission(full_prize)
+        await add_balance(query.from_user.id, prize)
+        text = header + (
+            f"🎉 <b>بردی!</b>\n"
+            f"💰 جایزه: {fmt(full_prize)}\n"
+            f"💵 کارمزد ۱۰٪: {fmt(comm)}\n"
+            f"✅ دریافتی: <b>{fmt(prize)}</b> زرکوین"
+        )
+    else:
+        text = header + f"😢 باختی! {fmt(entry)} زرکوین از دست رفت."
+    await safe_edit(query, text, casino_back_kb())
+
+
+# ============================== انتقال ==============================
+async def confirm_transfer(query, owner_id: int):
+    if query.from_user.id != owner_id:
+        await query.answer("❌ این دکمه برای تو نیست", show_alert=True); return
+    pending = pending_transfers.pop(owner_id, None)
+    if not pending:
+        await query.answer("❌ انتقال منقضی شده", show_alert=True); return
+    if not await transfer_coins(owner_id, pending["recipient_id"], pending["amount"], pending["fee"]):
+        await query.answer("❌ موجودی کافی نیست", show_alert=True)
+        await safe_edit(query, "❌ انتقال انجام نشد.", back_main_kb())
+        return
+    await safe_edit(query,
+        f"✅ <b>انتقال انجام شد!</b>\n\n"
+        f"👤 گیرنده: {escape(pending['recipient_name'])}\n"
+        f"💰 مبلغ: <b>{fmt(pending['amount'])}</b>\n"
+        f"💵 کارمزد: <b>{fmt(pending['fee'])}</b>",
+        back_main_kb())
+    try:
+        await query.bot.send_message(
+            pending["recipient_id"],
+            f"🎁 <b>زرکوین دریافت کردی!</b>\n\n"
+            f"💰 مبلغ: <b>{fmt(pending['amount'])}</b> زرکوین\n"
+            f"👤 از طرف: {escape(query.from_user.first_name)}",
+            parse_mode=ParseMode.HTML)
+    except Exception:
+        pass
+
+
+# ============================== ادمین ==============================
+async def owner_give(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        return
+    msg = update.message
+    if not msg.reply_to_message or not msg.reply_to_message.from_user:
+        return
+    m = re.match(r"^انتقال زرکوین\s+([\d۰-۹,،]+)\s*$", msg.text or "")
+    if not m:
+        return
+    amount = parse_amount(m.group(1))
+    if not amount:
+        await msg.reply_text("❌ مبلغ نامعتبر"); return
+    target = msg.reply_to_message.from_user
+    if target.is_bot:
+        await msg.reply_text("❌ به بات نمی‌شه انتقال داد"); return
+    await ensure_user(target)
+    await add_balance(target.id, amount)
+    await msg.reply_text(
+        f"✅ <b>{fmt(amount)}</b> زرکوین به {escape(target.first_name)} واریز شد.",
+        parse_mode=ParseMode.HTML)
+
+
+# ============================== پیام‌های متنی ==============================
+async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.message.text:
+        return
+    user = update.effective_user
+    user_id = user.id
+    text = update.message.text.strip()
+
+    # ✅ لغو با ریپلای روی پیام بازی
+    if text == "لغو" and update.message.reply_to_message:
+        await handle_cancel(user_id, update.message)
+        return
+
+    state = user_states.get(user_id)
+    if not state:
+        return
+
+    action = state["action"]
+
+    if action == "bank_deposit":
+        amount = parse_amount(text)
+        if not amount:
+            await update.message.reply_text("❌ مبلغ نامعتبر"); return
+        await ensure_user(user)
+        ok = await bank_deposit(user_id, amount)
+        user_states.pop(user_id, None)
+        if ok:
+            await update.message.reply_text(
+                f"✅ <b>{fmt(amount)}</b> زرکوین به بانک واریز شد.",
+                parse_mode=ParseMode.HTML, reply_markup=main_menu_kb())
+        else:
+            await update.message.reply_text("❌ موجودی کافی نیست", reply_markup=main_menu_kb())
+        return
+
+    if action == "bank_withdraw":
+        amount = parse_amount(text)
+        if not amount:
+            await update.message.reply_text("❌ مبلغ نامعتبر"); return
+        ok = await bank_withdraw(user_id, amount)
+        user_states.pop(user_id, None)
+        if ok:
+            await update.message.reply_text(
+                f"✅ <b>{fmt(amount)}</b> زرکوین از بانک برداشت شد.",
+                parse_mode=ParseMode.HTML, reply_markup=main_menu_kb())
+        else:
+            await update.message.reply_text("❌ موجودی بانک کافی نیست", reply_markup=main_menu_kb())
+        return
+
+    if action == "game_entry":
+        gk = state["game"]
+        g = GAMES.get(gk)
+        if not g:
+            user_states.pop(user_id, None); return
+        amount = parse_amount(text)
+        if not amount:
+            await update.message.reply_text("❌ مبلغ نامعتبر"); return
+        if amount < g["min"]:
+            await update.message.reply_text(f"❌ حداقل ورودی {fmt(g['min'])} است"); return
+        await ensure_user(user)
+        if not await deduct_balance(user_id, amount):
+            await update.message.reply_text("❌ موجودی کافی نیست"); return
+        user_states.pop(user_id, None)
+
+        if gk == "penalty":
+            await penalty_entry_done(update, amount)
+            return
+
+        rid = new_room_id()
+        rooms[rid] = {
+            "id": rid, "game": gk, "entry": amount, "creator": user_id,
+            "players": [user_id], "status": "waiting",
+            "user_names": {user_id: user.first_name or str(user_id)},
+            "chat_id": update.effective_chat.id, "created_at": now_iso(),
+        }
+        text_out = (
+            f"{g['emoji']} <b>{g['name']}</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"💰 ورودی: <b>{fmt(amount)}</b>\n\n"
+            f"👤 بازیکن ۱: {escape(user.first_name)}\n\n"
+            f"⏳ منتظر بازیکن دوم...")
+        await update.message.reply_text(text_out, parse_mode=ParseMode.HTML,
+                                         reply_markup=join_room_kb(rid, gk))
+        return
+
+    if action == "casino_entry":
+        cg = state["game"]
+        g = CASINO_GAMES.get(cg)
+        if not g:
+            user_states.pop(user_id, None); return
+        amount = parse_amount(text)
+        if not amount:
+            await update.message.reply_text("❌ مبلغ نامعتبر"); return
+        if amount < g["min"]:
+            await update.message.reply_text(f"❌ حداقل ورودی {fmt(g['min'])} است"); return
+        await ensure_user(user)
+        if not await deduct_balance(user_id, amount):
+            await update.message.reply_text("❌ موجودی کافی نیست"); return
+        user_states.pop(user_id, None)
+
+        if cg == "slots":
+            await play_slots_message(update, user_id, amount)
+            return
+
+        casino_pending[user_id] = {"entry": amount, "game": cg,
+                                    "chat_id": update.effective_chat.id}
+        if cg == "dice":
+            await update.message.reply_text(
+                f"🎲 <b>تاس</b>\n💰 ورودی: {fmt(amount)}\n\nانتخاب کن:",
+                parse_mode=ParseMode.HTML, reply_markup=casino_dice_kb())
+        elif cg == "coin":
+            await update.message.reply_text(
+                f"🪙 <b>شیر یا خط</b>\n💰 ورودی: {fmt(amount)}\n\nانتخاب کن:",
+                parse_mode=ParseMode.HTML, reply_markup=casino_coin_kb())
+        elif cg == "card":
+            await update.message.reply_text(
+                f"🃏 <b>کارت شانس</b>\n💰 ورودی: {fmt(amount)}\n\nکدام خال؟",
+                parse_mode=ParseMode.HTML, reply_markup=casino_card_kb())
+        return
+
+    if action == "transfer_amount":
+        amount = parse_amount(text)
+        if not amount:
+            await update.message.reply_text("❌ مبلغ نامعتبر"); return
+        await ensure_user(user)
+        fee = int(amount * TRANSFER_FEE_RATE) if amount > TRANSFER_FEE_MIN else 0
+        total = amount + fee
+        u = await get_user(user_id)
+        if int(u["balance"]) < total:
+            await update.message.reply_text(
+                f"❌ موجودی کافی نیست (نیاز: {fmt(total)})"); return
+        user_states[user_id] = {"action": "transfer_card", "amount": amount, "fee": fee}
+        await update.message.reply_text(
+            f"💸 مبلغ: <b>{fmt(amount)}</b>\n"
+            f"💵 کارمزد: <b>{fmt(fee)}</b>\n"
+            f"📊 مجموع کسر: <b>{fmt(total)}</b>\n\n"
+            f"شماره کارت مقصد رو بفرست:",
+            parse_mode=ParseMode.HTML, reply_markup=back_main_kb())
+        return
+
+    if action == "transfer_card":
+        recipient = await find_user_by_card(text)
+        if not recipient:
+            await update.message.reply_text("❌ کاربری با این شماره کارت پیدا نشد"); return
+        if recipient["user_id"] == user_id:
+            await update.message.reply_text("❌ به خودت نمی‌تونی انتقال بدی"); return
+        amount = state["amount"]
+        fee = state["fee"]
+        total = amount + fee
+        sender = await get_user(user_id)
+        if int(sender["balance"]) < total:
+            user_states.pop(user_id, None)
+            await update.message.reply_text("❌ موجودی کافی نیست"); return
+        pending_transfers[user_id] = {
+            "recipient_id": recipient["user_id"],
+            "recipient_name": recipient["first_name"] or str(recipient["user_id"]),
+            "amount": amount, "fee": fee, "total": total,
+        }
+        user_states.pop(user_id, None)
+        await update.message.reply_text(
+            f"💸 <b>تأیید انتقال</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"👤 گیرنده: {escape(recipient['first_name'])}\n"
+            f"💳 کارت: <code>{format_card(recipient['card_number'])}</code>\n"
+            f"💰 مبلغ: <b>{fmt(amount)}</b>\n"
+            f"💵 کارمزد: <b>{fmt(fee)}</b>\n"
+            f"📊 مجموع کسر: <b>{fmt(total)}</b>\n\n"
+            f"آیا تأیید می‌کنی؟",
+            parse_mode=ParseMode.HTML, reply_markup=transfer_confirm_kb(user_id))
+        return
+
+
+# ============================== خوش‌آمد گروه ==============================
+async def chat_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    cm = update.my_chat_member
+    if not cm or not update.effective_chat:
+        return
+    if update.effective_chat.type not in ("group", "supergroup"):
+        return
+    if cm.new_chat_member.status in (ChatMember.MEMBER, ChatMember.ADMINISTRATOR) and \
+       cm.old_chat_member.status in (ChatMember.LEFT, ChatMember.KICKED):
+        try:
+            await context.bot.send_message(
+                update.effective_chat.id,
+                "✨ <b>زرکوین بات در این گروه فعال شد!</b> ✨\n\n"
+                "💡 برای شروع بنویس: <code>زربات</code>\n"
+                "🎮 برای بازی‌ها بنویس: <code>زر بازی</code>",
+                parse_mode=ParseMode.HTML)
+        except Exception:
+            logger.exception("welcome failed")
+
+
+# ============================== راهنما ==============================
+HELP_TEXT = (
+    "📚 <b>راهنمای زرکوین بات</b>\n"
+    "━━━━━━━━━━━━━━━━━━\n\n"
+    "🪙 <b>زرکوین چیه؟</b>\n"
+    "واحد پول بازی، قابل کسب از طریق خرید ملک، استخدام کارگر، سود بانکی و برد در بازی‌ها.\n\n"
+    "🎯 <b>دستورات</b>\n"
+    "• <code>زربات</code> — باز کردن منوی اصلی\n"
+    "• <code>زر بازی</code> — رفتن به بخش بازی‌ها\n\n"
+    "🏦 <b>بانک</b>\n"
+    "سود روزانه ۲٪ که هر شب ساعت ۰۰:۰۰ واریز میشه.\n"
+    "شماره کارت اختصاصی بر اساس آیدی عددی.\n\n"
+    "🏠 <b>ملک‌ها</b> (حداکثر ۵)\n"
+    "🛒 ۵۰۰K→۵۰K | 🍎 ۸۰۰K→۸۰K | 🥩 ۱M→۱۰۰K | 💊 ۱.۸M→۱۸۰K\n"
+    "💈 ۲.۲M→۲۲۰K | 👕 ۳M→۳۰۰K | 📚 ۳.۵M→۳۵۰K | 📱 ۴M→۴۰۰K\n\n"
+    "👷 <b>کارگرها</b> (حداکثر ۵)\n"
+    "👨‍🏫 ۳۰۰K→۳۰K | 👨‍⚕️ ۵۰۰K→۵۰K | 🚕 ۸۰۰K→۸۰K\n"
+    "👨‍💻 ۱.۲M→۱۲۰K | 🤖 ۲M→۲۰۰K\n\n"
+    "🎮 <b>بازی‌ها</b> (حداقل ۱۰۰۰)\n"
+    "✊ سنگ کاغذ قیچی — ۱.۵x\n"
+    "❌ دوز — ۱.۷x\n"
+    "🧠 کوییز — ۱.۸x\n"
+    "⚽ پنالتی — ۲x\n\n"
+    "🎰 <b>کازینو</b> (حداقل ۱۰,۰۰۰)\n"
+    "🎰 اسلات — تا ۱۵x\n"
+    "🎲 تاس — تا ۶x\n"
+    "🪙 شیر یا خط — ۲x\n"
+    "🃏 کارت شانس — ۴x\n\n"
+    "💵 <b>کارمزد بات</b>: ۱۰٪ از هر برد\n\n"
+    "💸 <b>انتقال</b>: با شماره کارت. بالای ۱M، ۱٪ کارمزد.\n\n"
+    "👑 <b>اهدا از طرف مالک</b>\n"
+    "مالک با ریپلای روی پیام کسی بنویسه:\n"
+    "<code>انتقال زرکوین 5000</code>"
+)
+
+
+# ============================== main ==============================
+async def post_init(app: Application):
+    await init_db_pool()
+    await init_db()
+    try:
+        await daily_payout()
+    except Exception:
+        logger.exception("initial daily_payout failed")
+    app.job_queue.run_daily(
+        daily_payout, time=time(hour=0, minute=0, tzinfo=TEHRAN), name="daily_payout")
+
+
+async def post_shutdown(app: Application):
+    await close_db_pool()
+
+
+def main():
+    app = Application.builder().token(BOT_TOKEN) \
+        .post_init(post_init).post_shutdown(post_shutdown).build()
+
+    app.add_handler(MessageHandler(filters.Regex(r"^زربات$"), cmd_zarbat))
+    app.add_handler(MessageHandler(filters.Regex(r"^زر\s*بازی$"), cmd_zarbazi))
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(ChatMemberHandler(chat_member_handler, ChatMemberHandler.MY_CHAT_MEMBER))
+    app.add_handler(MessageHandler(
+        filters.Regex(r"^انتقال زرکوین\s+[\d۰-۹,،]+"), owner_give))
+    app.add_handler(CallbackQueryHandler(callback_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
+
+    logger.info("🚀 Bot starting...")
+    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+
+
+if __name__ == "__main__":
+    main()
