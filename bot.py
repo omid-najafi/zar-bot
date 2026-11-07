@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""ربات زرکوین (بات زر) - نسخه نهایی با MySQL + رفع باگ‌ها"""
+"""ربات زرکوین (بات زر) - نسخه نهایی با کازینو"""
 import asyncio
 import html
 import logging
@@ -13,21 +13,13 @@ from zoneinfo import ZoneInfo
 
 import aiomysql
 from telegram import (
-    ChatMember,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    Update,
+    ChatMember, InlineKeyboardButton, InlineKeyboardMarkup, Update,
 )
 from telegram.constants import ParseMode
 from telegram.error import BadRequest
 from telegram.ext import (
-    Application,
-    CallbackQueryHandler,
-    ChatMemberHandler,
-    CommandHandler,
-    ContextTypes,
-    MessageHandler,
-    filters,
+    Application, CallbackQueryHandler, ChatMemberHandler, CommandHandler,
+    ContextTypes, MessageHandler, filters,
 )
 
 # ============================== تنظیمات ==============================
@@ -57,6 +49,7 @@ BANK_RATE = 0.02
 MAX_ASSETS = 5
 TRANSFER_FEE_RATE = 0.01
 TRANSFER_FEE_MIN = 1_000_000
+COMMISSION_RATE = 0.10
 
 PROPERTIES = {
     "supermarket": {"name": "سوپرمارکت", "price": 500_000, "income": 50_000, "emoji": "🛒"},
@@ -78,28 +71,249 @@ WORKERS = {
 }
 
 GAMES = {
-    "rps":     {"name": "سنگ کاغذ قیچی", "emoji": "✊", "min": 100, "players": 2, "mult": 1.5},
-    "ttt":     {"name": "دوز", "emoji": "❌", "min": 1_000, "players": 2, "mult": 1.7},
-    "quiz":    {"name": "کوییز", "emoji": "🧠", "min": 5_000, "players": 2, "mult": 1.8},
-    "penalty": {"name": "پنالتی", "emoji": "⚽", "min": 10_000, "players": 1, "mult": 2.0},
-    "luck":    {"name": "شانسی", "emoji": "🍀", "min": 20_000, "players": 1, "mult": 2.0},
+    "rps":     {"name": "سنگ کاغذ قیچی", "emoji": "✊", "min": 1000, "players": 2, "mult": 1.5},
+    "ttt":     {"name": "دوز", "emoji": "❌", "min": 1000, "players": 2, "mult": 1.7},
+    "quiz":    {"name": "کوییز", "emoji": "🧠", "min": 1000, "players": 2, "mult": 1.8},
+    "penalty": {"name": "پنالتی", "emoji": "⚽", "min": 1000, "players": 1, "mult": 2.0},
 }
 
+CASINO_GAMES = {
+    "slots": {"name": "اسلات", "emoji": "🎰", "min": 10_000},
+    "dice":  {"name": "تاس", "emoji": "🎲", "min": 10_000},
+    "coin":  {"name": "شیر یا خط", "emoji": "🪙", "min": 10_000},
+    "card":  {"name": "کارت شانس", "emoji": "🃏", "min": 10_000},
+}
+
+SLOT_SYMBOLS = ["🍒", "🍋", "🍊", "🍇", "7️⃣", "⭐"]
+CARD_SUITS = {"hearts": "♥️", "diamonds": "♦️", "spades": "♠️", "clubs": "♣️"}
+CARD_SUITS_FA = {"hearts": "دل", "diamonds": "خشت", "spades": "پیک", "clubs": "گشنیز"}
+
+# ============================== بانک سوالات کوییز (۳۱۰ سوال) ==============================
 QUIZ_QUESTIONS = [
+    {"q": "بنیان‌گذار سلسله هخامنشیان کیست؟", "opts": ["کوروش کبیر", "داریوش", "خشایارشا", "اردشیر"], "ans": 0},
+    {"q": "تخت جمشید در کدام استان است؟", "opts": ["فارس", "خوزستان", "کرمان", "یزد"], "ans": 0},
+    {"q": "آخرین پادشاه هخامنشی کیست؟", "opts": ["داریوش سوم", "خشایارشا", "اردشیر", "کوروش"], "ans": 0},
+    {"q": "بنیان‌گذار سلسله ساسانیان کیست؟", "opts": ["اردشیر بابکان", "شاپور", "یزدگرد", "انوشیروان"], "ans": 0},
+    {"q": "اولین پادشاه صفویه کیست؟", "opts": ["شاه اسماعیل اول", "شاه عباس اول", "شاه طهماسب", "شاه سلطان حسین"], "ans": 0},
+    {"q": "پایتخت صفویان در اوج قدرت کجا بود؟", "opts": ["اصفهان", "تبریز", "قزوین", "شیراز"], "ans": 0},
+    {"q": "بنیان‌گذار سلسله افشاریه کیست؟", "opts": ["نادرشاه", "کریم‌خان", "آغامحمدخان", "شاه سلطان حسین"], "ans": 0},
+    {"q": "پایتخت کریم‌خان زند کجا بود؟", "opts": ["شیراز", "تهران", "اصفهان", "کرمان"], "ans": 0},
+    {"q": "آخرین پادشاه قاجار کیست؟", "opts": ["احمدشاه", "مظفرالدین‌شاه", "محمدعلی‌شاه", "رضاشاه"], "ans": 0},
+    {"q": "انقلاب مشروطه در چه سالی رخ داد؟", "opts": ["۱۲۸۵ شمسی", "۱۲۹۰ شمسی", "۱۲۷۵ شمسی", "۱۳۰۰ شمسی"], "ans": 0},
+    {"q": "ملی شدن صنعت نفت ایران در چه سالی رخ داد؟", "opts": ["۱۳۲۹ شمسی", "۱۳۲۵ شمسی", "۱۳۳۵ شمسی", "۱۳۴۰ شمسی"], "ans": 0},
+    {"q": "رهبر نهضت ملی شدن نفت ایران چه کسی بود؟", "opts": ["دکتر مصدق", "دکتر فاطمی", "آیت‌الله کاشانی", "رضاشاه"], "ans": 0},
+    {"q": "جنگ ایران و عراق چند سال طول کشید؟", "opts": ["۸ سال", "۶ سال", "۱۰ سال", "۵ سال"], "ans": 0},
+    {"q": "کتیبه بیستون متعلق به کدام پادشاه است؟", "opts": ["داریوش اول", "کوروش", "خشایارشا", "اردشیر"], "ans": 0},
+    {"q": "جنگ جهانی اول در چه سالی آغاز شد؟", "opts": ["۱۹۱۴", "۱۹۱۸", "۱۹۳۹", "۱۹۲۰"], "ans": 0},
+    {"q": "جنگ جهانی دوم در چه سالی پایان یافت؟", "opts": ["۱۹۴۵", "۱۹۴۴", "۱۹۴۶", "۱۹۴۳"], "ans": 0},
+    {"q": "انقلاب کبیر فرانسه در چه سالی رخ داد؟", "opts": ["۱۷۸۹", "۱۷۷۶", "۱۸۰۰", "۱۸۱۵"], "ans": 0},
+    {"q": "دیوار برلین در چه سالی فروپاشید؟", "opts": ["۱۹۸۹", "۱۹۹۱", "۱۹۸۵", "۱۹۹۳"], "ans": 0},
+    {"q": "اولین انسان روی ماه چه کسی بود؟", "opts": ["نیل آرمسترانگ", "یوری گاگارین", "باز آلدرین", "مایکل کالینز"], "ans": 0},
+    {"q": "اولین انسان در فضا چه کسی بود؟", "opts": ["یوری گاگارین", "نیل آرمسترانگ", "جان گلن", "آلن شپرد"], "ans": 0},
+    {"q": "جنگ سرد بین کدام دو کشور بود؟", "opts": ["آمریکا و شوروی", "آمریکا و چین", "آلمان و فرانسه", "انگلیس و آلمان"], "ans": 0},
+    {"q": "فروپاشی اتحاد جماهیر شوروی در چه سالی رخ داد؟", "opts": ["۱۹۹۱", "۱۹۸۹", "۱۹۹۳", "۱۹۸۵"], "ans": 0},
+    {"q": "کشف آمریکا توسط کریستف کلمب در چه سالی بود؟", "opts": ["۱۴۹۲", "۱۴۵۰", "۱۵۰۰", "۱۴۸۰"], "ans": 0},
+    {"q": "کدام تمدن باستانی اهرام ثلاثه را ساخت؟", "opts": ["مصر", "بابل", "یونان", "روم"], "ans": 0},
+    {"q": "قانون حمورابی متعلق به کدام تمدن است؟", "opts": ["بابل", "مصر", "یونان", "ایران"], "ans": 0},
+    {"q": "انقلاب صنعتی ابتدا در کدام کشور آغاز شد؟", "opts": ["انگلستان", "آمریکا", "آلمان", "فرانسه"], "ans": 0},
+    {"q": "چه کسی اولین رئیس‌جمهور آمریکا بود؟", "opts": ["جورج واشنگتن", "آبراهام لینکلن", "توماس جفرسون", "جان آدامز"], "ans": 0},
     {"q": "پایتخت ایران کجاست؟", "opts": ["تهران", "اصفهان", "شیراز", "مشهد"], "ans": 0},
-    {"q": "بزرگ‌ترین سیاره منظومه شمسی کدام است؟", "opts": ["زحل", "مشتری", "زمین", "نپتون"], "ans": 1},
-    {"q": "آب از چه عناصری تشکیل شده است؟", "opts": ["اکسیژن و نیتروژن", "هیدروژن و اکسیژن", "کربن و اکسیژن", "هیدروژن و کربن"], "ans": 1},
-    {"q": "کدام کشور بیشترین جمعیت را دارد؟", "opts": ["هند", "چین", "آمریکا", "اندونزی"], "ans": 1},
-    {"q": "نویسنده شاهنامه کیست؟", "opts": ["حافظ", "سعدی", "فردوسی", "مولانا"], "ans": 2},
-    {"q": "درازترین رود جهان کدام است؟", "opts": ["نیل", "آمازون", "می‌سی‌سی‌پی", "دانوب"], "ans": 0},
-    {"q": "واحد اندازه‌گیری نیرو چیست؟", "opts": ["ژول", "وات", "نیوتن", "پاسکال"], "ans": 2},
-    {"q": "اولین انسان روی ماه چه کسی بود؟", "opts": ["یوری گاگارین", "نیل آرمسترانگ", "باز آلدرین", "مایکل کالینز"], "ans": 1},
-    {"q": "زبان رسمی برزیل چیست؟", "opts": ["اسپانیایی", "پرتغالی", "انگلیسی", "فرانسوی"], "ans": 1},
-    {"q": "سریع‌ترین جانور خشکی کدام است؟", "opts": ["شیر", "یوزپلنگ", "اسب", "آهو"], "ans": 1},
+    {"q": "بزرگ‌ترین دریاچه ایران کدام است؟", "opts": ["دریاچه ارومیه", "دریاچه خزر", "دریاچه هامون", "دریاچه نمک"], "ans": 0},
+    {"q": "بلندترین قله ایران کدام است؟", "opts": ["دماوند", "علم‌کوه", "زردکوه", "تفتان"], "ans": 0},
+    {"q": "دماوند در کدام استان قرار دارد؟", "opts": ["مازندران", "تهران", "گیلان", "سمنان"], "ans": 0},
+    {"q": "طولانی‌ترین رودخانه ایران کدام است؟", "opts": ["کارون", "سفیدرود", "ارس", "زاینده‌رود"], "ans": 0},
+    {"q": "بزرگ‌ترین استان ایران از نظر مساحت کدام است؟", "opts": ["سیستان و بلوچستان", "کرمان", "فارس", "خراسان رضوی"], "ans": 0},
+    {"q": "کوچک‌ترین استان ایران کدام است؟", "opts": ["البرز", "قم", "تهران", "گیلان"], "ans": 0},
+    {"q": "شهر اصفهان در کنار کدام رود قرار دارد؟", "opts": ["زاینده‌رود", "کارون", "سفیدرود", "ارس"], "ans": 0},
+    {"q": "بندرعباس مرکز کدام استان است؟", "opts": ["هرمزگان", "سیستان و بلوچستان", "بوشهر", "خوزستان"], "ans": 0},
+    {"q": "کدام شهر به نصف جهان معروف است؟", "opts": ["اصفهان", "شیراز", "تبریز", "مشهد"], "ans": 0},
+    {"q": "میدان نقش جهان در کدام شهر است؟", "opts": ["اصفهان", "شیراز", "تهران", "تبریز"], "ans": 0},
+    {"q": "برج آزادی در کدام شهر است؟", "opts": ["تهران", "اصفهان", "شیراز", "مشهد"], "ans": 0},
+    {"q": "حرم امام رضا در کدام شهر است؟", "opts": ["مشهد", "قم", "شیراز", "تهران"], "ans": 0},
+    {"q": "حرم حضرت معصومه در کدام شهر است؟", "opts": ["قم", "مشهد", "شیراز", "تهران"], "ans": 0},
+    {"q": "پایتخت فرانسه کجاست؟", "opts": ["پاریس", "لندن", "برلین", "مادرید"], "ans": 0},
+    {"q": "پایتخت آلمان کجاست؟", "opts": ["برلین", "مونیخ", "هامبورگ", "فرانکفورت"], "ans": 0},
+    {"q": "پایتخت انگلستان کجاست؟", "opts": ["لندن", "منچستر", "لیورپول", "بیرمنگام"], "ans": 0},
+    {"q": "پایتخت ایتالیا کجاست؟", "opts": ["رم", "میلان", "ونیز", "ناپل"], "ans": 0},
+    {"q": "پایتخت اسپانیا کجاست؟", "opts": ["مادرید", "بارسلونا", "سویا", "والنسیا"], "ans": 0},
+    {"q": "پایتخت روسیه کجاست؟", "opts": ["مسکو", "سن‌پترزبورگ", "کی‌یف", "نووسیبیرسک"], "ans": 0},
+    {"q": "پایتخت چین کجاست؟", "opts": ["پکن", "شانگهای", "هنگ‌کنگ", "گوانگژو"], "ans": 0},
+    {"q": "پایتخت ژاپن کجاست؟", "opts": ["توکیو", "اوزاکا", "کیوتو", "هیروشیما"], "ans": 0},
+    {"q": "پایتخت هند کجاست؟", "opts": ["دهلی نو", "بمبئی", "کلکته", "بنگلور"], "ans": 0},
+    {"q": "پایتخت ترکیه کجاست؟", "opts": ["آنکارا", "استانبول", "ازمیر", "بورسا"], "ans": 0},
+    {"q": "پایتخت عربستان سعودی کجاست؟", "opts": ["ریاض", "جده", "مکه", "مدینه"], "ans": 0},
+    {"q": "پایتخت افغانستان کجاست؟", "opts": ["کابل", "هرات", "قندهار", "مزار شریف"], "ans": 0},
+    {"q": "پایتخت پاکستان کجاست؟", "opts": ["اسلام‌آباد", "کراچی", "لاهور", "پیشاور"], "ans": 0},
+    {"q": "پایتخت آذربایجان کجاست؟", "opts": ["باکو", "گنجه", "سومقاییت", "لنکران"], "ans": 0},
+    {"q": "پایتخت ارمنستان کجاست؟", "opts": ["ایروان", "گیومری", "وانادزور", "آبویان"], "ans": 0},
+    {"q": "پایتخت گرجستان کجاست؟", "opts": ["تفلیس", "باتومی", "کوتایسی", "سوخومی"], "ans": 0},
+    {"q": "پایتخت آمریکا کجاست؟", "opts": ["واشنگتن", "نیویورک", "لس‌آنجلس", "شیکاگو"], "ans": 0},
+    {"q": "پایتخت کانادا کجاست؟", "opts": ["اتاوا", "تورنتو", "مونترال", "ونکوور"], "ans": 0},
+    {"q": "پایتخت استرالیا کجاست؟", "opts": ["کانبرا", "سیدنی", "ملبورن", "بریزبن"], "ans": 0},
+    {"q": "پایتخت برزیل کجاست؟", "opts": ["برازیلیا", "ریودوژانیرو", "سائوپائولو", "سالوادور"], "ans": 0},
+    {"q": "پایتخت مصر کجاست؟", "opts": ["قاهره", "اسکندریه", "جیزه", "اقصر"], "ans": 0},
+    {"q": "بزرگ‌ترین اقیانوس جهان کدام است؟", "opts": ["آرام", "اطلس", "هند", "منجمد شمالی"], "ans": 0},
+    {"q": "بزرگ‌ترین قاره جهان کدام است؟", "opts": ["آسیا", "آفریقا", "آمریکای شمالی", "اروپا"], "ans": 0},
+    {"q": "بلندترین قله جهان کدام است؟", "opts": ["اورست", "K2", "کنچن‌جونگا", "دماوند"], "ans": 0},
+    {"q": "طولانی‌ترین رود جهان کدام است؟", "opts": ["نیل", "آمازون", "می‌سی‌سی‌پی", "دانوب"], "ans": 0},
+    {"q": "بزرگ‌ترین بیابان گرم جهان کدام است؟", "opts": ["صحرای آفریقا", "بیابان عربستان", "گبی", "کالاهاری"], "ans": 0},
+    {"q": "بزرگ‌ترین کشور جهان از نظر مساحت کدام است؟", "opts": ["روسیه", "کانادا", "چین", "آمریکا"], "ans": 0},
+    {"q": "کوچک‌ترین کشور جهان کدام است؟", "opts": ["واتیکان", "موناکو", "سان مارینو", "لیختن‌اشتاین"], "ans": 0},
+    {"q": "واحد اندازه‌گیری نیرو چیست؟", "opts": ["نیوتن", "ژول", "وات", "پاسکال"], "ans": 0},
+    {"q": "واحد اندازه‌گیری انرژی چیست؟", "opts": ["ژول", "نیوتن", "وات", "آمپر"], "ans": 0},
+    {"q": "واحد اندازه‌گیری توان چیست؟", "opts": ["وات", "ژول", "نیوتن", "هرتز"], "ans": 0},
+    {"q": "قانون جاذبه توسط چه کسی کشف شد؟", "opts": ["نیوتن", "انیشتین", "گالیله", "کپلر"], "ans": 0},
+    {"q": "نسبیت توسط چه کسی مطرح شد؟", "opts": ["اینشتین", "نیوتن", "بور", "پلانک"], "ans": 0},
+    {"q": "فرمول معروف E=mc² متعلق به کیست؟", "opts": ["اینشتین", "نیوتن", "گالیله", "کپلر"], "ans": 0},
+    {"q": "نماد شیمیایی طلا چیست؟", "opts": ["Au", "Ag", "Pt", "Cu"], "ans": 0},
+    {"q": "نماد شیمیایی نقره چیست؟", "opts": ["Ag", "Au", "Fe", "Zn"], "ans": 0},
+    {"q": "نماد شیمیایی آهن چیست؟", "opts": ["Fe", "Ir", "In", "Fr"], "ans": 0},
+    {"q": "نماد شیمیایی سدیم چیست؟", "opts": ["Na", "Sd", "So", "Sm"], "ans": 0},
+    {"q": "نماد شیمیایی پتاسیم چیست؟", "opts": ["K", "P", "Pt", "Ka"], "ans": 0},
+    {"q": "فرمول شیمیایی آب چیست؟", "opts": ["H₂O", "CO₂", "O₂", "H₂O₂"], "ans": 0},
+    {"q": "فرمول شیمیایی نمک خوراکی چیست؟", "opts": ["NaCl", "KCl", "CaCO₃", "NaOH"], "ans": 0},
+    {"q": "فراوان‌ترین گاز در جو زمین کدام است؟", "opts": ["نیتروژن", "اکسیژن", "دی‌اکسید کربن", "آرگون"], "ans": 0},
+    {"q": "آب در چند درجه سانتی‌گراد می‌جوشد؟", "opts": ["۱۰۰", "۹۰", "۱۱۰", "۸۰"], "ans": 0},
+    {"q": "آب در چند درجه سانتی‌گراد یخ می‌زند؟", "opts": ["۰", "-۱۰", "۱۰", "۵"], "ans": 0},
+    {"q": "کدام فلز در دمای اتاق مایع است؟", "opts": ["جیوه", "آهن", "مس", "طلا"], "ans": 0},
+    {"q": "کدام فلز از همه رساناتر است؟", "opts": ["نقره", "مس", "طلا", "آلومینیوم"], "ans": 0},
+    {"q": "واحد سازنده بدن موجودات زنده چیست؟", "opts": ["سلول", "اتم", "مولکول", "بافت"], "ans": 0},
+    {"q": "بزرگ‌ترین اندام بدن انسان کدام است؟", "opts": ["پوست", "کبد", "مغز", "ریه"], "ans": 0},
+    {"q": "سنگین‌ترین اندام داخلی بدن انسان کدام است؟", "opts": ["کبد", "مغز", "قلب", "کلیه"], "ans": 0},
+    {"q": "قلب انسان چند حفره دارد؟", "opts": ["۴", "۲", "۳", "۵"], "ans": 0},
+    {"q": "خون توسط کدام اندام تصفیه می‌شود؟", "opts": ["کلیه", "کبد", "قلب", "طحال"], "ans": 0},
+    {"q": "کدام اندام مسئول ترشح انسولین است؟", "opts": ["لوزالمعده", "کبد", "کلیه", "طحال"], "ans": 0},
+    {"q": "کدام ویتامین از نور خورشید ساخته می‌شود؟", "opts": ["ویتامین D", "ویتامین C", "ویتامین A", "ویتامین B"], "ans": 0},
+    {"q": "کمبود کدام ویتامین باعث اسکوربوت می‌شود؟", "opts": ["ویتامین C", "ویتامین D", "ویتامین A", "ویتامین B12"], "ans": 0},
+    {"q": "DNA در کدام قسمت سلول قرار دارد؟", "opts": ["هسته", "سیتوپلاسم", "غشا", "میتوکندری"], "ans": 0},
+    {"q": "بزرگ‌ترین جانور روی زمین کدام است؟", "opts": ["نهنگ آبی", "فیل", "زرافه", "کرگدن"], "ans": 0},
+    {"q": "سریع‌ترین جانور خشکی کدام است؟", "opts": ["یوزپلنگ", "شیر", "اسب", "آهو"], "ans": 0},
+    {"q": "بلندترین جانور جهان کدام است؟", "opts": ["زرافه", "فیل", "شتر", "کرگدن"], "ans": 0},
+    {"q": "نویسنده شاهنامه کیست؟", "opts": ["فردوسی", "حافظ", "سعدی", "مولانا"], "ans": 0},
+    {"q": "نویسنده گلستان و بوستان کیست؟", "opts": ["سعدی", "حافظ", "فردوسی", "مولانا"], "ans": 0},
+    {"q": "غزل‌سرای بزرگ ایران چه کسی است؟", "opts": ["حافظ", "سعدی", "مولانا", "نظامی"], "ans": 0},
+    {"q": "نویسنده مثنوی معنوی کیست؟", "opts": ["مولانا", "حافظ", "سعدی", "فردوسی"], "ans": 0},
+    {"q": "نویسنده خمسه (پنج گنج) کیست؟", "opts": ["نظامی گنجوی", "فردوسی", "مولانا", "جامی"], "ans": 0},
+    {"q": "پدر شعر فارسی چه کسی است؟", "opts": ["رودکی", "فردوسی", "عنصری", "ناصرخسرو"], "ans": 0},
+    {"q": "شاعر معاصر «صدای پای آب» کیست؟", "opts": ["سهراب سپهری", "شاملو", "نیما", "فروغ"], "ans": 0},
+    {"q": "نویسنده «بوف کور» کیست؟", "opts": ["صادق هدایت", "صادق چوبک", "جلال آل‌احمد", "هوشنگ گلشیری"], "ans": 0},
+    {"q": "نویسنده «رومئو و ژولیت» کیست؟", "opts": ["شکسپیر", "دیکنز", "گوته", "تولستوی"], "ans": 0},
+    {"q": "نویسنده «جنگ و صلح» کیست؟", "opts": ["تولستوی", "داستایوفسکی", "چخوف", "گوگول"], "ans": 0},
+    {"q": "نویسنده «جنایت و مکافات» کیست؟", "opts": ["داستایوفسکی", "تولستوی", "چخوف", "پوشکین"], "ans": 0},
+    {"q": "نویسنده «بینوایان» کیست؟", "opts": ["ویکتور هوگو", "بالزاک", "فلوبر", "زولا"], "ans": 0},
+    {"q": "نویسنده «کمدی الهی» کیست؟", "opts": ["دانته", "پترارک", "بوکاچیو", "ماکیاولی"], "ans": 0},
+    {"q": "نویسنده «دن کیشوت» کیست؟", "opts": ["سروانتس", "لورکا", "بورخس", "مارکز"], "ans": 0},
+    {"q": "نویسنده «صد سال تنهایی» کیست؟", "opts": ["گابریل گارسیا مارکز", "بورخس", "پابلو نرودا", "وارگاس یوسا"], "ans": 0},
+    {"q": "نویسنده «کیمیاگر» کیست؟", "opts": ["پائولو کوئیلو", "مارکز", "بورخس", "نرودا"], "ans": 0},
+    {"q": "نویسنده «آنا کارنینا» کیست؟", "opts": ["تولستوی", "داستایوفسکی", "چخوف", "تورگنیف"], "ans": 0},
+    {"q": "فوتبال هر تیم چند بازیکن در زمین دارد؟", "opts": ["۱۱", "۱۰", "۱۲", "۹"], "ans": 0},
+    {"q": "بازی فوتبال چند نیمه دارد؟", "opts": ["۲", "۳", "۴", "۱"], "ans": 0},
+    {"q": "هر نیمه فوتبال چند دقیقه است؟", "opts": ["۴۵", "۴۰", "۵۰", "۳۰"], "ans": 0},
+    {"q": "کدام کشور بیشترین قهرمانی جام جهانی فوتبال را دارد؟", "opts": ["برزیل", "آلمان", "ایتالیا", "آرژانتین"], "ans": 0},
+    {"q": "بازی بسکتبال هر تیم چند بازیکن در زمین دارد؟", "opts": ["۵", "۶", "۷", "۴"], "ans": 0},
+    {"q": "بازی والیبال هر تیم چند بازیکن در زمین دارد؟", "opts": ["۶", "۵", "۷", "۸"], "ans": 0},
+    {"q": "المپیک هر چند سال یک بار برگزار می‌شود؟", "opts": ["۴", "۲", "۳", "۵"], "ans": 0},
+    {"q": "کشتی فرنگی از کدام کشور ریشه گرفته است؟", "opts": ["فرانسه", "یونان", "ایران", "ترکیه"], "ans": 0},
+    {"q": "کدام ورزش به «ورزش اول ایران» معروف است؟", "opts": ["کشتی", "فوتبال", "والیبال", "بسکتبال"], "ans": 0},
+    {"q": "بازی شطرنج چند مهره برای هر بازیکن دارد؟", "opts": ["۱۶", "۱۵", "۱۸", "۲۰"], "ans": 0},
+    {"q": "پله فوتبالیست معروف اهل کدام کشور بود؟", "opts": ["برزیل", "آرژانتین", "پرتغال", "اروگوئه"], "ans": 0},
+    {"q": "مسی فوتبالیست معروف اهل کدام کشور است؟", "opts": ["آرژانتین", "برزیل", "پرتغال", "اروگوئه"], "ans": 0},
+    {"q": "کریستیانو رونالدو اهل کدام کشور است؟", "opts": ["پرتغال", "برزیل", "آرژانتین", "اسپانیا"], "ans": 0},
+    {"q": "جام جهانی فوتبال هر چند سال برگزار می‌شود؟", "opts": ["۴", "۲", "۳", "۵"], "ans": 0},
+    {"q": "فوتبال در کدام کشور مدرن شد؟", "opts": ["انگلستان", "برزیل", "آرژانتین", "آلمان"], "ans": 0},
+    {"q": "کارگردان معروف «پدرخوانده» کیست؟", "opts": ["فرانسیس فورد کوپولا", "اسپیلبرگ", "اسکورسیزی", "کوبریک"], "ans": 0},
+    {"q": "کارگردان معروف «تایتانیک» کیست؟", "opts": ["جیمز کامرون", "اسپیلبرگ", "اسکورسیزی", "کوبریک"], "ans": 0},
+    {"q": "نقاش معروف «مونالیزا» کیست؟", "opts": ["لئوناردو داوینچی", "میکل‌آنژ", "ونسان ون گوگ", "پیکاسو"], "ans": 0},
+    {"q": "نقاش معروف «شب‌های پرستاره» کیست؟", "opts": ["ونسان ون گوگ", "داوینچی", "پیکاسو", "مونه"], "ans": 0},
+    {"q": "نقاش تابلوی «گرنیکا» کیست؟", "opts": ["پابلو پیکاسو", "دالی", "مونه", "رنوآر"], "ans": 0},
+    {"q": "مجسمه‌ساز معروف «دیوید» کیست؟", "opts": ["میکل‌آنژ", "داوینچی", "رافائل", "دوناتلو"], "ans": 0},
+    {"q": "کارگردان «آواتار» کیست؟", "opts": ["جیمز کامرون", "اسپیلبرگ", "اسکورسیزی", "کوبریک"], "ans": 0},
+    {"q": "کارگردان «ارباب حلقه‌ها» کیست؟", "opts": ["پیتر جکسون", "کامرون", "اسپیلبرگ", "کوبریک"], "ans": 0},
+    {"q": "کارگردان ایرانی «طعم گیلاس» کیست؟", "opts": ["عباس کیارستمی", "مجید مجیدی", "اصغر فرهادی", "بهرام بیضایی"], "ans": 0},
+    {"q": "کارگردان ایرانی «جدایی نادر از سیمین» کیست؟", "opts": ["اصغر فرهادی", "کیارستمی", "مجیدی", "بیضایی"], "ans": 0},
+    {"q": "کارگردان ایرانی «بچه‌های آسمان» کیست؟", "opts": ["مجید مجیدی", "کیارستمی", "فرهادی", "بیضایی"], "ans": 0},
+    {"q": "اسکار مربوط به صنعت سینمای کدام کشور است؟", "opts": ["آمریکا", "فرانسه", "انگلیس", "هند"], "ans": 0},
+    {"q": "جشنواره فیلم کن در کدام کشور برگزار می‌شود؟", "opts": ["فرانسه", "ایتالیا", "آمریکا", "آلمان"], "ans": 0},
+    {"q": "ساز معروف ایرانی که با آرشه نواخته می‌شود؟", "opts": ["کمانچه", "تار", "سنتور", "نی"], "ans": 0},
+    {"q": "ساز معروف ایرانی که با مضراب نواخته می‌شود؟", "opts": ["تار", "کمانچه", "نی", "تنبک"], "ans": 0},
+    {"q": "ساز بادی معروف ایرانی؟", "opts": ["نی", "تار", "سنتور", "تنبک"], "ans": 0},
+    {"q": "ساز کوبه‌ای معروف ایرانی؟", "opts": ["تنبک", "تار", "نی", "کمانچه"], "ans": 0},
+    {"q": "استاد آواز سنتی ایرانی معروف قرن اخیر؟", "opts": ["محمدرضا شجریان", "بهرام", "ابی", "داریوش"], "ans": 0},
+    {"q": "آهنگساز معروف آلمانی «سمفونی نهم»؟", "opts": ["بتهوون", "موتزارت", "باخ", "شوپن"], "ans": 0},
+    {"q": "آهنگساز معروف اتریشی «دون ژوان»؟", "opts": ["موتزارت", "بتهوون", "باخ", "شوپن"], "ans": 0},
+    {"q": "پدر علم کامپیوتر چه کسی است؟", "opts": ["آلن تورینگ", "بیل گیتس", "استیو جابز", "لینوس توروالدز"], "ans": 0},
+    {"q": "بنیان‌گذار مایکروسافت کیست؟", "opts": ["بیل گیتس", "استیو جابز", "مارک زاکربرگ", "جف بزوس"], "ans": 0},
+    {"q": "بنیان‌گذار اپل کیست؟", "opts": ["استیو جابز", "بیل گیتس", "مارک زاکربرگ", "ایلان ماسک"], "ans": 0},
+    {"q": "بنیان‌گذار فیسبوک کیست؟", "opts": ["مارک زاکربرگ", "بیل گیتس", "ایلان ماسک", "جف بزوس"], "ans": 0},
+    {"q": "بنیان‌گذار تسلا و اسپیس‌ایکس کیست؟", "opts": ["ایلان ماسک", "جف بزوس", "بیل گیتس", "مارک زاکربرگ"], "ans": 0},
+    {"q": "بنیان‌گذار آمازون کیست؟", "opts": ["جف بزوس", "ایلان ماسک", "بیل گیتس", "مارک زاکربرگ"], "ans": 0},
+    {"q": "زبان برنامه‌نویسی که برای هوش مصنوعی معروف است؟", "opts": ["Python", "Java", "C", "PHP"], "ans": 0},
+    {"q": "زبان برنامه‌نویسی وب سمت کلاینت؟", "opts": ["JavaScript", "Python", "C++", "Java"], "ans": 0},
+    {"q": "پروتکل وب چه نام دارد؟", "opts": ["HTTP", "FTP", "SMTP", "TCP"], "ans": 0},
+    {"q": "هر بایت چند بیت است؟", "opts": ["۸", "۴", "۱۶", "۳۲"], "ans": 0},
+    {"q": "سیستم‌عامل معروف مایکروسافت؟", "opts": ["Windows", "macOS", "Linux", "Android"], "ans": 0},
+    {"q": "سیستم‌عامل موبایل شرکت اپل؟", "opts": ["iOS", "Android", "Windows", "Linux"], "ans": 0},
+    {"q": "سیستم‌عامل موبایل شرکت گوگل؟", "opts": ["Android", "iOS", "Windows", "macOS"], "ans": 0},
+    {"q": "شرکت مادر گوگل چه نام دارد؟", "opts": ["Alphabet", "Meta", "Microsoft", "Apple"], "ans": 0},
+    {"q": "شرکت مادر فیسبوک چه نام دارد؟", "opts": ["Meta", "Alphabet", "Microsoft", "Apple"], "ans": 0},
+    {"q": "ChatGPT محصول کدام شرکت است؟", "opts": ["OpenAI", "Google", "Microsoft", "Meta"], "ans": 0},
+    {"q": "کدام سیاره به سیاره سرخ معروف است؟", "opts": ["مریخ", "زهره", "مشتری", "زحل"], "ans": 0},
+    {"q": "نزدیک‌ترین سیاره به خورشید کدام است؟", "opts": ["عطارد", "زهره", "زمین", "مریخ"], "ans": 0},
+    {"q": "بزرگ‌ترین سیاره منظومه شمسی؟", "opts": ["مشتری", "زحل", "زمین", "نپتون"], "ans": 0},
+    {"q": "سیاره‌ای که حلقه معروف دارد؟", "opts": ["زحل", "مشتری", "اورانوس", "نپتون"], "ans": 0},
+    {"q": "زمین چندمین سیاره از خورشید است؟", "opts": ["سوم", "دوم", "چهارم", "پنجم"], "ans": 0},
+    {"q": "خورشید یک ستاره است یا سیاره؟", "opts": ["ستاره", "سیاره", "قمر", "سیارک"], "ans": 0},
+    {"q": "سال نوری واحد اندازه‌گیری چیست؟", "opts": ["فاصله", "زمان", "جرم", "سرعت"], "ans": 0},
+    {"q": "کدام رنگ در پرچم ایران نیست؟", "opts": ["آبی", "سبز", "سفید", "سرخ"], "ans": 0},
+    {"q": "پرچم ایران چند رنگ دارد؟", "opts": ["۳", "۲", "۴", "۵"], "ans": 0},
+    {"q": "واحد پول ژاپن چیست؟", "opts": ["ین", "یوان", "وون", "دلار"], "ans": 0},
+    {"q": "واحد پول چین چیست؟", "opts": ["یوان", "ین", "وون", "دلار"], "ans": 0},
+    {"q": "واحد پول انگلیس چیست؟", "opts": ["پوند", "یورو", "دلار", "فرانک"], "ans": 0},
+    {"q": "پول رسمی اتحادیه اروپا؟", "opts": ["یورو", "پوند", "دلار", "فرانک"], "ans": 0},
+    {"q": "کدام کشور بیشترین جمعیت جهان را دارد؟", "opts": ["هند", "چین", "آمریکا", "اندونزی"], "ans": 0},
+    {"q": "کدام قاره بیشترین کشورها را دارد؟", "opts": ["آفریقا", "آسیا", "اروپا", "آمریکای جنوبی"], "ans": 0},
+    {"q": "کدام حیوان نماد ملی ایران باستان بود؟", "opts": ["شیر", "عقاب", "اسب", "پلنگ"], "ans": 0},
+    {"q": "کدام کشور به سرزمین آفتاب تابان معروف است؟", "opts": ["ژاپن", "چین", "کره", "تایلند"], "ans": 0},
+    {"q": "کدام شهر به شهر ابدی معروف است؟", "opts": ["رم", "آتن", "قاهره", "بغداد"], "ans": 0},
 ]
 
-LUCK_EMOJIS = ["👍", "👎", "❤️"]
-LUCK_PATTERN = re.compile(r"👍|👎|❤️|❤")
+# ============================== ژنراتور سوال ریاضی ==============================
+def generate_math_question() -> dict:
+    kind = random.choice(["add", "sub", "mul", "div"])
+    if kind == "add":
+        a, b = random.randint(11, 999), random.randint(11, 999)
+        answer = a + b
+        q = f"{a} + {b} = ?"
+    elif kind == "sub":
+        a, b = random.randint(50, 999), random.randint(1, 49)
+        answer = a - b
+        q = f"{a} - {b} = ?"
+    elif kind == "mul":
+        a, b = random.randint(2, 20), random.randint(2, 20)
+        answer = a * b
+        q = f"{a} × {b} = ?"
+    else:
+        b = random.randint(2, 15)
+        answer = random.randint(2, 30)
+        a = b * answer
+        q = f"{a} ÷ {b} = ?"
+
+    wrongs = set()
+    while len(wrongs) < 3:
+        delta = random.choice([-3, -2, -1, 1, 2, 3, 4, 5])
+        w = answer + delta
+        if w > 0 and w != answer:
+            wrongs.add(w)
+    opts = [answer] + list(wrongs)
+    random.shuffle(opts)
+    return {"q": q, "opts": [str(x) for x in opts], "ans": opts.index(answer)}
+
+
+def get_random_quiz_question() -> dict:
+    if random.random() < 0.7:
+        return random.choice(QUIZ_QUESTIONS)
+    return generate_math_question()
+
 
 # ============================== اسکیمای MySQL ==============================
 SCHEMA_STATEMENTS = [
@@ -133,8 +347,9 @@ user_states: dict[int, dict] = {}
 rooms: dict[str, dict] = {}
 pending_transfers: dict[int, dict] = {}
 penalty_games: dict[int, dict] = {}
-luck_games: dict[int, dict] = {}
+casino_pending: dict[int, dict] = {}
 daily_lock = asyncio.Lock()
+
 
 # ============================== کمکی‌ها ==============================
 def fa_to_en(text: str) -> str:
@@ -164,9 +379,6 @@ def format_card(card: str) -> str:
 def now_iso() -> str:
     return datetime.now(TEHRAN).isoformat()
 
-def today_str() -> str:
-    return datetime.now(TEHRAN).date().isoformat()
-
 def escape(text) -> str:
     return html.escape(str(text or ""))
 
@@ -183,10 +395,6 @@ def find_user_room(user_id: int):
             return rid
     return None
 
-def parse_luck_emojis(text: str):
-    found = LUCK_PATTERN.findall(text or "")
-    return ["❤️" if e == "❤" else e for e in found]
-
 def ttt_check_win(board):
     lines = [(0,1,2),(3,4,5),(6,7,8),(0,3,6),(1,4,7),(2,5,8),(0,4,8),(2,4,6)]
     for a, b, c in lines:
@@ -196,35 +404,31 @@ def ttt_check_win(board):
         return "draw"
     return None
 
+def apply_commission(full_prize: int) -> tuple[int, int]:
+    """(amount_after_commission, commission_taken)"""
+    commission = int(full_prize * COMMISSION_RATE)
+    return full_prize - commission, commission
+
 async def safe_edit(query, text: str, reply_markup=None):
     try:
-        await query.edit_message_text(
-            text, parse_mode=ParseMode.HTML,
-            reply_markup=reply_markup, disable_web_page_preview=True)
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML,
+                                       reply_markup=reply_markup, disable_web_page_preview=True)
     except BadRequest as e:
         if "Message is not modified" in str(e):
             return
         try:
-            await query.message.reply_text(
-                text, parse_mode=ParseMode.HTML,
-                reply_markup=reply_markup, disable_web_page_preview=True)
+            await query.message.reply_text(text, parse_mode=ParseMode.HTML,
+                                            reply_markup=reply_markup, disable_web_page_preview=True)
         except Exception:
             logger.exception("safe_edit failed")
+
 
 # ============================== اتصال DB ==============================
 async def init_db_pool():
     global db_pool
     db_pool = await aiomysql.create_pool(
-        host=DB_HOST,
-        port=DB_PORT,
-        user=DB_USER,
-        password=DB_PASSWORD,
-        db=DB_NAME,
-        autocommit=False,
-        minsize=1,
-        maxsize=10,
-        charset="utf8mb4",
-    )
+        host=DB_HOST, port=DB_PORT, user=DB_USER, password=DB_PASSWORD,
+        db=DB_NAME, autocommit=False, minsize=1, maxsize=10, charset="utf8mb4")
     logger.info("✅ Connection Pool به MySQL ساخته شد.")
 
 async def close_db_pool():
@@ -242,6 +446,7 @@ async def init_db():
             await conn.commit()
     logger.info("✅ جداول MySQL آماده شدند.")
 
+
 # ============================== توابع DB ==============================
 async def ensure_user(user) -> dict:
     async with db_pool.acquire() as conn:
@@ -251,12 +456,10 @@ async def ensure_user(user) -> dict:
                 "(user_id, username, first_name, balance, bank_balance, card_number, created_at) "
                 "VALUES (%s, %s, %s, %s, 0, %s, %s)",
                 (user.id, user.username, user.first_name, START_BALANCE,
-                 card_number_for(user.id), now_iso())
-            )
+                 card_number_for(user.id), now_iso()))
             await cur.execute(
                 "UPDATE users SET username=%s, first_name=%s WHERE user_id=%s",
-                (user.username, user.first_name, user.id)
-            )
+                (user.username, user.first_name, user.id))
             await cur.execute("SELECT * FROM users WHERE user_id=%s", (user.id,))
             row = await cur.fetchone()
             await conn.commit()
@@ -274,9 +477,8 @@ async def add_balance(user_id: int, amount: int):
         return
     async with db_pool.acquire() as conn:
         async with conn.cursor() as cur:
-            await cur.execute(
-                "UPDATE users SET balance = balance + %s WHERE user_id=%s",
-                (amount, user_id))
+            await cur.execute("UPDATE users SET balance = balance + %s WHERE user_id=%s",
+                              (amount, user_id))
             await conn.commit()
 
 async def deduct_balance(user_id: int, amount: int) -> bool:
@@ -344,9 +546,8 @@ async def transfer_coins(sender_id: int, recipient_id: int, amount: int, fee: in
                 if cur.rowcount != 1:
                     await conn.rollback()
                     return False
-                await cur.execute(
-                    "UPDATE users SET balance = balance + %s WHERE user_id=%s",
-                    (amount, recipient_id))
+                await cur.execute("UPDATE users SET balance = balance + %s WHERE user_id=%s",
+                                  (amount, recipient_id))
             await conn.commit()
             return True
         except Exception:
@@ -357,9 +558,8 @@ async def transfer_coins(sender_id: int, recipient_id: int, amount: int, fee: in
 async def count_assets(user_id: int, asset_type: str) -> int:
     async with db_pool.acquire() as conn:
         async with conn.cursor() as cur:
-            await cur.execute(
-                "SELECT COUNT(*) FROM assets WHERE user_id=%s AND asset_type=%s",
-                (user_id, asset_type))
+            await cur.execute("SELECT COUNT(*) FROM assets WHERE user_id=%s AND asset_type=%s",
+                              (user_id, asset_type))
             row = await cur.fetchone()
             return int(row[0]) if row else 0
 
@@ -383,17 +583,14 @@ async def buy_asset(user_id: int, asset_type: str, asset_key: str, price: int, i
                 if int((await cur.fetchone())[0]) >= MAX_ASSETS:
                     await conn.rollback()
                     return "limit"
-
                 await cur.execute(
                     "UPDATE users SET balance = balance - %s WHERE user_id=%s AND balance >= %s",
                     (price, user_id, price))
                 if cur.rowcount != 1:
                     await conn.rollback()
                     return "balance"
-
                 await cur.execute(
-                    "INSERT INTO assets "
-                    "(user_id, asset_type, asset_key, purchase_price, daily_income, purchased_at) "
+                    "INSERT INTO assets (user_id, asset_type, asset_key, purchase_price, daily_income, purchased_at) "
                     "VALUES (%s, %s, %s, %s, %s, %s)",
                     (user_id, asset_type, asset_key, price, income, now_iso()))
             await conn.commit()
@@ -413,6 +610,7 @@ async def find_user_by_card(card: str):
             row = await cur.fetchone()
             return dict(row) if row else None
 
+
 # ============================== سود روزانه ==============================
 async def daily_payout(context: ContextTypes.DEFAULT_TYPE = None):
     async with daily_lock:
@@ -422,15 +620,12 @@ async def daily_payout(context: ContextTypes.DEFAULT_TYPE = None):
             async with conn.cursor(aiomysql.DictCursor) as cur:
                 await cur.execute("SELECT user_id, bank_balance, last_daily FROM users")
                 rows = await cur.fetchall()
-
                 for row in rows:
                     user_id = row["user_id"]
                     bank_balance = int(row["bank_balance"] or 0)
                     last_daily = row["last_daily"]
-
                     if last_daily == today_iso:
                         continue
-
                     days = 1
                     if last_daily:
                         try:
@@ -438,26 +633,23 @@ async def daily_payout(context: ContextTypes.DEFAULT_TYPE = None):
                             days = max(1, min((today - last_date).days, 7))
                         except Exception:
                             days = 1
-
                     interest = 0
                     current = bank_balance
                     for _ in range(days):
                         d = int(current * BANK_RATE)
                         interest += d
                         current += d
-
                     await cur.execute(
                         "SELECT COALESCE(SUM(daily_income), 0) FROM assets WHERE user_id=%s",
                         (user_id,))
                     asset_income = int((await cur.fetchone())[0] or 0) * days
-
                     await cur.execute(
                         "UPDATE users SET bank_balance = bank_balance + %s, "
                         "balance = balance + %s, last_daily = %s WHERE user_id=%s",
                         (interest, asset_income, today_iso, user_id))
-
                 await conn.commit()
         logger.info("💰 سود روزانه %s پرداخت شد.", today_iso)
+
 
 # ============================== کیبوردها ==============================
 def main_menu_kb():
@@ -511,12 +703,48 @@ def workers_menu_kb():
 
 def games_menu_kb():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("✊ سنگ کاغذ قیچی", callback_data="game:rps"),
-         InlineKeyboardButton("❌ دوز", callback_data="game:ttt")],
-        [InlineKeyboardButton("🧠 کوییز", callback_data="game:quiz"),
-         InlineKeyboardButton("⚽ پنالتی", callback_data="game:penalty")],
-        [InlineKeyboardButton("🍀 شانسی", callback_data="game:luck")],
+        [InlineKeyboardButton("✊ سنگ کاغذ قیچی (۱۰۰۰+)", callback_data="game:rps"),
+         InlineKeyboardButton("❌ دوز (۱۰۰۰+)", callback_data="game:ttt")],
+        [InlineKeyboardButton("🧠 کوییز (۱۰۰۰+)", callback_data="game:quiz"),
+         InlineKeyboardButton("⚽ پنالتی (۱۰۰۰+)", callback_data="game:penalty")],
+        [InlineKeyboardButton("🎰 کازینو (۱۰,۰۰۰+)", callback_data="game:casino")],
         [InlineKeyboardButton("🔙 بازگشت", callback_data="menu:main")],
+    ])
+
+def casino_menu_kb():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎰 اسلات (تا ۱۵x)", callback_data="casino:slots"),
+         InlineKeyboardButton("🎲 تاس (تا ۵x)", callback_data="casino:dice")],
+        [InlineKeyboardButton("🪙 شیر یا خط (۲x)", callback_data="casino:coin"),
+         InlineKeyboardButton("🃏 کارت شانس (۴x)", callback_data="casino:card")],
+        [InlineKeyboardButton("🔙 بازگشت به بازی‌ها", callback_data="game:menu")],
+    ])
+
+def casino_back_kb():
+    return InlineKeyboardMarkup([[InlineKeyboardButton("🎰 بازگشت به کازینو", callback_data="game:casino")]])
+
+def casino_dice_kb():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("کمتر از ۷ (۲x)", callback_data="casino:play:dice:under"),
+         InlineKeyboardButton("دقیقاً ۷ (۵x)", callback_data="casino:play:dice:seven"),
+         InlineKeyboardButton("بیشتر از ۷ (۲x)", callback_data="casino:play:dice:over")],
+        [InlineKeyboardButton("❌ لغو و بازگشت پول", callback_data="casino:cancel")],
+    ])
+
+def casino_coin_kb():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🦁 شیر", callback_data="casino:play:coin:heads"),
+         InlineKeyboardButton("✖️ خط", callback_data="casino:play:coin:tails")],
+        [InlineKeyboardButton("❌ لغو و بازگشت پول", callback_data="casino:cancel")],
+    ])
+
+def casino_card_kb():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("♥️ دل", callback_data="casino:play:card:hearts"),
+         InlineKeyboardButton("♦️ خشت", callback_data="casino:play:card:diamonds")],
+        [InlineKeyboardButton("♠️ پیک", callback_data="casino:play:card:spades"),
+         InlineKeyboardButton("♣️ گشنیز", callback_data="casino:play:card:clubs")],
+        [InlineKeyboardButton("❌ لغو و بازگشت پول", callback_data="casino:cancel")],
     ])
 
 def join_room_kb(room_id: str, game_key: str):
@@ -560,6 +788,7 @@ def transfer_confirm_kb(user_id: int):
         InlineKeyboardButton("✅ تأیید", callback_data=f"tr:c:{user_id}"),
         InlineKeyboardButton("❌ انصراف", callback_data=f"tr:x:{user_id}"),
     ]])
+
 
 # ============================== متن‌ها ==============================
 async def build_main_menu_text(user_id):
@@ -609,6 +838,7 @@ async def build_assets_text(user_id, asset_type):
         lines.append("📭 هنوز چیزی نخریدی.")
     return "\n".join(lines)
 
+
 # ============================== کامندها ==============================
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await ensure_user(update.effective_user)
@@ -628,40 +858,54 @@ async def cmd_zarbazi(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🎮 <b>بازی‌های زرکوین</b>\n\nیکی رو انتخاب کن:",
         parse_mode=ParseMode.HTML, reply_markup=games_menu_kb())
 
+
 # ============================== Callback router ==============================
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data or ""
+    user_id = query.from_user.id
 
-    # ✅ رفع باگ ۱: پاک کردن استیت هر بار که دکمه‌ای زده می‌شه
-    user_states.pop(query.from_user.id, None)
+    # ✅ اگه بازی کازینو در جریانه و کاربر داره چیز دیگه‌ای می‌زنه، پولش رو برگردون
+    pending = casino_pending.get(user_id)
+    if pending:
+        is_valid_choice = data.startswith(f"casino:play:{pending['game']}:")
+        is_cancel = data == "casino:cancel"
+        if not (is_valid_choice or is_cancel):
+            casino_pending.pop(user_id, None)
+            await add_balance(user_id, pending["entry"])
+            try:
+                await query.answer(f"⚠️ بازی قبلی لغو شد و {fmt(pending['entry'])} زرکوین برگشت.", show_alert=True)
+            except Exception:
+                pass
+
+    user_states.pop(user_id, None)
 
     if data == "menu:main":
         await query.answer()
         await ensure_user(query.from_user)
-        await safe_edit(query, await build_main_menu_text(query.from_user.id), main_menu_kb())
+        await safe_edit(query, await build_main_menu_text(user_id), main_menu_kb())
         return
 
     if data == "bank:menu":
         await query.answer()
         await ensure_user(query.from_user)
-        await safe_edit(query, await build_bank_text(query.from_user.id), bank_menu_kb())
+        await safe_edit(query, await build_bank_text(user_id), bank_menu_kb())
         return
     if data == "bank:deposit":
         await query.answer()
-        user_states[query.from_user.id] = {"action": "bank_deposit"}
+        user_states[user_id] = {"action": "bank_deposit"}
         await safe_edit(query, "💰 <b>واریز به بانک</b>\n\nمبلغ مورد نظر رو بفرست:", back_main_kb())
         return
     if data == "bank:withdraw":
         await query.answer()
-        user_states[query.from_user.id] = {"action": "bank_withdraw"}
+        user_states[user_id] = {"action": "bank_withdraw"}
         await safe_edit(query, "🏧 <b>برداشت از بانک</b>\n\nمبلغ مورد نظر رو بفرست:", back_main_kb())
         return
 
     if data == "prop:menu":
         await query.answer()
         await ensure_user(query.from_user)
-        await safe_edit(query, await build_assets_text(query.from_user.id, "property") +
+        await safe_edit(query, await build_assets_text(user_id, "property") +
                         "\n\n👇 از لیست زیر یکی بخر:", properties_menu_kb())
         return
     if data.startswith("prop:buy:"):
@@ -670,13 +914,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not prop:
             await query.answer("❌ ملک نامعتبر", show_alert=True); return
         await ensure_user(query.from_user)
-        count = await count_assets(query.from_user.id, "property")
-        if count >= MAX_ASSETS:
+        if await count_assets(user_id, "property") >= MAX_ASSETS:
             await query.answer(f"❌ حداکثر {MAX_ASSETS} ملک مجاز!", show_alert=True); return
-        user = await get_user(query.from_user.id)
+        user = await get_user(user_id)
         if int(user["balance"]) < prop["price"]:
             await query.answer("❌ موجودی کافی نیست", show_alert=True); return
-        r = await buy_asset(query.from_user.id, "property", key, prop["price"], prop["income"])
+        r = await buy_asset(user_id, "property", key, prop["price"], prop["income"])
         if r == "ok":
             await query.answer(f"✅ {prop['name']} خریداری شد!", show_alert=True)
         elif r == "limit":
@@ -685,14 +928,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("❌ موجودی کافی نیست", show_alert=True)
         else:
             await query.answer("❌ خطا", show_alert=True)
-        await safe_edit(query, await build_assets_text(query.from_user.id, "property") +
+        await safe_edit(query, await build_assets_text(user_id, "property") +
                         "\n\n👇 از لیست زیر یکی بخر:", properties_menu_kb())
         return
 
     if data == "worker:menu":
         await query.answer()
         await ensure_user(query.from_user)
-        await safe_edit(query, await build_assets_text(query.from_user.id, "worker") +
+        await safe_edit(query, await build_assets_text(user_id, "worker") +
                         "\n\n👇 از لیست زیر یکی استخدام کن:", workers_menu_kb())
         return
     if data.startswith("worker:buy:"):
@@ -701,13 +944,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not w:
             await query.answer("❌ نامعتبر", show_alert=True); return
         await ensure_user(query.from_user)
-        count = await count_assets(query.from_user.id, "worker")
-        if count >= MAX_ASSETS:
+        if await count_assets(user_id, "worker") >= MAX_ASSETS:
             await query.answer(f"❌ حداکثر {MAX_ASSETS} کارگر مجاز!", show_alert=True); return
-        user = await get_user(query.from_user.id)
+        user = await get_user(user_id)
         if int(user["balance"]) < w["price"]:
             await query.answer("❌ موجودی کافی نیست", show_alert=True); return
-        r = await buy_asset(query.from_user.id, "worker", key, w["price"], w["income"])
+        r = await buy_asset(user_id, "worker", key, w["price"], w["income"])
         if r == "ok":
             await query.answer(f"✅ {w['name']} استخدام شد!", show_alert=True)
         elif r == "limit":
@@ -716,7 +958,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("❌ موجودی کافی نیست", show_alert=True)
         else:
             await query.answer("❌ خطا", show_alert=True)
-        await safe_edit(query, await build_assets_text(query.from_user.id, "worker") +
+        await safe_edit(query, await build_assets_text(user_id, "worker") +
                         "\n\n👇 از لیست زیر یکی استخدام کن:", workers_menu_kb())
         return
 
@@ -724,6 +966,62 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
         await safe_edit(query, "🎮 <b>بازی‌های زرکوین</b>\n\nیکی رو انتخاب کن:", games_menu_kb())
         return
+
+    if data == "game:casino":
+        await query.answer()
+        await safe_edit(query,
+            "🎰 <b>کازینو زر</b>\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "💰 حداقل ورودی: <b>۱۰,۰۰۰</b> زرکوین\n"
+            "💵 کارمزد بات: ۱۰٪ از جایزه\n\n"
+            "🎲 بازی‌ها:\n"
+            "• 🎰 اسلات — تا ۱۵ برابر\n"
+            "• 🎲 تاس — تا ۵ برابر\n"
+            "• 🪙 شیر یا خط — ۲ برابر\n"
+            "• 🃏 کارت شانس — ۴ برابر\n\n"
+            "یکی رو انتخاب کن:",
+            casino_menu_kb())
+        return
+
+    if data.startswith("casino:") and data.count(":") == 1:
+        cg = data.split(":")[1]
+        if cg in CASINO_GAMES:
+            g = CASINO_GAMES[cg]
+            user_states[user_id] = {"action": "casino_entry", "game": cg}
+            await safe_edit(query,
+                f"{g['emoji']} <b>{g['name']}</b>\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"💰 حداقل ورودی: <b>{fmt(g['min'])}</b> زرکوین\n"
+                f"💵 کارمزد بات: ۱۰٪ از جایزه\n\n"
+                f"مبلغ ورودی رو بفرست:",
+                casino_back_kb())
+        return
+
+    if data == "casino:cancel":
+        pending = casino_pending.pop(user_id, None)
+        if pending:
+            await add_balance(user_id, pending["entry"])
+            await safe_edit(query, f"❌ بازی لغو شد و {fmt(pending['entry'])} زرکوین برگشت.", casino_menu_kb())
+        else:
+            await safe_edit(query, "❌ بازی فعالی نداشتی.", casino_menu_kb())
+        return
+
+    if data.startswith("casino:play:"):
+        parts = data.split(":")
+        cg, choice = parts[2], parts[3]
+        pending = casino_pending.get(user_id)
+        if not pending or pending["game"] != cg:
+            await query.answer("❌ بازی فعالی نداری", show_alert=True); return
+        casino_pending.pop(user_id, None)
+        entry = pending["entry"]
+        if cg == "dice":
+            await resolve_dice(query, entry, choice)
+        elif cg == "coin":
+            await resolve_coin(query, entry, choice)
+        elif cg == "card":
+            await resolve_card(query, entry, choice)
+        return
+
     if data.startswith("game:") and data.count(":") == 1:
         gk = data.split(":", 1)[1]
         if gk in GAMES:
@@ -737,7 +1035,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "transfer:start":
         await query.answer()
-        user_states[query.from_user.id] = {"action": "transfer_amount"}
+        user_states[user_id] = {"action": "transfer_amount"}
         await safe_edit(query, "💸 <b>انتقال زرکوین</b>\n\nمبلغ مورد نظر رو بفرست:", back_main_kb())
         return
     if data.startswith("tr:c:"):
@@ -746,7 +1044,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if data.startswith("tr:x:"):
         await query.answer()
-        pending_transfers.pop(query.from_user.id, None)
+        pending_transfers.pop(user_id, None)
         await safe_edit(query, "❌ انتقال لغو شد.", back_main_kb())
         return
 
@@ -793,20 +1091,23 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
 
-# ============================== بازی‌ها ==============================
+# ============================== بازی‌های دو نفره ==============================
 async def start_game_entry(query, gk: str):
     user_id = query.from_user.id
     if find_user_room(user_id):
         await query.answer("⚠️ شما در یک بازی فعال هستید!", show_alert=True); return
-    if user_id in penalty_games or user_id in luck_games:
+    if user_id in penalty_games:
         await query.answer("⚠️ یک بازی دیگر در جریان است!", show_alert=True); return
+    if user_id in casino_pending:
+        await query.answer("⚠️ یک بازی کازینو در جریان است!", show_alert=True); return
     g = GAMES[gk]
     user_states[user_id] = {"action": "game_entry", "game": gk}
     await safe_edit(query,
         f"{g['emoji']} <b>{g['name']}</b>\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"💰 حداقل ورودی: <b>{fmt(g['min'])}</b> زرکوین\n"
-        f"👥 بازیکنان: {to_fa(g['players'])}\n\n"
+        f"👥 بازیکنان: {to_fa(g['players'])}\n"
+        f"💵 کارمزد بات: ۱۰٪ از جایزه\n\n"
         f"مبلغ ورودی رو بفرست:",
         back_games_kb())
 
@@ -824,8 +1125,7 @@ async def join_room(query, context, room_id: str):
     if find_user_room(user_id):
         await query.answer("⚠️ در بازی دیگر فعالی", show_alert=True); return
     await ensure_user(query.from_user)
-    ok = await deduct_balance(user_id, room["entry"])
-    if not ok:
+    if not await deduct_balance(user_id, room["entry"]):
         await query.answer("❌ موجودی کافی نیست", show_alert=True); return
     room["players"].append(user_id)
     room["user_names"][user_id] = query.from_user.first_name or str(user_id)
@@ -834,7 +1134,7 @@ async def join_room(query, context, room_id: str):
     gk = room["game"]
     if gk == "rps":
         room["choices"] = {}
-        text = (f"{GAMES['rps']['emoji']} <b>سنگ کاغذ قیچی</b>\n"
+        text = (f"✊ <b>سنگ کاغذ قیچی</b>\n"
                 f"💰 ورودی: {fmt(room['entry'])}\n\n"
                 f"👤 بازیکن ۱: {escape(room['user_names'][room['players'][0]])}\n"
                 f"👤 بازیکن ۲: {escape(room['user_names'][room['players'][1]])}\n\n"
@@ -846,10 +1146,10 @@ async def join_room(query, context, room_id: str):
         room["symbols"] = {room["players"][0]: "X", room["players"][1]: "O"}
         await render_ttt(query, room)
     elif gk == "quiz":
-        q = random.choice(QUIZ_QUESTIONS)
+        q = get_random_quiz_question()
         room["question"] = q
         room["answered"] = False
-        text = (f"{GAMES['quiz']['emoji']} <b>کوییز</b>\n"
+        text = (f"🧠 <b>کوییز</b>\n"
                 f"💰 ورودی: {fmt(room['entry'])}\n\n"
                 f"❓ <b>{escape(q['q'])}</b>\n\n"
                 f"اولین کسی که درست جواب بده برنده‌ست:")
@@ -900,10 +1200,13 @@ async def rps_choose(query, context, room_id, choice):
         result = "🤝 مساوی! پول‌ها برگشت."
     else:
         winner = p1 if beats[c1] == c2 else p2
-        prize = int(room["entry"] * GAMES["rps"]["mult"])
+        full_prize = int(room["entry"] * GAMES["rps"]["mult"])
+        prize, comm = apply_commission(full_prize)
         await add_balance(winner, prize)
         result = (f"🏆 <b>{escape(room['user_names'][winner])}</b> برنده شد!\n"
-                  f"💰 جایزه: <b>{fmt(prize)}</b> زرکوین")
+                  f"💰 جایزه: {fmt(full_prize)}\n"
+                  f"💵 کارمزد ۱۰٪: {fmt(comm)}\n"
+                  f"✅ دریافتی: <b>{fmt(prize)}</b>")
     text = (
         f"✊ <b>نتیجه سنگ کاغذ قیچی</b>\n"
         f"━━━━━━━━━━━━━━━━━━\n"
@@ -933,12 +1236,9 @@ async def ttt_move(query, context, room_id, idx):
         await query.answer("⏳ نوبت تو نیست", show_alert=True); return
     if room["board"][idx]:
         await query.answer("❌ خانه پر است", show_alert=True); return
-
-    # ✅ رفع باگ ۲: p1 و p2 قبل از استفاده تعریف می‌شن
     p1, p2 = room["players"]
     room["board"][idx] = room["symbols"][user_id]
     winner_symbol = ttt_check_win(room["board"])
-
     if winner_symbol:
         if winner_symbol == "draw":
             await add_balance(p1, room["entry"])
@@ -946,14 +1246,17 @@ async def ttt_move(query, context, room_id, idx):
             text = "🤝 <b>مساوی!</b> پول‌ها برگشت."
         else:
             winner = p1 if winner_symbol == "X" else p2
-            prize = int(room["entry"] * GAMES["ttt"]["mult"])
+            full_prize = int(room["entry"] * GAMES["ttt"]["mult"])
+            prize, comm = apply_commission(full_prize)
             await add_balance(winner, prize)
-            text = f"🏆 <b>{escape(room['user_names'][winner])}</b> برنده شد!\n💰 جایزه: <b>{fmt(prize)}</b>"
+            text = (f"🏆 <b>{escape(room['user_names'][winner])}</b> برنده شد!\n"
+                    f"💰 جایزه: {fmt(full_prize)}\n"
+                    f"💵 کارمزد ۱۰٪: {fmt(comm)}\n"
+                    f"✅ دریافتی: <b>{fmt(prize)}</b>")
         room["status"] = "finished"
         rooms.pop(room_id, None)
         await safe_edit(query, text, back_games_kb())
         return
-
     room["turn"] = p2 if room["turn"] == p1 else p1
     await render_ttt(query, room)
 
@@ -967,7 +1270,8 @@ async def quiz_answer(query, room_id, idx):
     q = room["question"]
     if idx == q["ans"]:
         room["answered"] = True
-        prize = int(room["entry"] * GAMES["quiz"]["mult"])
+        full_prize = int(room["entry"] * GAMES["quiz"]["mult"])
+        prize, comm = apply_commission(full_prize)
         await add_balance(user_id, prize)
         room["status"] = "finished"
         rooms.pop(room_id, None)
@@ -975,7 +1279,9 @@ async def quiz_answer(query, room_id, idx):
         text = (f"🧠 <b>نتیجه کوییز</b>\n"
                 f"❓ {escape(q['q'])}\n\n"
                 f"🏆 برنده: <b>{escape(query.from_user.first_name)}</b>\n"
-                f"💰 جایزه: <b>{fmt(prize)}</b> زرکوین")
+                f"💰 جایزه: {fmt(full_prize)}\n"
+                f"💵 کارمزد ۱۰٪: {fmt(comm)}\n"
+                f"✅ دریافتی: <b>{fmt(prize)}</b>")
         await safe_edit(query, text, back_games_kb())
     else:
         await query.answer("❌ اشتباه! دوباره تلاش کن", show_alert=True)
@@ -996,12 +1302,14 @@ async def penalty_shoot(query, context):
         await query.answer("❌ بازی فعالی نداری", show_alert=True); return
     penalty_games.pop(user_id, None)
     if random.random() < 0.5:
-        prize = int(game["entry"] * 2)
+        full_prize = game["entry"] * 2
+        prize, comm = apply_commission(full_prize)
         await add_balance(user_id, prize)
         await safe_edit(query,
             f"⚽ <b>گل!!!</b> 🎉\n\n"
-            f"💰 جایزه: <b>{fmt(prize)}</b> زرکوین\n"
-            f"🎯 توپ رفت گوشه دروازه!",
+            f"💰 جایزه: {fmt(full_prize)}\n"
+            f"💵 کارمزد ۱۰٪: {fmt(comm)}\n"
+            f"✅ دریافتی: <b>{fmt(prize)}</b> زرکوین",
             back_games_kb())
     else:
         await safe_edit(query,
@@ -1009,86 +1317,123 @@ async def penalty_shoot(query, context):
             f"💸 متأسفانه {fmt(game['entry'])} زرکوین از دست رفت.",
             back_games_kb())
 
-async def luck_entry_done(update, context, entry: int):
-    user_id = update.effective_user.id
-    bot_seq = [random.choice(LUCK_EMOJIS) for _ in range(3)]
-    luck_games[user_id] = {
-        "entry": entry,
-        "bot_seq": bot_seq,
-        "deadline": datetime.now(TEHRAN).timestamp() + 60,
-        "chat_id": update.effective_chat.id,
-    }
-    try:
-        context.job_queue.run_once(
-            luck_timeout, when=60,
-            data={"user_id": user_id},
-            name=f"luck:{user_id}:{int(datetime.now().timestamp())}")
-    except Exception:
-        logger.exception("schedule luck_timeout failed")
-    await update.message.reply_text(
-        f"🍀 <b>بازی شانسی</b>\n"
-        f"💰 ورودی: {fmt(entry)}\n\n"
-        f"⏳ ۶۰ ثانیه وقت داری <b>سه ایموجی</b> از این‌ها بفرستی:\n"
-        f"👍 👎 ❤️\n\n"
-        f"مثال: 👍 👎 ❤️\n"
-        f"🎯 هرچی به ترتیب بات نزدیک‌تر باشی، جایزه بیشتری می‌گیری!",
-        parse_mode=ParseMode.HTML)
 
-async def luck_timeout(context: ContextTypes.DEFAULT_TYPE):
-    user_id = context.job.data["user_id"]
-    game = luck_games.pop(user_id, None)
-    if not game:
-        return
-    try:
-        await context.bot.send_message(
-            game["chat_id"],
-            f"⏰ <a href='tg://user?id={user_id}'>وقت تموم شد!</a> بازی شانسی رو باختی.",
-            parse_mode=ParseMode.HTML)
-    except Exception:
-        pass
-
-async def handle_luck_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    user_id = update.effective_user.id
-    game = luck_games.get(user_id)
-    if not game:
-        return False
-    if datetime.now(TEHRAN).timestamp() > game["deadline"]:
-        luck_games.pop(user_id, None)
-        await update.message.reply_text("⏰ زمان تموم شد! بازی رو باختی.")
-        return True
-    emojis = parse_luck_emojis(update.message.text or "")
-    if len(emojis) < 3:
-        await update.message.reply_text("❌ باید <b>دقیقاً سه ایموجی</b> از (👍 👎 ❤️) بفرستی.",
-                                        parse_mode=ParseMode.HTML)
-        return True
-    emojis = emojis[:3]
-    luck_games.pop(user_id, None)
-    bot_seq = game["bot_seq"]
-    matches = sum(1 for a, b in zip(emojis, bot_seq) if a == b)
-    seq_str = " ".join(bot_seq)
-    user_str = " ".join(emojis)
-    entry = game["entry"]
-    if matches == 3:
-        prize = entry * 2
-        await add_balance(user_id, prize)
-        text = (f"🍀 <b>بردی!</b> 🎉\n\n"
-                f"🤖 ترتیب بات: {seq_str}\n"
-                f"👤 ترتیب تو: {user_str}\n\n"
-                f"🎯 هر سه تا درست! جایزه: <b>{fmt(prize)}</b>")
-    elif matches == 2:
-        prize = int(entry * 1.5)
-        await add_balance(user_id, prize)
-        text = (f"🍀 <b>نزدیک بود!</b>\n\n"
-                f"🤖 ترتیب بات: {seq_str}\n"
-                f"👤 ترتیب تو: {user_str}\n\n"
-                f"🎯 دو تا درست! جایزه: <b>{fmt(prize)}</b>")
+# ============================== بازی کازینو ==============================
+async def play_slots_message(update, user_id: int, entry: int):
+    reels = [random.choice(SLOT_SYMBOLS) for _ in range(3)]
+    reels_str = " | ".join(reels)
+    if reels[0] == reels[1] == reels[2]:
+        if reels[0] == "7️⃣":
+            mult = 15
+        elif reels[0] == "⭐":
+            mult = 8
+        else:
+            mult = 4
+    elif reels[0] == reels[1] or reels[1] == reels[2] or reels[0] == reels[2]:
+        mult = 1.7
     else:
-        text = (f"🍀 <b>باختی!</b> 😢\n\n"
-                f"🤖 ترتیب بات: {seq_str}\n"
-                f"👤 ترتیب تو: {user_str}\n\n"
-                f"💸 {fmt(entry)} زرکوین از دست رفت.")
-    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
-    return True
+        mult = 0
+
+    if mult > 0:
+        full_prize = int(entry * mult)
+        prize, comm = apply_commission(full_prize)
+        await add_balance(user_id, prize)
+        text = (
+            f"🎰 <b>اسلات</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"<b>{reels_str}</b>\n\n"
+            f"🎉 <b>بردی!</b>\n"
+            f"💰 جایزه: {fmt(full_prize)}\n"
+            f"💵 کارمزد ۱۰٪: {fmt(comm)}\n"
+            f"✅ دریافتی: <b>{fmt(prize)}</b> زرکوین"
+        )
+    else:
+        text = (
+            f"🎰 <b>اسلات</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"<b>{reels_str}</b>\n\n"
+            f"😢 باختی! {fmt(entry)} زرکوین از دست رفت."
+        )
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=casino_back_kb())
+
+
+async def resolve_dice(query, entry: int, choice: str):
+    d1, d2 = random.randint(1, 6), random.randint(1, 6)
+    total = d1 + d2
+    choice_names = {"under": "کمتر از ۷", "seven": "دقیقاً ۷", "over": "بیشتر از ۷"}
+    if choice == "under":
+        won, mult = total < 7, 2
+    elif choice == "seven":
+        won, mult = total == 7, 5
+    else:
+        won, mult = total > 7, 2
+    header = (
+        f"🎲 <b>تاس</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🎯 تاس‌ها: {d1} + {d2} = <b>{total}</b>\n"
+        f"انتخاب تو: {choice_names.get(choice, '?')}\n\n"
+    )
+    if won:
+        full_prize = int(entry * mult)
+        prize, comm = apply_commission(full_prize)
+        await add_balance(query.from_user.id, prize)
+        text = header + (
+            f"🎉 <b>بردی!</b>\n"
+            f"💰 جایزه: {fmt(full_prize)}\n"
+            f"💵 کارمزد ۱۰٪: {fmt(comm)}\n"
+            f"✅ دریافتی: <b>{fmt(prize)}</b> زرکوین"
+        )
+    else:
+        text = header + f"😢 باختی! {fmt(entry)} زرکوین از دست رفت."
+    await safe_edit(query, text, casino_back_kb())
+
+
+async def resolve_coin(query, entry: int, choice: str):
+    result = random.choice(["heads", "tails"])
+    result_name = "شیر 🦁" if result == "heads" else "خط ✖️"
+    choice_name = "شیر 🦁" if choice == "heads" else "خط ✖️"
+    header = (
+        f"🪙 <b>شیر یا خط</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🎯 نتیجه: <b>{result_name}</b>\n"
+        f"انتخاب تو: {choice_name}\n\n"
+    )
+    if result == choice:
+        full_prize = entry * 2
+        prize, comm = apply_commission(full_prize)
+        await add_balance(query.from_user.id, prize)
+        text = header + (
+            f"🎉 <b>بردی!</b>\n"
+            f"💰 جایزه: {fmt(full_prize)}\n"
+            f"💵 کارمزد ۱۰٪: {fmt(comm)}\n"
+            f"✅ دریافتی: <b>{fmt(prize)}</b> زرکوین"
+        )
+    else:
+        text = header + f"😢 باختی! {fmt(entry)} زرکوین از دست رفت."
+    await safe_edit(query, text, casino_back_kb())
+
+
+async def resolve_card(query, entry: int, choice: str):
+    result = random.choice(list(CARD_SUITS.keys()))
+    header = (
+        f"🃏 <b>کارت شانس</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🎯 کارت: <b>{CARD_SUITS[result]}</b> ({CARD_SUITS_FA[result]})\n"
+        f"انتخاب تو: {CARD_SUITS[choice]} ({CARD_SUITS_FA[choice]})\n\n"
+    )
+    if result == choice:
+        full_prize = entry * 4
+        prize, comm = apply_commission(full_prize)
+        await add_balance(query.from_user.id, prize)
+        text = header + (
+            f"🎉 <b>بردی!</b>\n"
+            f"💰 جایزه: {fmt(full_prize)}\n"
+            f"💵 کارمزد ۱۰٪: {fmt(comm)}\n"
+            f"✅ دریافتی: <b>{fmt(prize)}</b> زرکوین"
+        )
+    else:
+        text = header + f"😢 باختی! {fmt(entry)} زرکوین از دست رفت."
+    await safe_edit(query, text, casino_back_kb())
 
 
 # ============================== انتقال ==============================
@@ -1098,9 +1443,7 @@ async def confirm_transfer(query, owner_id: int):
     pending = pending_transfers.pop(owner_id, None)
     if not pending:
         await query.answer("❌ انتقال منقضی شده", show_alert=True); return
-    ok = await transfer_coins(owner_id, pending["recipient_id"],
-                              pending["amount"], pending["fee"])
-    if not ok:
+    if not await transfer_coins(owner_id, pending["recipient_id"], pending["amount"], pending["fee"]):
         await query.answer("❌ موجودی کافی نیست", show_alert=True)
         await safe_edit(query, "❌ انتقال انجام نشد.", back_main_kb())
         return
@@ -1133,12 +1476,10 @@ async def owner_give(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     amount = parse_amount(m.group(1))
     if not amount:
-        await msg.reply_text("❌ مبلغ نامعتبر")
-        return
+        await msg.reply_text("❌ مبلغ نامعتبر"); return
     target = msg.reply_to_message.from_user
     if target.is_bot:
-        await msg.reply_text("❌ به بات نمی‌شه انتقال داد")
-        return
+        await msg.reply_text("❌ به بات نمی‌شه انتقال داد"); return
     await ensure_user(target)
     await add_balance(target.id, amount)
     await msg.reply_text(
@@ -1150,11 +1491,17 @@ async def owner_give(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
-    if await handle_luck_message(update, context):
-        return
     user = update.effective_user
     user_id = user.id
     text = update.message.text.strip()
+
+    # ✅ اگه بازی کازینو در جریانه و کاربر داره پیام متنی می‌فرسته، پولش رو برگردون
+    if user_id in casino_pending:
+        pending = casino_pending.pop(user_id)
+        await add_balance(user_id, pending["entry"])
+        await update.message.reply_text(
+            f"⚠️ بازی قبلی کازینو لغو شد و {fmt(pending['entry'])} زرکوین برگشت.\n"
+            f"برای شروع دوباره از منوی کازینو استفاده کن.")
 
     state = user_states.get(user_id)
     if not state:
@@ -1174,8 +1521,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"✅ <b>{fmt(amount)}</b> زرکوین به بانک واریز شد.",
                 parse_mode=ParseMode.HTML, reply_markup=main_menu_kb())
         else:
-            await update.message.reply_text("❌ موجودی کافی نیست",
-                                            reply_markup=main_menu_kb())
+            await update.message.reply_text("❌ موجودی کافی نیست", reply_markup=main_menu_kb())
         return
 
     if action == "bank_withdraw":
@@ -1189,8 +1535,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"✅ <b>{fmt(amount)}</b> زرکوین از بانک برداشت شد.",
                 parse_mode=ParseMode.HTML, reply_markup=main_menu_kb())
         else:
-            await update.message.reply_text("❌ موجودی بانک کافی نیست",
-                                            reply_markup=main_menu_kb())
+            await update.message.reply_text("❌ موجودی بانک کافی نیست", reply_markup=main_menu_kb())
         return
 
     if action == "game_entry":
@@ -1211,21 +1556,13 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if gk == "penalty":
             await penalty_entry_done(update, amount)
             return
-        if gk == "luck":
-            await luck_entry_done(update, context, amount)
-            return
 
         rid = new_room_id()
         rooms[rid] = {
-            "id": rid,
-            "game": gk,
-            "entry": amount,
-            "creator": user_id,
-            "players": [user_id],
-            "status": "waiting",
+            "id": rid, "game": gk, "entry": amount, "creator": user_id,
+            "players": [user_id], "status": "waiting",
             "user_names": {user_id: user.first_name or str(user_id)},
-            "chat_id": update.effective_chat.id,
-            "created_at": now_iso(),
+            "chat_id": update.effective_chat.id, "created_at": now_iso(),
         }
         text_out = (
             f"{g['emoji']} <b>{g['name']}</b>\n"
@@ -1233,9 +1570,43 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"💰 ورودی: <b>{fmt(amount)}</b>\n\n"
             f"👤 بازیکن ۱: {escape(user.first_name)}\n\n"
             f"⏳ منتظر بازیکن دوم...")
-        await update.message.reply_text(
-            text_out, parse_mode=ParseMode.HTML,
-            reply_markup=join_room_kb(rid, gk))
+        await update.message.reply_text(text_out, parse_mode=ParseMode.HTML,
+                                         reply_markup=join_room_kb(rid, gk))
+        return
+
+    if action == "casino_entry":
+        cg = state["game"]
+        g = CASINO_GAMES.get(cg)
+        if not g:
+            user_states.pop(user_id, None); return
+        amount = parse_amount(text)
+        if not amount:
+            await update.message.reply_text("❌ مبلغ نامعتبر"); return
+        if amount < g["min"]:
+            await update.message.reply_text(f"❌ حداقل ورودی {fmt(g['min'])} است"); return
+        await ensure_user(user)
+        if not await deduct_balance(user_id, amount):
+            await update.message.reply_text("❌ موجودی کافی نیست"); return
+        user_states.pop(user_id, None)
+
+        if cg == "slots":
+            await play_slots_message(update, user_id, amount)
+            return
+
+        casino_pending[user_id] = {"entry": amount, "game": cg,
+                                    "chat_id": update.effective_chat.id}
+        if cg == "dice":
+            await update.message.reply_text(
+                f"🎲 <b>تاس</b>\n💰 ورودی: {fmt(amount)}\n\nانتخاب کن:",
+                parse_mode=ParseMode.HTML, reply_markup=casino_dice_kb())
+        elif cg == "coin":
+            await update.message.reply_text(
+                f"🪙 <b>شیر یا خط</b>\n💰 ورودی: {fmt(amount)}\n\nانتخاب کن:",
+                parse_mode=ParseMode.HTML, reply_markup=casino_coin_kb())
+        elif cg == "card":
+            await update.message.reply_text(
+                f"🃏 <b>کارت شانس</b>\n💰 ورودی: {fmt(amount)}\n\nکدام خال؟",
+                parse_mode=ParseMode.HTML, reply_markup=casino_card_kb())
         return
 
     if action == "transfer_amount":
@@ -1250,14 +1621,12 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(
                 f"❌ موجودی کافی نیست (نیاز: {fmt(total)})"); return
         user_states[user_id] = {"action": "transfer_card", "amount": amount, "fee": fee}
-        # ✅ رفع باگ ۱: دکمه بازگشت اضافه شد
         await update.message.reply_text(
             f"💸 مبلغ: <b>{fmt(amount)}</b>\n"
             f"💵 کارمزد: <b>{fmt(fee)}</b>\n"
             f"📊 مجموع کسر: <b>{fmt(total)}</b>\n\n"
             f"شماره کارت مقصد رو بفرست:",
-            parse_mode=ParseMode.HTML,
-            reply_markup=back_main_kb())
+            parse_mode=ParseMode.HTML, reply_markup=back_main_kb())
         return
 
     if action == "transfer_card":
@@ -1276,9 +1645,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pending_transfers[user_id] = {
             "recipient_id": recipient["user_id"],
             "recipient_name": recipient["first_name"] or str(recipient["user_id"]),
-            "amount": amount,
-            "fee": fee,
-            "total": total,
+            "amount": amount, "fee": fee, "total": total,
         }
         user_states.pop(user_id, None)
         await update.message.reply_text(
@@ -1290,8 +1657,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"💵 کارمزد: <b>{fmt(fee)}</b>\n"
             f"📊 مجموع کسر: <b>{fmt(total)}</b>\n\n"
             f"آیا تأیید می‌کنی؟",
-            parse_mode=ParseMode.HTML,
-            reply_markup=transfer_confirm_kb(user_id))
+            parse_mode=ParseMode.HTML, reply_markup=transfer_confirm_kb(user_id))
         return
 
 
@@ -1325,31 +1691,26 @@ HELP_TEXT = (
     "• <code>زربات</code> — باز کردن منوی اصلی\n"
     "• <code>زر بازی</code> — رفتن به بخش بازی‌ها\n\n"
     "🏦 <b>بانک</b>\n"
-    "سپرده‌گذاری با سود روزانه ۲٪ که هر شب ساعت ۰۰:۰۰ واریز میشه.\n"
-    "شماره کارت اختصاصی بر اساس آیدی عددی تو ساخته میشه.\n\n"
-    "🏠 <b>ملک‌ها</b> (حداکثر ۵ تا)\n"
-    "🛒 سوپرمارکت ۵۰۰K → ۵۰K/روز\n"
-    "🍎 میوه‌فروشی ۸۰۰K → ۸۰K/روز\n"
-    "🥩 قصابی ۱M → ۱۰۰K/روز\n"
-    "💊 داروخانه ۱.۸M → ۱۸۰K/روز\n"
-    "💈 آرایشگاه ۲.۲M → ۲۲۰K/روز\n"
-    "👕 پوشاک ۳M → ۳۰۰K/روز\n"
-    "📚 کتاب‌فروشی ۳.۵M → ۳۵۰K/روز\n"
-    "📱 موبایل ۴M → ۴۰۰K/روز\n\n"
-    "👷 <b>کارگرها</b> (حداکثر ۵ تا)\n"
-    "👨‍🏫 معلم ۳۰۰K → ۳۰K/روز\n"
-    "👨‍⚕️ پزشک ۵۰۰K → ۵۰K/روز\n"
-    "🚕 راننده ۸۰۰K → ۸۰K/روز\n"
-    "👨‍💻 برنامه‌نویس ۱.۲M → ۱۲۰K/روز\n"
-    "🤖 متخصص AI ۲M → ۲۰۰K/روز\n\n"
-    "🎮 <b>بازی‌ها</b>\n"
-    "✊ سنگ کاغذ قیچی (حداقل ۱۰۰)\n"
-    "❌ دوز (حداقل ۱۰۰۰)\n"
-    "🧠 کوییز (حداقل ۵۰۰۰)\n"
-    "⚽ پنالتی (حداقل ۱۰,۰۰۰)\n"
-    "🍀 شانسی (حداقل ۲۰,۰۰۰)\n\n"
-    "💸 <b>انتقال</b>\n"
-    "با شماره کارت. بالای ۱ میلیون، ۱٪ کارمزد.\n\n"
+    "سود روزانه ۲٪ که هر شب ساعت ۰۰:۰۰ واریز میشه.\n"
+    "شماره کارت اختصاصی بر اساس آیدی عددی.\n\n"
+    "🏠 <b>ملک‌ها</b> (حداکثر ۵)\n"
+    "🛒 ۵۰۰K→۵۰K | 🍎 ۸۰۰K→۸۰K | 🥩 ۱M→۱۰۰K | 💊 ۱.۸M→۱۸۰K\n"
+    "💈 ۲.۲M→۲۲۰K | 👕 ۳M→۳۰۰K | 📚 ۳.۵M→۳۵۰K | 📱 ۴M→۴۰۰K\n\n"
+    "👷 <b>کارگرها</b> (حداکثر ۵)\n"
+    "👨‍🏫 ۳۰۰K→۳۰K | 👨‍⚕️ ۵۰۰K→۵۰K | 🚕 ۸۰۰K→۸۰K\n"
+    "👨‍💻 ۱.۲M→۱۲۰K | 🤖 ۲M→۲۰۰K\n\n"
+    "🎮 <b>بازی‌ها</b> (حداقل ۱۰۰۰)\n"
+    "✊ سنگ کاغذ قیچی — ۱.۵x\n"
+    "❌ دوز — ۱.۷x\n"
+    "🧠 کوییز — ۱.۸x\n"
+    "⚽ پنالتی — ۲x\n\n"
+    "🎰 <b>کازینو</b> (حداقل ۱۰,۰۰۰)\n"
+    "🎰 اسلات — تا ۱۵x\n"
+    "🎲 تاس — تا ۵x\n"
+    "🪙 شیر یا خط — ۲x\n"
+    "🃏 کارت شانس — ۴x\n\n"
+    "💵 <b>کارمزد بات</b>: ۱۰٪ از هر برد\n\n"
+    "💸 <b>انتقال</b>: با شماره کارت. بالای ۱M، ۱٪ کارمزد.\n\n"
     "👑 <b>اهدا از طرف مالک</b>\n"
     "مالک با ریپلای روی پیام کسی بنویسه:\n"
     "<code>انتقال زرکوین 5000</code>"
@@ -1365,9 +1726,7 @@ async def post_init(app: Application):
     except Exception:
         logger.exception("initial daily_payout failed")
     app.job_queue.run_daily(
-        daily_payout,
-        time=time(hour=0, minute=0, tzinfo=TEHRAN),
-        name="daily_payout")
+        daily_payout, time=time(hour=0, minute=0, tzinfo=TEHRAN), name="daily_payout")
 
 
 async def post_shutdown(app: Application):
@@ -1375,24 +1734,16 @@ async def post_shutdown(app: Application):
 
 
 def main():
-    app = Application.builder() \
-        .token(BOT_TOKEN) \
-        .post_init(post_init) \
-        .post_shutdown(post_shutdown) \
-        .build()
+    app = Application.builder().token(BOT_TOKEN) \
+        .post_init(post_init).post_shutdown(post_shutdown).build()
 
     app.add_handler(MessageHandler(filters.Regex(r"^زربات$"), cmd_zarbat))
     app.add_handler(MessageHandler(filters.Regex(r"^زر\s*بازی$"), cmd_zarbazi))
     app.add_handler(CommandHandler("start", cmd_start))
-
     app.add_handler(ChatMemberHandler(chat_member_handler, ChatMemberHandler.MY_CHAT_MEMBER))
-
     app.add_handler(MessageHandler(
-        filters.Regex(r"^انتقال زرکوین\s+[\d۰-۹,،]+"),
-        owner_give))
-
+        filters.Regex(r"^انتقال زرکوین\s+[\d۰-۹,،]+"), owner_give))
     app.add_handler(CallbackQueryHandler(callback_handler))
-
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
     logger.info("🚀 Bot starting...")
