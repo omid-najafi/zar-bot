@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""ربات زرکوین (بات زر) - نسخه کامل"""
+"""ربات زرکوین (بات زر) - نسخه کامل با MySQL"""
 import asyncio
 import html
 import logging
@@ -11,7 +11,7 @@ import string
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
-import aiosqlite
+import aiomysql
 from telegram import (
     ChatMember,
     InlineKeyboardButton,
@@ -22,7 +22,6 @@ from telegram.constants import ParseMode
 from telegram.error import BadRequest
 from telegram.ext import (
     Application,
-    ApplicationHandlerStop,
     CallbackQueryHandler,
     ChatMemberHandler,
     CommandHandler,
@@ -37,8 +36,13 @@ OWNER_ID = int(os.getenv("OWNER_ID", "0").strip() or "0")
 START_BALANCE = int(os.getenv("START_BALANCE", "0").strip() or "0")
 TEHRAN = ZoneInfo("Asia/Tehran")
 
-DATA_DIR = os.getenv("RAILWAY_VOLUME_MOUNT_PATH", os.path.join(os.getcwd(), "data"))
-DB_PATH = os.path.join(DATA_DIR, "zarcoin.db")
+DB_HOST = os.getenv("MYSQLHOST", "localhost")
+DB_PORT = int(os.getenv("MYSQLPORT", "3306") or "3306")
+DB_USER = os.getenv("MYSQLUSER", "root")
+DB_PASSWORD = os.getenv("MYSQLPASSWORD", "")
+DB_NAME = os.getenv("MYSQLDATABASE", "railway")
+
+db_pool: aiomysql.Pool | None = None
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN تنظیم نشده است")
@@ -97,29 +101,33 @@ QUIZ_QUESTIONS = [
 LUCK_EMOJIS = ["👍", "👎", "❤️"]
 LUCK_PATTERN = re.compile(r"👍|👎|❤️|❤")
 
-# ============================== دیتابیس ==============================
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS users (
-    user_id INTEGER PRIMARY KEY,
-    username TEXT,
-    first_name TEXT,
-    balance INTEGER NOT NULL DEFAULT 0,
-    bank_balance INTEGER NOT NULL DEFAULT 0,
-    card_number TEXT UNIQUE,
-    last_daily TEXT,
-    created_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS assets (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    asset_type TEXT NOT NULL,
-    asset_key TEXT NOT NULL,
-    purchase_price INTEGER NOT NULL,
-    daily_income INTEGER NOT NULL,
-    purchased_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_assets ON assets(user_id, asset_type);
-"""
+# ============================== اسکیمای MySQL ==============================
+SCHEMA_STATEMENTS = [
+    """
+    CREATE TABLE IF NOT EXISTS users (
+        user_id BIGINT PRIMARY KEY,
+        username VARCHAR(255),
+        first_name VARCHAR(255),
+        balance BIGINT NOT NULL DEFAULT 0,
+        bank_balance BIGINT NOT NULL DEFAULT 0,
+        card_number VARCHAR(16) UNIQUE,
+        last_daily VARCHAR(10),
+        created_at VARCHAR(32) NOT NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS assets (
+        id INT PRIMARY KEY AUTO_INCREMENT,
+        user_id BIGINT NOT NULL,
+        asset_type VARCHAR(32) NOT NULL,
+        asset_key VARCHAR(64) NOT NULL,
+        purchase_price BIGINT NOT NULL,
+        daily_income BIGINT NOT NULL,
+        purchased_at VARCHAR(32) NOT NULL,
+        INDEX idx_assets (user_id, asset_type)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    """,
+]
 
 user_states: dict[int, dict] = {}
 rooms: dict[str, dict] = {}
@@ -203,208 +211,253 @@ async def safe_edit(query, text: str, reply_markup=None):
         except Exception:
             logger.exception("safe_edit failed")
 
-# ============================== DB ==============================
-async def init_db():
-    os.makedirs(DATA_DIR, exist_ok=True)
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.executescript(SCHEMA)
-        await db.commit()
-    logger.info("DB ready: %s", DB_PATH)
+# ============================== اتصال DB ==============================
+async def init_db_pool():
+    global db_pool
+    db_pool = await aiomysql.create_pool(
+        host=DB_HOST,
+        port=DB_PORT,
+        user=DB_USER,
+        password=DB_PASSWORD,
+        db=DB_NAME,
+        autocommit=False,
+        minsize=1,
+        maxsize=10,
+        charset="utf8mb4",
+    )
+    logger.info("✅ Connection Pool به MySQL ساخته شد.")
 
+async def close_db_pool():
+    global db_pool
+    if db_pool:
+        db_pool.close()
+        await db_pool.wait_closed()
+        logger.info("🔌 Connection Pool بسته شد.")
+
+async def init_db():
+    async with db_pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            for stmt in SCHEMA_STATEMENTS:
+                await cur.execute(stmt)
+            await conn.commit()
+    logger.info("✅ جداول MySQL آماده شدند.")
+
+# ============================== توابع DB ==============================
 async def ensure_user(user) -> dict:
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        await db.execute(
-            "INSERT OR IGNORE INTO users "
-            "(user_id, username, first_name, balance, bank_balance, card_number, created_at) "
-            "VALUES (?, ?, ?, ?, 0, ?, ?)",
-            (user.id, user.username, user.first_name, START_BALANCE,
-             card_number_for(user.id), now_iso()))
-        await db.execute(
-            "UPDATE users SET username=?, first_name=? WHERE user_id=?",
-            (user.username, user.first_name, user.id))
-        await db.commit()
-        cur = await db.execute("SELECT * FROM users WHERE user_id=?", (user.id,))
-        row = await cur.fetchone()
-        return dict(row)
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                "INSERT IGNORE INTO users "
+                "(user_id, username, first_name, balance, bank_balance, card_number, created_at) "
+                "VALUES (%s, %s, %s, %s, 0, %s, %s)",
+                (user.id, user.username, user.first_name, START_BALANCE,
+                 card_number_for(user.id), now_iso())
+            )
+            await cur.execute(
+                "UPDATE users SET username=%s, first_name=%s WHERE user_id=%s",
+                (user.username, user.first_name, user.id)
+            )
+            await cur.execute("SELECT * FROM users WHERE user_id=%s", (user.id,))
+            row = await cur.fetchone()
+            await conn.commit()
+            return dict(row)
 
 async def get_user(user_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
-        row = await cur.fetchone()
-        return dict(row) if row else None
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute("SELECT * FROM users WHERE user_id=%s", (user_id,))
+            row = await cur.fetchone()
+            return dict(row) if row else None
 
 async def add_balance(user_id: int, amount: int):
     if amount <= 0:
         return
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("UPDATE users SET balance = balance + ? WHERE user_id=?",
-                         (amount, user_id))
-        await db.commit()
+    async with db_pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "UPDATE users SET balance = balance + %s WHERE user_id=%s",
+                (amount, user_id))
+            await conn.commit()
 
 async def deduct_balance(user_id: int, amount: int) -> bool:
     if amount <= 0:
         return False
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "UPDATE users SET balance = balance - ? WHERE user_id=? AND balance >= ?",
-            (amount, user_id, amount))
-        await db.commit()
-        return cur.rowcount == 1
+    async with db_pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "UPDATE users SET balance = balance - %s WHERE user_id=%s AND balance >= %s",
+                (amount, user_id, amount))
+            await conn.commit()
+            return cur.rowcount == 1
 
 async def bank_deposit(user_id: int, amount: int) -> bool:
     if amount <= 0:
         return False
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with db_pool.acquire() as conn:
         try:
-            await db.execute("BEGIN IMMEDIATE")
-            cur = await db.execute(
-                "UPDATE users SET balance = balance - ?, bank_balance = bank_balance + ? "
-                "WHERE user_id=? AND balance >= ?",
-                (amount, amount, user_id, amount))
-            if cur.rowcount != 1:
-                await db.rollback()
-                return False
-            await db.commit()
+            await conn.begin()
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "UPDATE users SET balance = balance - %s, bank_balance = bank_balance + %s "
+                    "WHERE user_id=%s AND balance >= %s",
+                    (amount, amount, user_id, amount))
+                if cur.rowcount != 1:
+                    await conn.rollback()
+                    return False
+            await conn.commit()
             return True
         except Exception:
-            await db.rollback()
-            logger.exception("bank_deposit")
+            await conn.rollback()
+            logger.exception("bank_deposit failed")
             return False
 
 async def bank_withdraw(user_id: int, amount: int) -> bool:
     if amount <= 0:
         return False
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with db_pool.acquire() as conn:
         try:
-            await db.execute("BEGIN IMMEDIATE")
-            cur = await db.execute(
-                "UPDATE users SET bank_balance = bank_balance - ?, balance = balance + ? "
-                "WHERE user_id=? AND bank_balance >= ?",
-                (amount, amount, user_id, amount))
-            if cur.rowcount != 1:
-                await db.rollback()
-                return False
-            await db.commit()
+            await conn.begin()
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "UPDATE users SET bank_balance = bank_balance - %s, balance = balance + %s "
+                    "WHERE user_id=%s AND bank_balance >= %s",
+                    (amount, amount, user_id, amount))
+                if cur.rowcount != 1:
+                    await conn.rollback()
+                    return False
+            await conn.commit()
             return True
         except Exception:
-            await db.rollback()
-            logger.exception("bank_withdraw")
+            await conn.rollback()
+            logger.exception("bank_withdraw failed")
             return False
 
 async def transfer_coins(sender_id: int, recipient_id: int, amount: int, fee: int) -> bool:
     total = amount + fee
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with db_pool.acquire() as conn:
         try:
-            await db.execute("BEGIN IMMEDIATE")
-            cur = await db.execute(
-                "UPDATE users SET balance = balance - ? WHERE user_id=? AND balance >= ?",
-                (total, sender_id, total))
-            if cur.rowcount != 1:
-                await db.rollback()
-                return False
-            await db.execute(
-                "UPDATE users SET balance = balance + ? WHERE user_id=?",
-                (amount, recipient_id))
-            await db.commit()
+            await conn.begin()
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "UPDATE users SET balance = balance - %s WHERE user_id=%s AND balance >= %s",
+                    (total, sender_id, total))
+                if cur.rowcount != 1:
+                    await conn.rollback()
+                    return False
+                await cur.execute(
+                    "UPDATE users SET balance = balance + %s WHERE user_id=%s",
+                    (amount, recipient_id))
+            await conn.commit()
             return True
         except Exception:
-            await db.rollback()
-            logger.exception("transfer_coins")
+            await conn.rollback()
+            logger.exception("transfer_coins failed")
             return False
 
 async def count_assets(user_id: int, asset_type: str) -> int:
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT COUNT(*) FROM assets WHERE user_id=? AND asset_type=?",
-            (user_id, asset_type))
-        row = await cur.fetchone()
-        return int(row[0]) if row else 0
+    async with db_pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "SELECT COUNT(*) FROM assets WHERE user_id=%s AND asset_type=%s",
+                (user_id, asset_type))
+            row = await cur.fetchone()
+            return int(row[0]) if row else 0
 
-async def get_assets(user_id: int, asset_type: str):
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute(
-            "SELECT * FROM assets WHERE user_id=? AND asset_type=? ORDER BY id ASC",
-            (user_id, asset_type))
-        return [dict(r) for r in await cur.fetchall()]
+async def get_assets(user_id: int, asset_type: str) -> list[dict]:
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                "SELECT * FROM assets WHERE user_id=%s AND asset_type=%s ORDER BY id ASC",
+                (user_id, asset_type))
+            rows = await cur.fetchall()
+            return [dict(r) for r in rows]
 
 async def buy_asset(user_id: int, asset_type: str, asset_key: str, price: int, income: int) -> str:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with db_pool.acquire() as conn:
         try:
-            await db.execute("BEGIN IMMEDIATE")
-            cur = await db.execute(
-                "SELECT COUNT(*) FROM assets WHERE user_id=? AND asset_type=?",
-                (user_id, asset_type))
-            if int((await cur.fetchone())[0]) >= MAX_ASSETS:
-                await db.rollback()
-                return "limit"
-            cur = await db.execute(
-                "UPDATE users SET balance = balance - ? WHERE user_id=? AND balance >= ?",
-                (price, user_id, price))
-            if cur.rowcount != 1:
-                await db.rollback()
-                return "balance"
-            await db.execute(
-                "INSERT INTO assets (user_id, asset_type, asset_key, purchase_price, daily_income, purchased_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (user_id, asset_type, asset_key, price, income, now_iso()))
-            await db.commit()
+            await conn.begin()
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "SELECT COUNT(*) FROM assets WHERE user_id=%s AND asset_type=%s",
+                    (user_id, asset_type))
+                if int((await cur.fetchone())[0]) >= MAX_ASSETS:
+                    await conn.rollback()
+                    return "limit"
+
+                await cur.execute(
+                    "UPDATE users SET balance = balance - %s WHERE user_id=%s AND balance >= %s",
+                    (price, user_id, price))
+                if cur.rowcount != 1:
+                    await conn.rollback()
+                    return "balance"
+
+                await cur.execute(
+                    "INSERT INTO assets "
+                    "(user_id, asset_type, asset_key, purchase_price, daily_income, purchased_at) "
+                    "VALUES (%s, %s, %s, %s, %s, %s)",
+                    (user_id, asset_type, asset_key, price, income, now_iso()))
+            await conn.commit()
             return "ok"
         except Exception:
-            await db.rollback()
-            logger.exception("buy_asset")
+            await conn.rollback()
+            logger.exception("buy_asset failed")
             return "error"
 
 async def find_user_by_card(card: str):
     digits = "".join(ch for ch in (card or "") if ch.isdigit())
     if len(digits) != 16:
         return None
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute("SELECT * FROM users WHERE card_number=?", (digits,))
-        row = await cur.fetchone()
-        return dict(row) if row else None
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute("SELECT * FROM users WHERE card_number=%s", (digits,))
+            row = await cur.fetchone()
+            return dict(row) if row else None
 
 # ============================== سود روزانه ==============================
 async def daily_payout(context: ContextTypes.DEFAULT_TYPE = None):
     async with daily_lock:
         today = datetime.now(TEHRAN).date()
         today_iso = today.isoformat()
-        async with aiosqlite.connect(DB_PATH) as db:
-            db.row_factory = aiosqlite.Row
-            rows = await db.execute_fetchall(
-                "SELECT user_id, bank_balance, last_daily FROM users")
-            for row in rows:
-                user_id = row["user_id"]
-                bank_balance = int(row["bank_balance"] or 0)
-                last_daily = row["last_daily"]
-                if last_daily == today_iso:
-                    continue
-                days = 1
-                if last_daily:
-                    try:
-                        last_date = datetime.fromisoformat(last_daily).date()
-                        days = max(1, min((today - last_date).days, 7))
-                    except Exception:
-                        days = 1
-                interest = 0
-                current = bank_balance
-                for _ in range(days):
-                    d = int(current * BANK_RATE)
-                    interest += d
-                    current += d
-                cur = await db.execute(
-                    "SELECT COALESCE(SUM(daily_income), 0) FROM assets WHERE user_id=?",
-                    (user_id,))
-                asset_income = int((await cur.fetchone())[0] or 0) * days
-                await db.execute(
-                    "UPDATE users SET bank_balance = bank_balance + ?, "
-                    "balance = balance + ?, last_daily = ? WHERE user_id=?",
-                    (interest, asset_income, today_iso, user_id))
-            await db.commit()
-        logger.info("daily payout done for %s", today_iso)
+        async with db_pool.acquire() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                await cur.execute("SELECT user_id, bank_balance, last_daily FROM users")
+                rows = await cur.fetchall()
+
+                for row in rows:
+                    user_id = row["user_id"]
+                    bank_balance = int(row["bank_balance"] or 0)
+                    last_daily = row["last_daily"]
+
+                    if last_daily == today_iso:
+                        continue
+
+                    days = 1
+                    if last_daily:
+                        try:
+                            last_date = datetime.fromisoformat(last_daily).date()
+                            days = max(1, min((today - last_date).days, 7))
+                        except Exception:
+                            days = 1
+
+                    interest = 0
+                    current = bank_balance
+                    for _ in range(days):
+                        d = int(current * BANK_RATE)
+                        interest += d
+                        current += d
+
+                    await cur.execute(
+                        "SELECT COALESCE(SUM(daily_income), 0) FROM assets WHERE user_id=%s",
+                        (user_id,))
+                    asset_income = int((await cur.fetchone())[0] or 0) * days
+
+                    await cur.execute(
+                        "UPDATE users SET bank_balance = bank_balance + %s, "
+                        "balance = balance + %s, last_daily = %s WHERE user_id=%s",
+                        (interest, asset_income, today_iso, user_id))
+
+                await conn.commit()
+        logger.info("💰 سود روزانه %s پرداخت شد.", today_iso)
 
 # ============================== کیبوردها ==============================
 def main_menu_kb():
@@ -580,14 +633,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data or ""
 
-    # --- منو اصلی
     if data == "menu:main":
         await query.answer()
         await ensure_user(query.from_user)
         await safe_edit(query, await build_main_menu_text(query.from_user.id), main_menu_kb())
         return
 
-    # --- بانک
     if data == "bank:menu":
         await query.answer()
         await ensure_user(query.from_user)
@@ -604,7 +655,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_edit(query, "🏧 <b>برداشت از بانک</b>\n\nمبلغ مورد نظر رو بفرست:", back_main_kb())
         return
 
-    # --- ملک
     if data == "prop:menu":
         await query.answer()
         await ensure_user(query.from_user)
@@ -636,7 +686,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         "\n\n👇 از لیست زیر یکی بخر:", properties_menu_kb())
         return
 
-    # --- کارگر
     if data == "worker:menu":
         await query.answer()
         await ensure_user(query.from_user)
@@ -668,7 +717,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         "\n\n👇 از لیست زیر یکی استخدام کن:", workers_menu_kb())
         return
 
-    # --- بازی
     if data == "game:menu":
         await query.answer()
         await safe_edit(query, "🎮 <b>بازی‌های زرکوین</b>\n\nیکی رو انتخاب کن:", games_menu_kb())
@@ -679,13 +727,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await start_game_entry(query, gk)
         return
 
-    # --- راهنما
     if data == "help:menu":
         await query.answer()
         await safe_edit(query, HELP_TEXT, back_main_kb())
         return
 
-    # --- انتقال
     if data == "transfer:start":
         await query.answer()
         user_states[query.from_user.id] = {"action": "transfer_amount"}
@@ -701,13 +747,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_edit(query, "❌ انتقال لغو شد.", back_main_kb())
         return
 
-    # --- اتاق
     if data.startswith("room:cancel:"):
         await query.answer()
         await cancel_room(query, data.split(":")[2])
         return
 
-    # --- RPS
     if data.startswith("rps:join:"):
         await query.answer()
         await join_room(query, context, data.split(":")[2])
@@ -718,7 +762,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await rps_choose(query, context, parts[2], parts[3])
         return
 
-    # --- TTT
     if data.startswith("ttt:join:"):
         await query.answer()
         await join_room(query, context, data.split(":")[2])
@@ -730,7 +773,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await ttt_move(query, context, parts[2], int(parts[3]))
         return
 
-    # --- Quiz
     if data.startswith("quiz:join:"):
         await query.answer()
         await join_room(query, context, data.split(":")[2])
@@ -740,7 +782,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await quiz_answer(query, parts[2], int(parts[3]))
         return
 
-    # --- Penalty
     if data == "pen:shoot":
         await query.answer()
         await penalty_shoot(query, context)
@@ -784,7 +825,6 @@ async def join_room(query, context, room_id: str):
     if not ok:
         await query.answer("❌ موجودی کافی نیست", show_alert=True); return
     room["players"].append(user_id)
-    room["user_names"] = room.get("user_names", {})
     room["user_names"][user_id] = query.from_user.first_name or str(user_id)
     room["status"] = "playing"
 
@@ -821,14 +861,12 @@ async def cancel_room(query, room_id: str):
         await query.answer("❌ اجازه نداری", show_alert=True); return
     if room["status"] == "finished":
         return
-    # برگرداندن پول همه بازیکنان
     for pid in room["players"]:
         await add_balance(pid, room["entry"])
     room["status"] = "cancelled"
     rooms.pop(room_id, None)
     await safe_edit(query, "❌ بازی لغو شد و پول‌ها برگشت داده شد.", back_games_kb())
 
-# --- RPS
 async def rps_choose(query, context, room_id, choice):
     room = rooms.get(room_id)
     if not room or room["status"] != "playing":
@@ -849,13 +887,11 @@ async def rps_choose(query, context, room_id, choice):
                 f"{'✅' if room['players'][1] in room['choices'] else '⏳'}")
         await safe_edit(query, text, None)
         return
-    # resolve
-    names = {1: "سنگ ✊", 2: "کاغذ ✋", 3: "قیچی ✌️"}
+    names = {"rock": "سنگ ✊", "paper": "کاغذ ✋", "scissors": "قیچی ✌️"}
     p1, p2 = room["players"]
     c1, c2 = room["choices"][p1], room["choices"][p2]
     beats = {"rock": "scissors", "paper": "rock", "scissors": "paper"}
     if c1 == c2:
-        # مساوی: پول هر دو برگردانده شود
         await add_balance(p1, room["entry"])
         await add_balance(p2, room["entry"])
         result = "🤝 مساوی! پول‌ها برگشت."
@@ -868,14 +904,13 @@ async def rps_choose(query, context, room_id, choice):
     text = (
         f"✊ <b>نتیجه سنگ کاغذ قیچی</b>\n"
         f"━━━━━━━━━━━━━━━━━━\n"
-        f"👤 {escape(room['user_names'][p1])}: {names[{'rock':1,'paper':2,'scissors':3}[c1]]}\n"
-        f"👤 {escape(room['user_names'][p2])}: {names[{'rock':1,'paper':2,'scissors':3}[c2]]}\n\n"
+        f"👤 {escape(room['user_names'][p1])}: {names[c1]}\n"
+        f"👤 {escape(room['user_names'][p2])}: {names[c2]}\n\n"
         f"{result}")
     room["status"] = "finished"
     rooms.pop(room_id, None)
     await safe_edit(query, text, back_games_kb())
 
-# --- TTT
 async def render_ttt(query, room):
     p1, p2 = room["players"]
     turn = room["turn"]
@@ -915,7 +950,6 @@ async def ttt_move(query, context, room_id, idx):
     room["turn"] = p2 if room["turn"] == p1 else p1
     await render_ttt(query, room)
 
-# --- Quiz
 async def quiz_answer(query, room_id, idx):
     room = rooms.get(room_id)
     if not room or room["status"] != "playing" or room.get("answered"):
@@ -928,7 +962,6 @@ async def quiz_answer(query, room_id, idx):
         room["answered"] = True
         prize = int(room["entry"] * GAMES["quiz"]["mult"])
         await add_balance(user_id, prize)
-        # برگرداندن ورودی بازیکن بازنده هم نه — طبق منطق بازی می‌بازه
         room["status"] = "finished"
         rooms.pop(room_id, None)
         await query.answer("✅ درست بود!", show_alert=True)
@@ -940,7 +973,6 @@ async def quiz_answer(query, room_id, idx):
     else:
         await query.answer("❌ اشتباه! دوباره تلاش کن", show_alert=True)
 
-# --- Penalty
 async def penalty_entry_done(update, entry: int):
     user_id = update.effective_user.id
     penalty_games[user_id] = {"entry": entry, "chat_id": update.effective_chat.id}
@@ -970,7 +1002,6 @@ async def penalty_shoot(query, context):
             f"💸 متأسفانه {fmt(game['entry'])} زرکوین از دست رفت.",
             back_games_kb())
 
-# --- Luck (شانسی)
 async def luck_entry_done(update, context, entry: int):
     user_id = update.effective_user.id
     bot_seq = [random.choice(LUCK_EMOJIS) for _ in range(3)]
@@ -980,7 +1011,6 @@ async def luck_entry_done(update, context, entry: int):
         "deadline": datetime.now(TEHRAN).timestamp() + 60,
         "chat_id": update.effective_chat.id,
     }
-    # تایمر 60 ثانیه
     try:
         context.job_queue.run_once(
             luck_timeout, when=60,
@@ -1011,12 +1041,10 @@ async def luck_timeout(context: ContextTypes.DEFAULT_TYPE):
         pass
 
 async def handle_luck_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """True اگه پیام مربوط به بازی شانسی بود"""
     user_id = update.effective_user.id
     game = luck_games.get(user_id)
     if not game:
         return False
-    # چک کردن تایم
     if datetime.now(TEHRAN).timestamp() > game["deadline"]:
         luck_games.pop(user_id, None)
         await update.message.reply_text("⏰ زمان تموم شد! بازی رو باختی.")
@@ -1115,7 +1143,6 @@ async def owner_give(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
-    # اول شانسی
     if await handle_luck_message(update, context):
         return
     user = update.effective_user
@@ -1128,7 +1155,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     action = state["action"]
 
-    # --- بانک
     if action == "bank_deposit":
         amount = parse_amount(text)
         if not amount:
@@ -1160,7 +1186,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                             reply_markup=main_menu_kb())
         return
 
-    # --- شروع بازی
     if action == "game_entry":
         gk = state["game"]
         g = GAMES.get(gk)
@@ -1176,7 +1201,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ موجودی کافی نیست"); return
         user_states.pop(user_id, None)
 
-        # تک‌نفره‌ها
         if gk == "penalty":
             await penalty_entry_done(update, amount)
             return
@@ -1184,7 +1208,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await luck_entry_done(update, context, amount)
             return
 
-        # دونفره
         rid = new_room_id()
         rooms[rid] = {
             "id": rid,
@@ -1208,7 +1231,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=join_room_kb(rid, gk))
         return
 
-    # --- انتقال: مرحله ۱ (مبلغ)
     if action == "transfer_amount":
         amount = parse_amount(text)
         if not amount:
@@ -1229,7 +1251,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode=ParseMode.HTML)
         return
 
-    # --- انتقال: مرحله ۲ (کارت)
     if action == "transfer_card":
         recipient = await find_user_by_card(text)
         if not recipient:
@@ -1328,39 +1349,41 @@ HELP_TEXT = (
 
 # ============================== main ==============================
 async def post_init(app: Application):
+    await init_db_pool()
     await init_db()
-    # اجرای یک‌باره برای جبران عقب‌ماندگی
     try:
         await daily_payout()
     except Exception:
         logger.exception("initial daily_payout failed")
-    # زمان‌بندی روزانه ساعت 00:00 تهران
     app.job_queue.run_daily(
         daily_payout,
         time=time(hour=0, minute=0, tzinfo=TEHRAN),
         name="daily_payout")
 
 
-def main():
-    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
+async def post_shutdown(app: Application):
+    await close_db_pool()
 
-    # منوها (فقط در گروه یا چت خصوصی)
+
+def main():
+    app = Application.builder() \
+        .token(BOT_TOKEN) \
+        .post_init(post_init) \
+        .post_shutdown(post_shutdown) \
+        .build()
+
     app.add_handler(MessageHandler(filters.Regex(r"^زربات$"), cmd_zarbat))
     app.add_handler(MessageHandler(filters.Regex(r"^زر\s*بازی$"), cmd_zarbazi))
     app.add_handler(CommandHandler("start", cmd_start))
 
-    # خوش‌آمد گروه
     app.add_handler(ChatMemberHandler(chat_member_handler, ChatMemberHandler.MY_CHAT_MEMBER))
 
-    # ادمین: انتقال زرکوین با ریپلای
     app.add_handler(MessageHandler(
         filters.Regex(r"^انتقال زرکوین\s+[\d۰-۹,،]+"),
         owner_give))
 
-    # کیبورد
     app.add_handler(CallbackQueryHandler(callback_handler))
 
-    # متن (آخر از همه)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
     logger.info("🚀 Bot starting...")
