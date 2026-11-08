@@ -18,22 +18,38 @@ from games import rps, ttt, quiz, penalty, casino
 logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s", level=logging.INFO)
 logger = logging.getLogger("zarcoin")
 
+# ✅ منوی املاک: نمایش سود کل در صورت داشتن تعداد
 async def properties_menu_kb(user_id: int):
     summary = await db.get_assets_summary(user_id)
     rows = []
     for key, prop in sorted(config.PROPERTIES.items(), key=lambda x: x[1]["price"]):
-        count = summary.get(key, {}).get("count", 0)
-        label = f"{prop['emoji']} {prop['name']} | {utils.fmt(prop['price'])} | +{utils.fmt(prop['income'])} ({count}/{config.MAX_PER_KEY})"
+        data = summary.get(key, {"count": 0, "total_income": 0})
+        count = data["count"]
+        
+        if count > 0:
+            inc_text = f"سود کل: {utils.fmt(count * prop['income'])}"
+        else:
+            inc_text = f"سود: {utils.fmt(prop['income'])}"
+            
+        label = f"{prop['emoji']} {prop['name']} | {utils.fmt(prop['price'])} | {inc_text} ({count}/{config.MAX_PER_KEY})"
         rows.append([InlineKeyboardButton(label, callback_data=f"prop:select:{key}")])
     rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="menu:main")])
     return InlineKeyboardMarkup(rows)
 
+# ✅ منوی کارگرها: نمایش سود کل در صورت داشتن تعداد
 async def workers_menu_kb(user_id: int):
     summary = await db.get_assets_summary(user_id)
     rows = []
     for key, w in sorted(config.WORKERS.items(), key=lambda x: x[1]["price"]):
-        count = summary.get(key, {}).get("count", 0)
-        label = f"{w['emoji']} {w['name']} | {utils.fmt(w['price'])} | +{utils.fmt(w['income'])} ({count}/{config.MAX_PER_KEY})"
+        data = summary.get(key, {"count": 0, "total_income": 0})
+        count = data["count"]
+        
+        if count > 0:
+            inc_text = f"سود کل: {utils.fmt(count * w['income'])}"
+        else:
+            inc_text = f"سود: {utils.fmt(w['income'])}"
+            
+        label = f"{w['emoji']} {w['name']} | {utils.fmt(w['price'])} | {inc_text} ({count}/{config.MAX_PER_KEY})"
         rows.append([InlineKeyboardButton(label, callback_data=f"worker:select:{key}")])
     rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="menu:main")])
     return InlineKeyboardMarkup(rows)
@@ -77,7 +93,7 @@ async def build_assets_text(user_id, asset_type):
     if grouped:
         for key, data in grouped.items():
             info = store.get(key, {})
-            lines.append(f"{info.get('emoji','•')} {info.get('name', key)}: {data['count']} عدد ({utils.fmt(data['daily'])}/روز)")
+            lines.append(f"{info.get('emoji','•')} {info.get('name', key)}: {data['count']} عدد (سود کل: {utils.fmt(data['daily'])}/روز)")
     else:
         lines.append("📭 هنوز چیزی نخریدی.")
     return "\n".join(lines)
@@ -109,33 +125,26 @@ async def cmd_zarbazi(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("🎮 <b>بازی‌های زرکوین</b>\n━━━━━━━━━━━━━━━━━━\n💰 حداقل ورودی: <b>1,000</b> زرکوین\n💵 کارمزد: <b>10%</b> از جایزه\n\n✊ سنگ کاغذ قیچی — 1.5x\n❌ دوز — 1.7x\n🧠 کوییز — 1.8x\n⚽ پنالتی — 2x\n🎰 کازینو — تا 15x\n\nیکی رو انتخاب کن:", parse_mode=ParseMode.HTML, reply_markup=kb)
     utils.remember_owner(msg, user_id)
 
-# ✅ روتر بهینه‌شده با بررسی پیشوند (پاسخ آنی)
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data or ""
     user_id = query.from_user.id
     
-    # پاسخ آنی برای بستن لودینگ دکمه
     await query.answer()
-
-    # تشخیص دسته بندی دکمه (سرعت بالا)
     prefix = data.split(":")[0]
 
-    # ✅ هندلرهای بازی‌ها (بدون نیاز به چک کردن مالکیت منو)
     if prefix == "rps": await rps.handle_callback(query, context, data, user_id); return
     if prefix == "ttt": await ttt.handle_callback(query, context, data, user_id); return
     if prefix == "quiz": await quiz.handle_callback(query, context, data, user_id); return
     if prefix == "pen": await penalty.handle_callback(query, context, data, user_id); return
     if prefix == "casino": await casino.handle_callback(query, context, data, user_id); return
 
-    # ✅ بررسی مالکیت منو برای بقیه دکمه‌ها
     PERSONAL_PREFIXES = ("menu", "bank", "prop", "worker", "transfer", "help", "game")
     if prefix in PERSONAL_PREFIXES:
         owner = utils.menu_owners.get((query.message.chat_id, query.message.message_id))
         if owner is not None and owner != user_id:
-            await query.answer("❌ این منو برای شما نیست! لطفاً /start بزنید تا منوی خودتان باز شود.", show_alert=True); return
+            await query.answer("❌ این منو برای شما نیست! لطفاً /start بزنید.", show_alert=True); return
 
-    # لغو خودکار کازینو در صورت تغییر منو
     pending = utils.casino_pending.get(user_id)
     if pending and prefix != "casino":
         utils.casino_pending.pop(user_id, None)
@@ -158,19 +167,34 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         utils.user_states[user_id] = {"action": "bank_withdraw"}
         msg = await utils.safe_edit(query, "🏧 <b>برداشت از بانک</b>\n\nمبلغ مورد نظر رو بفرست:", utils.back_main_kb()); utils.remember_owner(msg, user_id); return
 
+    # ------------------ ملک‌ها ------------------
     if data == "prop:menu":
         await db.ensure_user(query.from_user)
         msg = await utils.safe_edit(query, await build_assets_text(user_id, "property") + "\n\n👇 از لیست زیر انتخاب کن (حداکثر 5 از هر نوع):", await properties_menu_kb(user_id)); utils.remember_owner(msg, user_id); return
+        
     if data.startswith("prop:select:"):
         key = data.split(":")[2]; prop = config.PROPERTIES.get(key)
         if not prop: return
-        summary = await db.get_assets_summary(user_id); count = summary.get(key, {}).get("count", 0)
-        if count >= config.MAX_PER_KEY: await query.answer(f"❌ حداکثر {config.MAX_PER_KEY} عدد مجاز است!", show_alert=True); return
+        summary = await db.get_assets_summary(user_id)
+        count = summary.get(key, {}).get("count", 0)
+        if count >= config.MAX_PER_KEY: await query.answer(f"❌ حداکثر {config.MAX_PER_KEY} عدد از این ملک مجاز است!", show_alert=True); return
         user = await db.get_user(user_id)
         if int(user["balance"]) < prop["price"]: await query.answer("❌ موجودی کافی نیست", show_alert=True); return
-        text = f"🏠 <b>تایید خرید ملک</b>\n━━━━━━━━━━━━━━━━━━\n🏷 نام: {prop['emoji']} <b>{prop['name']}</b>\n💰 قیمت: <b>{utils.fmt(prop['price'])}</b> زرکوین\n📈 سود روزانه: <b>{utils.fmt(prop['income'])}</b> زرکوین\n📊 تعداد فعلی شما: {count}/{config.MAX_PER_KEY}\n\nآیا از خرید مطمئنی؟"
+        
+        new_total_inc = (count + 1) * prop['income']
+        text = (
+            f"🏠 <b>تایید خرید ملک</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"🏷 نام: {prop['emoji']} <b>{prop['name']}</b>\n"
+            f"💰 قیمت هر عدد: <b>{utils.fmt(prop['price'])}</b> زرکوین\n"
+            f"📈 سود روزانه هر عدد: <b>{utils.fmt(prop['income'])}</b>\n"
+            f"📊 تعداد فعلی شما: {count}/{config.MAX_PER_KEY}\n"
+            f"💰 سود کل این ملک (بعد از خرید): <b>{utils.fmt(new_total_inc)}</b> زرکوین\n\n"
+            f"آیا از خرید مطمئنی؟"
+        )
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ بله، بخر", callback_data=f"prop:confirm:{key}")], [InlineKeyboardButton("❌ انصراف", callback_data="prop:menu")]])
         msg = await utils.safe_edit(query, text, kb); utils.remember_owner(msg, user_id); return
+        
     if data.startswith("prop:confirm:"):
         key = data.split(":")[2]; prop = config.PROPERTIES.get(key)
         if not prop: return
@@ -181,19 +205,34 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else: await query.answer("❌ خطا", show_alert=True)
         msg = await utils.safe_edit(query, await build_assets_text(user_id, "property") + "\n\n👇 از لیست زیر انتخاب کن:", await properties_menu_kb(user_id)); utils.remember_owner(msg, user_id); return
 
+    # ------------------ کارگرها ------------------
     if data == "worker:menu":
         await db.ensure_user(query.from_user)
         msg = await utils.safe_edit(query, await build_assets_text(user_id, "worker") + "\n\n👇 از لیست زیر انتخاب کن (حداکثر 5 از هر نوع):", await workers_menu_kb(user_id)); utils.remember_owner(msg, user_id); return
+        
     if data.startswith("worker:select:"):
         key = data.split(":")[2]; w = config.WORKERS.get(key)
         if not w: return
-        summary = await db.get_assets_summary(user_id); count = summary.get(key, {}).get("count", 0)
-        if count >= config.MAX_PER_KEY: await query.answer(f"❌ حداکثر {config.MAX_PER_KEY} عدد مجاز است!", show_alert=True); return
+        summary = await db.get_assets_summary(user_id)
+        count = summary.get(key, {}).get("count", 0)
+        if count >= config.MAX_PER_KEY: await query.answer(f"❌ حداکثر {config.MAX_PER_KEY} عدد از این کارگر مجاز است!", show_alert=True); return
         user = await db.get_user(user_id)
         if int(user["balance"]) < w["price"]: await query.answer("❌ موجودی کافی نیست", show_alert=True); return
-        text = f"👷 <b>تایید استخدام کارگر</b>\n━━━━━━━━━━━━━━━━━━\n🏷 نام: {w['emoji']} <b>{w['name']}</b>\n💰 قیمت: <b>{utils.fmt(w['price'])}</b> زرکوین\n📈 سود روزانه: <b>{utils.fmt(w['income'])}</b> زرکوین\n📊 تعداد فعلی شما: {count}/{config.MAX_PER_KEY}\n\nآیا از استخدام مطمئنی؟"
+        
+        new_total_inc = (count + 1) * w['income']
+        text = (
+            f"👷 <b>تایید استخدام کارگر</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"🏷 نام: {w['emoji']} <b>{w['name']}</b>\n"
+            f"💰 قیمت هر عدد: <b>{utils.fmt(w['price'])}</b> زرکوین\n"
+            f"📈 سود روزانه هر عدد: <b>{utils.fmt(w['income'])}</b>\n"
+            f"📊 تعداد فعلی شما: {count}/{config.MAX_PER_KEY}\n"
+            f"💰 سود کل این کارگر (بعد از خرید): <b>{utils.fmt(new_total_inc)}</b> زرکوین\n\n"
+            f"آیا از استخدام مطمئنی؟"
+        )
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ بله، استخدام کن", callback_data=f"worker:confirm:{key}")], [InlineKeyboardButton("❌ انصراف", callback_data="worker:menu")]])
         msg = await utils.safe_edit(query, text, kb); utils.remember_owner(msg, user_id); return
+        
     if data.startswith("worker:confirm:"):
         key = data.split(":")[2]; w = config.WORKERS.get(key)
         if not w: return
@@ -204,6 +243,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else: await query.answer("❌ خطا", show_alert=True)
         msg = await utils.safe_edit(query, await build_assets_text(user_id, "worker") + "\n\n👇 از لیست زیر انتخاب کن:", await workers_menu_kb(user_id)); utils.remember_owner(msg, user_id); return
 
+    # ------------------ بازی‌ها ------------------
     if data == "game:menu":
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("✊ سنگ کاغذ قیچی", callback_data="game:rps"), InlineKeyboardButton("❌ دوز", callback_data="game:ttt")],
