@@ -18,6 +18,7 @@ EXTRA_COLUMNS = [
     ("total_xp", "BIGINT NOT NULL DEFAULT 0"),
     ("level", "INT NOT NULL DEFAULT 1"),
     ("kabareh_unlocked", "TINYINT NOT NULL DEFAULT 0"),
+    ("last_kabareh", "VARCHAR(32) DEFAULT NULL"),
     ("last_zar", "VARCHAR(32) DEFAULT NULL"),
     ("last_mission_date", "VARCHAR(10) DEFAULT NULL"),
 ]
@@ -262,6 +263,15 @@ async def unlock_kabareh(user_id: int) -> bool:
             await conn.rollback()
             logger.exception("unlock_kabareh failed")
             return False
+
+
+# ═══════════ کاباره: کول‌داون ═══════════
+async def set_last_kabareh(user_id: int, when: str):
+    utils.invalidate_cache(user_id)
+    async with db_pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("UPDATE users SET last_kabareh=%s WHERE user_id=%s", (when, user_id))
+            await conn.commit()
 
 
 async def ensure_daily_missions(user_id: int):
