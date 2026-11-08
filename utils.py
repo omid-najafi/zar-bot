@@ -163,3 +163,8 @@ async def notify_mission(bot_or_context, chat_id: int, result: dict | None):
         await bot.send_message(chat_id, msg, parse_mode=ParseMode.HTML)
     except Exception:
         pass
+# ═══════════ کیبورد بررسی عضویت ═══════════
+def get_membership_kb():
+    """کیبورد دکمه بررسی عضویت (برای استفاده در bot.py)"""
+    from membership import get_join_keyboard
+    return get_join_keyboard()
