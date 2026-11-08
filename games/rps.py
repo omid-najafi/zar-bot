@@ -66,16 +66,17 @@ async def handle_callback(query, context, data, user_id):
         p1, p2 = room["players"]
         c1, c2 = room["choices"][p1], room["choices"][p2]
         beats = {"rock": "scissors", "paper": "rock", "scissors": "paper"}
+        winner_id = None
         
         if c1 == c2:
             await db.add_balance(p1, room["entry"]); await db.add_balance(p2, room["entry"])
             result = "🤝 مساوی! پول‌ها برگشت."
         else:
-            winner = p1 if beats[c1] == c2 else p2
+            winner_id = p1 if beats[c1] == c2 else p2
             full = int(room["entry"] * config.GAMES["rps"]["mult"])
             prize, comm = utils.apply_commission(full, config.COMMISSION_RATE)
-            await db.add_balance(winner, prize)
-            result = f"🏆 <b>{utils.escape(room['user_names'][winner])}</b> برنده شد!\n💰 جایزه: {utils.fmt(full)}\n💵 کارمزد 10%: {utils.fmt(comm)}\n✅ دریافتی: <b>{utils.fmt(prize)}</b>"
+            await db.add_balance(winner_id, prize)
+            result = f"🏆 <b>{utils.escape(room['user_names'][winner_id])}</b> برنده شد!\n💰 جایزه: {utils.fmt(full)}\n💵 کارمزد 10%: {utils.fmt(comm)}\n✅ دریافتی: <b>{utils.fmt(prize)}</b>"
             
         text = (f"✊ <b>نتیجه سنگ کاغذ قیچی</b>\n━━━━━━━━━━━━━━━━━━\n"
                 f"👤 {utils.escape(room['user_names'][p1])}: {names[c1]}\n"
@@ -83,3 +84,18 @@ async def handle_callback(query, context, data, user_id):
         room["status"] = "finished"; utils.rooms.pop(room_id, None)
         await utils.safe_edit(query, text, utils.BACK_GAMES_KB)
         await utils.safe_answer(query)
+        
+        # ✅ ثبت ماموریت‌ها
+        r_p1 = await db.progress_mission(p1, "play_rps", 1, base_xp=config.BASE_XP_PLAY_GAME)
+        r_p2 = await db.progress_mission(p2, "play_rps", 1, base_xp=config.BASE_XP_PLAY_GAME)
+        await utils.notify_mission(context, room["chat_id"], r_p1)
+        await utils.notify_mission(context, room["chat_id"], r_p2)
+        
+        r_any_p1 = await db.progress_mission(p1, "play_any_game", 1, base_xp=0)
+        r_any_p2 = await db.progress_mission(p2, "play_any_game", 1, base_xp=0)
+        await utils.notify_mission(context, room["chat_id"], r_any_p1)
+        await utils.notify_mission(context, room["chat_id"], r_any_p2)
+        
+        if winner_id:
+            r_win = await db.progress_mission(winner_id, "win_rps", 1, base_xp=config.BASE_XP_WIN_GAME)
+            await utils.notify_mission(context, room["chat_id"], r_win)
