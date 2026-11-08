@@ -111,27 +111,29 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data or ""
     user_id = query.from_user.id
-    
-    await query.answer()
     prefix = data.split(":")[0]
 
+    # ✅ مسیریابی بازی‌ها بدون پاسخ دادن به تلگرام در اینجا
     if prefix == "rps": await rps.handle_callback(query, context, data, user_id); return
     if prefix == "ttt": await ttt.handle_callback(query, context, data, user_id); return
     if prefix == "quiz": await quiz.handle_callback(query, context, data, user_id); return
     if prefix == "pen": await penalty.handle_callback(query, context, data, user_id); return
     if prefix == "casino": await casino.handle_callback(query, context, data, user_id); return
 
+    # ✅ برای منوهای شخصی، پاسخ آنی می‌دهیم تا لودینگ قطع شود
+    await utils.safe_answer(query)
+
     PERSONAL_PREFIXES = ("menu", "bank", "prop", "worker", "transfer", "help", "game")
     if prefix in PERSONAL_PREFIXES:
         owner = utils.menu_owners.get((query.message.chat_id, query.message.message_id))
         if owner is not None and owner != user_id:
-            await query.answer("❌ این منو برای شما نیست! لطفاً /start بزنید.", show_alert=True); return
+            await utils.safe_answer(query, "❌ این منو برای شما نیست! لطفاً /start بزنید.", show_alert=True); return
 
     pending = utils.casino_pending.get(user_id)
     if pending and prefix != "casino":
         utils.casino_pending.pop(user_id, None)
         await db.add_balance(user_id, pending["entry"])
-        await query.answer(f"⚠️ بازی قبلی لغو شد و {utils.fmt(pending['entry'])} زرکوین برگشت.", show_alert=True)
+        await utils.safe_answer(query, f"⚠️ بازی قبلی لغو شد و {utils.fmt(pending['entry'])} زرکوین برگشت.", show_alert=True)
 
     utils.user_states.pop(user_id, None)
 
@@ -157,9 +159,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not prop: return
         summary = await db.get_assets_summary(user_id)
         count = summary.get(key, {}).get("count", 0)
-        if count >= config.MAX_PER_KEY: await query.answer(f"❌ حداکثر {config.MAX_PER_KEY} عدد از این ملک مجاز است!", show_alert=True); return
+        if count >= config.MAX_PER_KEY: await utils.safe_answer(query, f"❌ حداکثر {config.MAX_PER_KEY} عدد از این ملک مجاز است!", show_alert=True); return
         user = await db.get_user(user_id)
-        if int(user["balance"]) < prop["price"]: await query.answer("❌ موجودی کافی نیست", show_alert=True); return
+        if int(user["balance"]) < prop["price"]: await utils.safe_answer(query, "❌ موجودی کافی نیست", show_alert=True); return
         
         new_total_inc = (count + 1) * prop['income']
         text = (
@@ -177,10 +179,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         key = data.split(":")[2]; prop = config.PROPERTIES.get(key)
         if not prop: return
         r = await db.buy_asset(user_id, "property", key, prop["price"], prop["income"])
-        if r == "ok": await query.answer(f"✅ {prop['name']} خریداری شد!", show_alert=True)
-        elif r == "limit": await query.answer(f"❌ حداکثر {config.MAX_PER_KEY} عدد مجاز است!", show_alert=True)
-        elif r == "balance": await query.answer("❌ موجودی کافی نیست", show_alert=True)
-        else: await query.answer("❌ خطا", show_alert=True)
+        if r == "ok": await utils.safe_answer(query, f"✅ {prop['name']} خریداری شد!", show_alert=True)
+        elif r == "limit": await utils.safe_answer(query, f"❌ حداکثر {config.MAX_PER_KEY} عدد مجاز است!", show_alert=True)
+        elif r == "balance": await utils.safe_answer(query, "❌ موجودی کافی نیست", show_alert=True)
+        else: await utils.safe_answer(query, "❌ خطا", show_alert=True)
         msg = await utils.safe_edit(query, await build_assets_text(user_id, "property") + "\n\n👇 از لیست زیر انتخاب کن:", await properties_menu_kb(user_id)); utils.remember_owner(msg, user_id); return
 
     if data == "worker:menu":
@@ -191,9 +193,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not w: return
         summary = await db.get_assets_summary(user_id)
         count = summary.get(key, {}).get("count", 0)
-        if count >= config.MAX_PER_KEY: await query.answer(f"❌ حداکثر {config.MAX_PER_KEY} عدد از این کارگر مجاز است!", show_alert=True); return
+        if count >= config.MAX_PER_KEY: await utils.safe_answer(query, f"❌ حداکثر {config.MAX_PER_KEY} عدد از این کارگر مجاز است!", show_alert=True); return
         user = await db.get_user(user_id)
-        if int(user["balance"]) < w["price"]: await query.answer("❌ موجودی کافی نیست", show_alert=True); return
+        if int(user["balance"]) < w["price"]: await utils.safe_answer(query, "❌ موجودی کافی نیست", show_alert=True); return
         
         new_total_inc = (count + 1) * w['income']
         text = (
@@ -211,10 +213,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         key = data.split(":")[2]; w = config.WORKERS.get(key)
         if not w: return
         r = await db.buy_asset(user_id, "worker", key, w["price"], w["income"])
-        if r == "ok": await query.answer(f"✅ {w['name']} استخدام شد!", show_alert=True)
-        elif r == "limit": await query.answer(f"❌ حداکثر {config.MAX_PER_KEY} عدد مجاز است!", show_alert=True)
-        elif r == "balance": await query.answer("❌ موجودی کافی نیست", show_alert=True)
-        else: await query.answer("❌ خطا", show_alert=True)
+        if r == "ok": await utils.safe_answer(query, f"✅ {w['name']} استخدام شد!", show_alert=True)
+        elif r == "limit": await utils.safe_answer(query, f"❌ حداکثر {config.MAX_PER_KEY} عدد مجاز است!", show_alert=True)
+        elif r == "balance": await utils.safe_answer(query, "❌ موجودی کافی نیست", show_alert=True)
+        else: await utils.safe_answer(query, "❌ خطا", show_alert=True)
         msg = await utils.safe_edit(query, await build_assets_text(user_id, "worker") + "\n\n👇 از لیست زیر انتخاب کن:", await workers_menu_kb(user_id)); utils.remember_owner(msg, user_id); return
 
     if data == "game:menu":
@@ -354,20 +356,22 @@ async def handle_cancel(user_id: int, message):
 
 async def cancel_room(query, room_id: str):
     room = utils.rooms.get(room_id)
-    if not room: await query.answer("❌ اتاق نیست", show_alert=True); return
-    if query.from_user.id not in room["players"] and query.from_user.id != room["creator"]: await query.answer("❌ اجازه نداری", show_alert=True); return
+    if not room: await utils.safe_answer(query, "❌ اتاق نیست", show_alert=True); return
+    if query.from_user.id not in room["players"] and query.from_user.id != room["creator"]: await utils.safe_answer(query, "❌ اجازه نداری", show_alert=True); return
     if room["status"] == "finished": return
     for pid in room["players"]: await db.add_balance(pid, room["entry"])
     room["status"] = "cancelled"; utils.rooms.pop(room_id, None)
     await utils.safe_edit(query, "❌ بازی لغو شد و پول‌ها برگشت داده شد.", utils.BACK_GAMES_KB)
+    await utils.safe_answer(query)
 
 async def confirm_transfer(query, owner_id: int):
-    if query.from_user.id != owner_id: await query.answer("❌ این دکمه برای تو نیست", show_alert=True); return
+    if query.from_user.id != owner_id: await utils.safe_answer(query, "❌ این دکمه برای تو نیست", show_alert=True); return
     pending = utils.pending_transfers.pop(owner_id, None)
-    if not pending: await query.answer("❌ انتقال منقضی شده", show_alert=True); return
+    if not pending: await utils.safe_answer(query, "❌ انتقال منقضی شده", show_alert=True); return
     if not await db.transfer_coins(owner_id, pending["recipient_id"], pending["amount"], pending["fee"]):
-        await query.answer("❌ موجودی کافی نیست", show_alert=True); await utils.safe_edit(query, "❌ انتقال انجام نشد.", utils.BACK_MAIN_KB); return
+        await utils.safe_answer(query, "❌ موجودی کافی نیست", show_alert=True); await utils.safe_edit(query, "❌ انتقال انجام نشد.", utils.BACK_MAIN_KB); return
     await utils.safe_edit(query, f"✅ <b>انتقال انجام شد!</b>\n\n👤 گیرنده: {utils.escape(pending['recipient_name'])}\n💰 مبلغ: <b>{utils.fmt(pending['amount'])}</b>\n💵 کارمزد: <b>{utils.fmt(pending['fee'])}</b>", utils.BACK_MAIN_KB)
+    await utils.safe_answer(query)
     try: await query.bot.send_message(pending["recipient_id"], f"🎁 <b>زرکوین دریافت کردی!</b>\n\n💰 مبلغ: <b>{utils.fmt(pending['amount'])}</b> زرکوین\n👤 از طرف: {utils.escape(query.from_user.first_name)}", parse_mode=ParseMode.HTML)
     except Exception: pass
 
@@ -412,7 +416,7 @@ def main():
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     
-    logger.info("🚀 Bot starting with polling (Optimized)...")
+    logger.info("🚀 Bot starting with polling...")
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 if __name__ == "__main__":
