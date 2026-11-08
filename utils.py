@@ -2,13 +2,16 @@ import html
 import secrets
 import string
 import asyncio
+import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from cachetools import TTLCache
 from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.constants import ParseMode
-from telegram.error import BadRequest, RetryAfter
+from telegram.error import BadRequest
 import config
+
+logger = logging.getLogger("zarcoin")
 
 TEHRAN = ZoneInfo("Asia/Tehran")
 PERSIAN_DIGITS = "۰۱۲۳۴۵۶۷۸۹"
@@ -24,7 +27,11 @@ menu_owners = TTLCache(maxsize=10000, ttl=3600)
 user_states = TTLCache(maxsize=10000, ttl=3600)
 user_cache = TTLCache(maxsize=1000, ttl=30)
 
-# ═══════════ کیبوردهای ثابت ═══════════
+# ✅ کش بررسی عضویت (5 دقیقه)
+_membership_cache = TTLCache(maxsize=1000, ttl=300)
+# ✅ گروه‌های شناسایی شده (برای لاگ آیدی)
+_logged_groups = set()
+
 MAIN_MENU_KB = InlineKeyboardMarkup([
     [InlineKeyboardButton("🏦 بانک", callback_data="bank:menu"), InlineKeyboardButton("🏠 ملک‌ها", callback_data="prop:menu")],
     [InlineKeyboardButton("👷 کارگرها", callback_data="worker:menu"), InlineKeyboardButton("🎮 بازی‌ها", callback_data="game:menu")],
@@ -46,7 +53,7 @@ GAMES_MENU_KB = InlineKeyboardMarkup([
     [InlineKeyboardButton("🔙 بازگشت", callback_data="menu:main")],
 ])
 
-# ═══════════ کمکی‌ها ═══════════
+
 def fa_to_en(text: str) -> str:
     return (text or "").translate(str.maketrans(PERSIAN_DIGITS, EN_DIGITS))
 
@@ -163,8 +170,127 @@ async def notify_mission(bot_or_context, chat_id: int, result: dict | None):
         await bot.send_message(chat_id, msg, parse_mode=ParseMode.HTML)
     except Exception:
         pass
-# ═══════════ کیبورد بررسی عضویت ═══════════
-def get_membership_kb():
-    """کیبورد دکمه بررسی عضویت (برای استفاده در bot.py)"""
-    from membership import get_join_keyboard
-    return get_join_keyboard()
+
+
+# ═══════════════════════════════════════════
+# ═══════════ جوین اجباری ═══════════
+# ═══════════════════════════════════════════
+
+def get_join_keyboard():
+    buttons = []
+    for ch in config.REQUIRED_CHANNELS:
+        buttons.append([InlineKeyboardButton(f"📢 {ch['name']}", url=ch["url"])])
+    if config.REQUIRED_GROUP and config.REQUIRED_GROUP.get("url"):
+        buttons.append([InlineKeyboardButton(f"💬 {config.REQUIRED_GROUP['name']}", url=config.REQUIRED_GROUP["url"])])
+    buttons.append([InlineKeyboardButton("✅ عضو شدم، بررسی کن!", callback_data="check_membership")])
+    return InlineKeyboardMarkup(buttons)
+
+
+def get_join_text(missing: list = None) -> str:
+    text = "🔒 <b>برای استفاده از ربات، ابتدا باید عضو کانال‌ها و گروه زیر بشی:</b>\n"
+    text += "━━━━━━━━━━━━━━━━━━\n\n"
+    if missing:
+        text += "❌ <b>هنوز عضو این‌ها نشدی:</b>\n"
+        for name in missing:
+            text += f"• {name}\n"
+        text += "\n"
+    for ch in config.REQUIRED_CHANNELS:
+        text += f"📢 {ch['name']}\n"
+    if config.REQUIRED_GROUP and config.REQUIRED_GROUP.get("url"):
+        text += f"💬 {config.REQUIRED_GROUP['name']}\n"
+    text += "\n👇 روی دکمه‌های زیر بزن و عضو شو، بعد دکمه «✅ عضو شدم» رو بزن:"
+    return text
+
+
+async def check_membership_quiet(bot, user_id: int, force: bool = False) -> tuple[bool, list]:
+    """
+    بررسی عضویت. خروجی: (is_joined, missing_names)
+    با کش 5 دقیقه‌ای برای کاهش API calls.
+    """
+    if not force and user_id in _membership_cache:
+        return _membership_cache[user_id]
+    
+    missing = []
+    
+    # بررسی کانال‌ها
+    for ch in config.REQUIRED_CHANNELS:
+        try:
+            member = await bot.get_chat_member(chat_id=ch["id"], user_id=user_id)
+            if member.status in ("left", "kicked"):
+                missing.append(ch["name"])
+        except Exception as e:
+            # اگر ربات نتونه چک کنه (مثلاً ادمین نیست)، خطا رو لاگ می‌کنیم ولی کاربر رو بلاک نمی‌کنیم
+            logger.warning(f"⚠️ چک عضویت کانال {ch['name']} ناموفق: {e}")
+    
+    # بررسی گروه (اگر id تنظیم شده باشه)
+    if config.REQUIRED_GROUP:
+        group_id = config.REQUIRED_GROUP.get("id")
+        if group_id:
+            try:
+                member = await bot.get_chat_member(chat_id=group_id, user_id=user_id)
+                if member.status in ("left", "kicked"):
+                    missing.append(config.REQUIRED_GROUP["name"])
+            except Exception as e:
+                logger.warning(f"⚠️ چک عضویت گروه ناموفق: {e}")
+        else:
+            # فقط یک بار لاگ کن
+            if not getattr(check_membership_quiet, "_warned", False):
+                logger.warning("⚠️ REQUIRED_GROUP.id تنظیم نشده - بررسی جوین گروه غیرفعال است")
+                check_membership_quiet._warned = True
+    
+    result = (len(missing) == 0, missing)
+    _membership_cache[user_id] = result
+    return result
+
+
+async def verify_membership(update, context) -> bool:
+    """
+    بررسی عضویت و اگر عضو نبود، پیام جوین بفرست.
+    خروجی: True اگر عضو باشه (ادامه بده)، False اگر نباشه (پیام فرستاده شد).
+    """
+    user_id = update.effective_user.id
+    bot = context.bot
+    
+    is_joined, missing = await check_membership_quiet(bot, user_id)
+    if is_joined:
+        return True
+    
+    text = get_join_text(missing)
+    kb = get_join_keyboard()
+    
+    try:
+        if update.callback_query:
+            await update.callback_query.answer("❌ هنوز عضو نشدی!", show_alert=True)
+            await update.callback_query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+        elif update.message:
+            await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+    except Exception as e:
+        logger.warning(f"ارسال پیام جوین ناموفق: {e}")
+    
+    return False
+
+
+async def check_membership_force(bot, user_id: int) -> tuple[bool, list]:
+    """بررسی عضویت با نادیده گرفتن کش (برای دکمه «عضو شدم»)"""
+    return await check_membership_quiet(bot, user_id, force=True)
+
+
+def log_group_chat_id(update):
+    """لاگ کردن آیدی گروه برای ادمین (فقط یک بار در هر گروه)"""
+    if not update.effective_chat: return
+    if update.effective_chat.type not in ("group", "supergroup"): return
+    chat_id = update.effective_chat.id
+    if chat_id in _logged_groups: return
+    _logged_groups.add(chat_id)
+    title = update.effective_chat.title or "بدون نام"
+    username = update.effective_chat.username or "ندارد"
+    logger.warning(
+        f"\n{'='*60}\n"
+        f"💬 گروه شناسایی شد!\n"
+        f"   Chat ID:  {chat_id}\n"
+        f"   Title:    {title}\n"
+        f"   Username: @{username}\n\n"
+        f"   برای فعال‌سازی جوین اجباری این گروه، در config.py:\n"
+        f"   REQUIRED_GROUP['id'] = {chat_id}\n"
+        f"{'='*60}\n"
+    )
