@@ -1,4 +1,5 @@
 import logging
+import random
 import aiomysql
 from datetime import datetime
 import config
@@ -9,7 +10,15 @@ db_pool = None
 
 SCHEMA_STATEMENTS = [
     "CREATE TABLE IF NOT EXISTS users (user_id BIGINT PRIMARY KEY, username VARCHAR(255), first_name VARCHAR(255), balance BIGINT NOT NULL DEFAULT 0, bank_balance BIGINT NOT NULL DEFAULT 0, card_number VARCHAR(16) UNIQUE, last_daily VARCHAR(10), created_at VARCHAR(32) NOT NULL, INDEX idx_card (card_number)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;",
-    "CREATE TABLE IF NOT EXISTS assets (id INT PRIMARY KEY AUTO_INCREMENT, user_id BIGINT NOT NULL, asset_type VARCHAR(32) NOT NULL, asset_key VARCHAR(64) NOT NULL, purchase_price BIGINT NOT NULL, daily_income BIGINT NOT NULL, purchased_at VARCHAR(32) NOT NULL, INDEX idx_user_asset (user_id, asset_type), INDEX idx_user_key (user_id, asset_key)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;"
+    "CREATE TABLE IF NOT EXISTS assets (id INT PRIMARY KEY AUTO_INCREMENT, user_id BIGINT NOT NULL, asset_type VARCHAR(32) NOT NULL, asset_key VARCHAR(64) NOT NULL, purchase_price BIGINT NOT NULL, daily_income BIGINT NOT NULL, purchased_at VARCHAR(32) NOT NULL, INDEX idx_user_asset (user_id, asset_type), INDEX idx_user_key (user_id, asset_key)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;",
+    "CREATE TABLE IF NOT EXISTS user_missions (id INT PRIMARY KEY AUTO_INCREMENT, user_id BIGINT NOT NULL, mission_key VARCHAR(64) NOT NULL, mission_date VARCHAR(10) NOT NULL, progress INT DEFAULT 0, target INT NOT NULL, xp_reward INT NOT NULL, completed TINYINT DEFAULT 0, INDEX idx_user_date (user_id, mission_date)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;",
+]
+
+# اضافه کردن ستون‌های جدید به جدول users (اگر وجود نداشته باشند)
+EXTRA_COLUMNS = [
+    ("total_xp", "BIGINT NOT NULL DEFAULT 0"),
+    ("last_zar", "VARCHAR(32) DEFAULT NULL"),
+    ("last_mission_date", "VARCHAR(10) DEFAULT NULL"),
 ]
 
 async def init_db_pool():
@@ -29,7 +38,15 @@ async def init_db():
         async with conn.cursor() as cur:
             for stmt in SCHEMA_STATEMENTS:
                 await cur.execute(stmt)
+            # اضافه کردن ستون‌های جدید (اگر نبودند)
+            for col_name, col_type in EXTRA_COLUMNS:
+                try:
+                    await cur.execute(f"ALTER TABLE users ADD COLUMN {col_name} {col_type}")
+                    logger.info(f"✅ ستون {col_name} اضافه شد.")
+                except Exception:
+                    pass  # ستون از قبل وجود داره
             await conn.commit()
+    logger.info("✅ دیتابیس آماده است.")
 
 async def ensure_user(user) -> dict:
     if user.id in utils.user_cache:
@@ -143,11 +160,9 @@ async def buy_asset(user_id: int, asset_type: str, asset_key: str, price: int, i
                 count = int((await cur.fetchone())[0])
                 if count >= config.MAX_PER_KEY:
                     await conn.rollback(); return "limit"
-                
                 await cur.execute("UPDATE users SET balance = balance - %s WHERE user_id=%s AND balance >= %s", (price, user_id, price))
                 if cur.rowcount != 1:
                     await conn.rollback(); return "balance"
-                
                 await cur.execute("INSERT INTO assets (user_id, asset_type, asset_key, purchase_price, daily_income, purchased_at) VALUES (%s, %s, %s, %s, %s, %s)", (user_id, asset_type, asset_key, price, income, utils.now_iso()))
             await conn.commit(); return "ok"
         except Exception:
@@ -190,3 +205,141 @@ async def daily_payout(context=None):
                 if updates:
                     await cur.executemany("UPDATE users SET bank_balance = bank_balance + %s, balance = balance + %s, last_daily = %s WHERE user_id=%s", updates)
                 await conn.commit()
+
+# ═══════════════════════════════════════════
+# ═══════════ XP و Level System ═══════════
+# ═══════════════════════════════════════════
+
+async def add_xp(user_id: int, amount: int) -> tuple[int, int, bool]:
+    """اضافه کردن XP. خروجی: (new_xp, new_level, leveled_up)"""
+    if amount <= 0:
+        return 0, 1, False
+    utils.invalidate_cache(user_id)
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute("SELECT total_xp FROM users WHERE user_id=%s", (user_id,))
+            row = await cur.fetchone()
+            old_xp = int(row["total_xp"] or 0) if row else 0
+            new_xp = old_xp + amount
+            await cur.execute("UPDATE users SET total_xp = %s WHERE user_id=%s", (new_xp, user_id))
+            await conn.commit()
+    
+    old_level, _, _ = utils.calc_level(old_xp)
+    new_level, _, _ = utils.calc_level(new_xp)
+    return new_xp, new_level, new_level > old_level
+
+# ═══════════════════════════════════════════
+# ═══════════ Missions System ═══════════
+# ═══════════════════════════════════════════
+
+async def ensure_daily_missions(user_id: int):
+    """اگر ماموریت‌های امروز نبودن، 6 ماموریت رندوم جدید بساز."""
+    today = utils.today_str()
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute("SELECT last_mission_date FROM users WHERE user_id=%s", (user_id,))
+            row = await cur.fetchone()
+            if row and row["last_mission_date"] == today:
+                return
+            
+            # علامت‌گذاری به عنوان انجام شده (برای جلوگیری از race)
+            await cur.execute(
+                "UPDATE users SET last_mission_date=%s WHERE user_id=%s AND (last_mission_date IS NULL OR last_mission_date != %s)",
+                (today, user_id, today))
+            if cur.rowcount == 0:
+                await conn.commit()
+                return  # یکی دیگه زودتر انجام داده
+            
+            # حذف ماموریت‌های قدیمی و ساخت جدید
+            await cur.execute("DELETE FROM user_missions WHERE user_id=%s", (user_id,))
+            
+            keys = list(config.MISSION_TEMPLATES.keys())
+            n = min(config.DAILY_MISSION_COUNT, len(keys))
+            chosen = random.sample(keys, n)
+            
+            for key in chosen:
+                t = config.MISSION_TEMPLATES[key]
+                await cur.execute(
+                    "INSERT INTO user_missions (user_id, mission_key, mission_date, progress, target, xp_reward) VALUES (%s, %s, %s, 0, %s, %s)",
+                    (user_id, key, today, t["target"], t["xp"]))
+            
+            await conn.commit()
+
+async def get_user_missions(user_id: int) -> list[dict]:
+    today = utils.today_str()
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                "SELECT * FROM user_missions WHERE user_id=%s AND mission_date=%s ORDER BY id ASC",
+                (user_id, today))
+            return [dict(r) for r in await cur.fetchall()]
+
+async def progress_mission(user_id: int, mission_type: str, amount: int = 1, base_xp: int = 0) -> dict | None:
+    """
+    پیشرفت دادن ماموریت‌های مربوط.
+    خروجی: dict شامل اطلاعات ماموریت‌های کامل‌شده یا None اگر چیزی نبود.
+    """
+    await ensure_daily_missions(user_id)
+    today = utils.today_str()
+    
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                "SELECT id, mission_key, progress, target, xp_reward FROM user_missions "
+                "WHERE user_id=%s AND mission_date=%s AND completed=0",
+                (user_id, today))
+            missions = await cur.fetchall()
+            
+            completed_missions = []
+            for m in missions:
+                template = config.MISSION_TEMPLATES.get(m["mission_key"])
+                if not template or template["type"] != mission_type:
+                    continue
+                
+                target = int(m["target"])
+                new_progress = int(m["progress"]) + amount
+                
+                if new_progress >= target:
+                    await cur.execute("UPDATE user_missions SET progress=%s, completed=1 WHERE id=%s", (target, m["id"]))
+                    completed_missions.append({
+                        "key": m["mission_key"],
+                        "desc": template["desc"],
+                        "xp": int(m["xp_reward"]),
+                    })
+                else:
+                    await cur.execute("UPDATE user_missions SET progress=%s WHERE id=%s", (new_progress, m["id"]))
+            await conn.commit()
+    
+    mission_xp = sum(cm["xp"] for cm in completed_missions)
+    total_xp = base_xp + mission_xp
+    
+    if total_xp <= 0:
+        return None
+    
+    new_xp, new_level, leveled_up = await add_xp(user_id, total_xp)
+    
+    return {
+        "user_id": user_id,
+        "completed": completed_missions,
+        "mission_xp": mission_xp,
+        "base_xp": base_xp,
+        "total_xp": total_xp,
+        "new_level": new_level,
+        "leveled_up": leveled_up,
+    }
+
+# ═══════════ Zar Cooldown ═══════════
+
+async def get_last_zar(user_id: int) -> str | None:
+    async with db_pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT last_zar FROM users WHERE user_id=%s", (user_id,))
+            row = await cur.fetchone()
+            return row[0] if row else None
+
+async def set_last_zar(user_id: int, when: str):
+    utils.invalidate_cache(user_id)
+    async with db_pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("UPDATE users SET last_zar=%s WHERE user_id=%s", (when, user_id))
+            await conn.commit()
