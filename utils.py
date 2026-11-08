@@ -2,12 +2,12 @@ import html
 import secrets
 import string
 import asyncio
-from datetime import datetime, time
+from datetime import datetime
 from zoneinfo import ZoneInfo
 from cachetools import TTLCache
 from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.constants import ParseMode
-from telegram.error import BadRequest
+from telegram.error import BadRequest, RetryAfter
 
 TEHRAN = ZoneInfo("Asia/Tehran")
 PERSIAN_DIGITS = "۰۱۲۳۴۵۶۷۸۹"
@@ -19,12 +19,29 @@ penalty_games = {}
 casino_pending = {}
 daily_lock = asyncio.Lock()
 
-# ✅ کش فوق‌سریع: حداکثر ۱۰,۰۰۰ آیتم، منقضی شده بعد از ۱ ساعت (برای جلوگیری از پر شدن رم)
 menu_owners = TTLCache(maxsize=10000, ttl=3600)
 user_states = TTLCache(maxsize=10000, ttl=3600)
-
-# ✅ کش کاربران: ۱۰۰۰ کاربر، منقضی شده بعد از ۳۰ ثانیه (کاهش شدید فشار روی دیتابیس)
 user_cache = TTLCache(maxsize=1000, ttl=30)
+
+# ✅ کیبوردهای ثابت (یک بار در ابتدا ساخته می‌شوند)
+MAIN_MENU_KB = InlineKeyboardMarkup([
+    [InlineKeyboardButton("🏦 بانک", callback_data="bank:menu"), InlineKeyboardButton("🏠 ملک‌ها", callback_data="prop:menu")],
+    [InlineKeyboardButton("👷 کارگرها", callback_data="worker:menu"), InlineKeyboardButton("🎮 بازی‌ها", callback_data="game:menu")],
+    [InlineKeyboardButton("💸 انتقال زرکوین", callback_data="transfer:start")],
+    [InlineKeyboardButton("📚 راهنما", callback_data="help:menu")],
+])
+BACK_MAIN_KB = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="menu:main")]])
+BACK_GAMES_KB = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت به بازی‌ها", callback_data="game:menu")]])
+BANK_MENU_KB = InlineKeyboardMarkup([
+    [InlineKeyboardButton("💰 واریز", callback_data="bank:deposit"), InlineKeyboardButton("🏧 برداشت", callback_data="bank:withdraw")],
+    [InlineKeyboardButton("🔙 بازگشت", callback_data="menu:main")],
+])
+GAMES_MENU_KB = InlineKeyboardMarkup([
+    [InlineKeyboardButton("✊ سنگ کاغذ قیچی", callback_data="game:rps"), InlineKeyboardButton("❌ دوز", callback_data="game:ttt")],
+    [InlineKeyboardButton("🧠 کوییز", callback_data="game:quiz"), InlineKeyboardButton("⚽ پنالتی", callback_data="game:penalty")],
+    [InlineKeyboardButton("🎰 کازینو", callback_data="game:casino")],
+    [InlineKeyboardButton("🔙 بازگشت", callback_data="menu:main")],
+])
 
 def fa_to_en(text: str) -> str:
     return (text or "").translate(str.maketrans(PERSIAN_DIGITS, EN_DIGITS))
@@ -74,34 +91,20 @@ def apply_commission(full_prize: int, rate: float) -> tuple[int, int]:
     commission = int(full_prize * rate)
     return full_prize - commission, commission
 
+# ✅ بهینه‌سازی `safe_edit` برای جلوگیری از خطای محدودیت تلگرام (Rate Limit)
 async def safe_edit(query, text: str, reply_markup=None):
-    """✅ بهینه‌سازی: در صورت خطا پیام جدید نمی‌فرستد تا از شلوغی و کندی جلوگیری شود"""
     try:
         await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup, disable_web_page_preview=True)
         return query.message
     except BadRequest as e:
         if "Message is not modified" in str(e):
             return query.message
-        # اگر پیام قدیمی بود و ارور داد، پیام جدید می‌فرستیم
         return await query.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup, disable_web_page_preview=True)
+    except RetryAfter as e:
+        await asyncio.sleep(e.retry_after)
+        return await safe_edit(query, text, reply_markup)
     except Exception:
         return query.message
-
-def main_menu_kb():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🏦 بانک", callback_data="bank:menu"), InlineKeyboardButton("🏠 ملک‌ها", callback_data="prop:menu")],
-        [InlineKeyboardButton("👷 کارگرها", callback_data="worker:menu"), InlineKeyboardButton("🎮 بازی‌ها", callback_data="game:menu")],
-        [InlineKeyboardButton("💸 انتقال زرکوین", callback_data="transfer:start")],
-        [InlineKeyboardButton("📚 راهنما", callback_data="help:menu")],
-    ])
-
-def back_main_kb(): return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="menu:main")]])
-def back_games_kb(): return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت به بازی‌ها", callback_data="game:menu")]])
-def bank_menu_kb():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("💰 واریز", callback_data="bank:deposit"), InlineKeyboardButton("🏧 برداشت", callback_data="bank:withdraw")],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="menu:main")],
-    ])
 
 def join_room_kb(room_id: str, game_key: str):
     return InlineKeyboardMarkup([
