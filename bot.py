@@ -1,6 +1,6 @@
 import logging
 import re
-import asyncio
+from datetime import time
 from telegram import (
     ChatMember, InlineKeyboardButton, InlineKeyboardMarkup, Update,
 )
@@ -91,11 +91,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text(await build_main_menu_text(user_id), parse_mode=ParseMode.HTML, reply_markup=utils.main_menu_kb())
     utils.remember_owner(msg, user_id)
 
-async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await cmd_start(update, context)
-
-async def cmd_zarbat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await cmd_start(update, context)
+async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE): await cmd_start(update, context)
+async def cmd_zarbat(update: Update, context: ContextTypes.DEFAULT_TYPE): await cmd_start(update, context)
 
 async def cmd_zarbazi(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -112,28 +109,38 @@ async def cmd_zarbazi(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("🎮 <b>بازی‌های زرکوین</b>\n━━━━━━━━━━━━━━━━━━\n💰 حداقل ورودی: <b>1,000</b> زرکوین\n💵 کارمزد: <b>10%</b> از جایزه\n\n✊ سنگ کاغذ قیچی — 1.5x\n❌ دوز — 1.7x\n🧠 کوییز — 1.8x\n⚽ پنالتی — 2x\n🎰 کازینو — تا 15x\n\nیکی رو انتخاب کن:", parse_mode=ParseMode.HTML, reply_markup=kb)
     utils.remember_owner(msg, user_id)
 
+# ✅ روتر بهینه‌شده با بررسی پیشوند (پاسخ آنی)
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data or ""
     user_id = query.from_user.id
-
-    # ✅ پاسخ اولیه به تلگرام برای جلوگیری از اسپینر بی‌نهایت
+    
+    # پاسخ آنی برای بستن لودینگ دکمه
     await query.answer()
 
-    # ✅ اضافه کردن کازینو به لیست منوهای شخصی
-    PERSONAL_PREFIXES = ("menu:", "bank:", "prop:", "worker:", "transfer:", "help:", "casino:", "pen:", "game:menu", "game:casino")
-    if data.startswith(PERSONAL_PREFIXES):
+    # تشخیص دسته بندی دکمه (سرعت بالا)
+    prefix = data.split(":")[0]
+
+    # ✅ هندلرهای بازی‌ها (بدون نیاز به چک کردن مالکیت منو)
+    if prefix == "rps": await rps.handle_callback(query, context, data, user_id); return
+    if prefix == "ttt": await ttt.handle_callback(query, context, data, user_id); return
+    if prefix == "quiz": await quiz.handle_callback(query, context, data, user_id); return
+    if prefix == "pen": await penalty.handle_callback(query, context, data, user_id); return
+    if prefix == "casino": await casino.handle_callback(query, context, data, user_id); return
+
+    # ✅ بررسی مالکیت منو برای بقیه دکمه‌ها
+    PERSONAL_PREFIXES = ("menu", "bank", "prop", "worker", "transfer", "help", "game")
+    if prefix in PERSONAL_PREFIXES:
         owner = utils.menu_owners.get((query.message.chat_id, query.message.message_id))
         if owner is not None and owner != user_id:
             await query.answer("❌ این منو برای شما نیست! لطفاً /start بزنید تا منوی خودتان باز شود.", show_alert=True); return
 
+    # لغو خودکار کازینو در صورت تغییر منو
     pending = utils.casino_pending.get(user_id)
-    if pending:
-        is_valid = data.startswith(f"casino:play:{pending['game']}:") or data == "casino:cancel"
-        if not is_valid:
-            utils.casino_pending.pop(user_id, None)
-            await db.add_balance(user_id, pending["entry"])
-            await query.answer(f"⚠️ بازی قبلی لغو شد و {utils.fmt(pending['entry'])} زرکوین برگشت.", show_alert=True)
+    if pending and prefix != "casino":
+        utils.casino_pending.pop(user_id, None)
+        await db.add_balance(user_id, pending["entry"])
+        await query.answer(f"⚠️ بازی قبلی لغو شد و {utils.fmt(pending['entry'])} زرکوین برگشت.", show_alert=True)
 
     utils.user_states.pop(user_id, None)
 
@@ -145,10 +152,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await db.ensure_user(query.from_user)
         msg = await utils.safe_edit(query, await build_bank_text(user_id), utils.bank_menu_kb()); utils.remember_owner(msg, user_id); return
     if data == "bank:deposit":
-        utils.user_states.set(user_id, {"action": "bank_deposit"})
+        utils.user_states[user_id] = {"action": "bank_deposit"}
         msg = await utils.safe_edit(query, "💰 <b>واریز به بانک</b>\n\nمبلغ مورد نظر رو بفرست:", utils.back_main_kb()); utils.remember_owner(msg, user_id); return
     if data == "bank:withdraw":
-        utils.user_states.set(user_id, {"action": "bank_withdraw"})
+        utils.user_states[user_id] = {"action": "bank_withdraw"}
         msg = await utils.safe_edit(query, "🏧 <b>برداشت از بانک</b>\n\nمبلغ مورد نظر رو بفرست:", utils.back_main_kb()); utils.remember_owner(msg, user_id); return
 
     if data == "prop:menu":
@@ -172,7 +179,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif r == "limit": await query.answer(f"❌ حداکثر {config.MAX_PER_KEY} عدد مجاز است!", show_alert=True)
         elif r == "balance": await query.answer("❌ موجودی کافی نیست", show_alert=True)
         else: await query.answer("❌ خطا", show_alert=True)
-        msg = await utils.safe_edit(query, await build_assets_text(user_id, "property") + "\n\n👇 از لیست زیر انتخاب کن (حداکثر 5 از هر نوع):", await properties_menu_kb(user_id)); utils.remember_owner(msg, user_id); return
+        msg = await utils.safe_edit(query, await build_assets_text(user_id, "property") + "\n\n👇 از لیست زیر انتخاب کن:", await properties_menu_kb(user_id)); utils.remember_owner(msg, user_id); return
 
     if data == "worker:menu":
         await db.ensure_user(query.from_user)
@@ -195,7 +202,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif r == "limit": await query.answer(f"❌ حداکثر {config.MAX_PER_KEY} عدد مجاز است!", show_alert=True)
         elif r == "balance": await query.answer("❌ موجودی کافی نیست", show_alert=True)
         else: await query.answer("❌ خطا", show_alert=True)
-        msg = await utils.safe_edit(query, await build_assets_text(user_id, "worker") + "\n\n👇 از لیست زیر انتخاب کن (حداکثر 5 از هر نوع):", await workers_menu_kb(user_id)); utils.remember_owner(msg, user_id); return
+        msg = await utils.safe_edit(query, await build_assets_text(user_id, "worker") + "\n\n👇 از لیست زیر انتخاب کن:", await workers_menu_kb(user_id)); utils.remember_owner(msg, user_id); return
 
     if data == "game:menu":
         kb = InlineKeyboardMarkup([
@@ -215,25 +222,16 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         gk = data.split(":", 1)[1]
         if gk in config.GAMES:
             g = config.GAMES[gk]
-            utils.user_states.set(user_id, {"action": "game_entry", "game": gk})
+            utils.user_states[user_id] = {"action": "game_entry", "game": gk}
             msg = await utils.safe_edit(query, f"{g['emoji']} <b>{g['name']}</b>\n━━━━━━━━━━━━━━━━━━\n💰 حداقل ورودی: <b>{utils.fmt(g['min'])}</b> زرکوین\n👥 بازیکنان: {g['players']}\n💵 کارمزد: <b>10%</b> از جایزه\n\nمبلغ ورودی رو بفرست:", utils.back_games_kb())
             utils.remember_owner(msg, user_id)
         return
-
-    # ✅ هندل کردن کازینو با یک فایل جداگانه
-    if data.startswith("casino:"):
-        await casino.handle_callback(query, context, data, user_id); return
-
-    if data.startswith("rps:"): await rps.handle_callback(query, context, data, user_id); return
-    if data.startswith("ttt:"): await ttt.handle_callback(query, context, data, user_id); return
-    if data.startswith("quiz:"): await quiz.handle_callback(query, context, data, user_id); return
-    if data.startswith("pen:"): await penalty.handle_callback(query, context, data, user_id); return
 
     if data == "help:menu":
         msg = await utils.safe_edit(query, config.HELP_TEXT, utils.back_main_kb()); utils.remember_owner(msg, user_id); return
 
     if data == "transfer:start":
-        utils.user_states.set(user_id, {"action": "transfer_amount"})
+        utils.user_states[user_id] = {"action": "transfer_amount"}
         msg = await utils.safe_edit(query, "💸 <b>انتقال زرکوین</b>\n\nمبلغ مورد نظر رو بفرست:", utils.back_main_kb()); utils.remember_owner(msg, user_id); return
     if data.startswith("tr:c:"):
         await confirm_transfer(query, int(data.split(":")[2])); return
@@ -318,7 +316,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         total = amount + fee
         u = await db.get_user(user_id)
         if int(u["balance"]) < total: await update.message.reply_text(f"❌ موجودی کافی نیست (نیاز: {utils.fmt(total)})"); return
-        utils.user_states.set(user_id, {"action": "transfer_card", "amount": amount, "fee": fee})
+        utils.user_states[user_id] = {"action": "transfer_card", "amount": amount, "fee": fee}
         msg = await update.message.reply_text(f"💸 مبلغ: <b>{utils.fmt(amount)}</b>\n💵 کارمزد: <b>{utils.fmt(fee)}</b>\n📊 مجموع کسر: <b>{utils.fmt(total)}</b>\n\nشماره کارت مقصد رو بفرست:", parse_mode=ParseMode.HTML, reply_markup=utils.back_main_kb())
         utils.remember_owner(msg, user_id); return
 
@@ -390,7 +388,7 @@ async def post_init(app: Application):
     await db.init_db_pool(); await db.init_db()
     try: await db.daily_payout()
     except Exception: pass
-    app.job_queue.run_daily(db.daily_payout, time=__import__("datetime").time(hour=0, minute=0, tzinfo=utils.TEHRAN), name="daily_payout")
+    app.job_queue.run_daily(db.daily_payout, time=time(hour=0, minute=0, tzinfo=utils.TEHRAN), name="daily_payout")
 
 async def post_shutdown(app: Application):
     await db.close_db_pool()
