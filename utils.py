@@ -19,11 +19,12 @@ penalty_games = {}
 casino_pending = {}
 daily_lock = asyncio.Lock()
 
+# ✅ کش کردن دیتا برای جلوگیری از تماس‌های تکراری با دیتابیس
 menu_owners = TTLCache(maxsize=10000, ttl=3600)
 user_states = TTLCache(maxsize=10000, ttl=3600)
 user_cache = TTLCache(maxsize=1000, ttl=30)
 
-# ✅ کیبوردهای ثابت (یک بار در ابتدا ساخته می‌شوند)
+# ✅ ساخت کیبوردها فقط یک بار در ابتدای اجرا (سرعت بالا)
 MAIN_MENU_KB = InlineKeyboardMarkup([
     [InlineKeyboardButton("🏦 بانک", callback_data="bank:menu"), InlineKeyboardButton("🏠 ملک‌ها", callback_data="prop:menu")],
     [InlineKeyboardButton("👷 کارگرها", callback_data="worker:menu"), InlineKeyboardButton("🎮 بازی‌ها", callback_data="game:menu")],
@@ -91,7 +92,6 @@ def apply_commission(full_prize: int, rate: float) -> tuple[int, int]:
     commission = int(full_prize * rate)
     return full_prize - commission, commission
 
-# ✅ بهینه‌سازی `safe_edit` برای جلوگیری از خطای محدودیت تلگرام (Rate Limit)
 async def safe_edit(query, text: str, reply_markup=None):
     try:
         await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup, disable_web_page_preview=True)
