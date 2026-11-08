@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""ربات زرکوین (بات زر) - نسخه نهایی کامل"""
+"""ربات زرکوین (بات زر) - نسخه نهایی با تاییدیه خرید و تاس تلگرام"""
 import asyncio
 import html
 import logging
@@ -46,7 +46,7 @@ PERSIAN_DIGITS = "۰۱۲۳۴۵۶۷۸۹"
 EN_DIGITS = "0123456789"
 
 BANK_RATE = 0.02
-MAX_PER_KEY = 5   # حداکثر 5 عدد از هر نوع ملک/کارگر
+MAX_PER_KEY = 5
 TRANSFER_FEE_RATE = 0.01
 TRANSFER_FEE_MIN = 1_000_000
 COMMISSION_RATE = 0.10
@@ -87,7 +87,6 @@ CASINO_GAMES = {
 SLOT_SYMBOLS = ["🍒", "🍋", "🍊", "🍇", "7️⃣", "⭐"]
 CARD_SUITS = {"hearts": "♥️", "diamonds": "♦️", "spades": "♠️", "clubs": "♣️"}
 CARD_SUITS_FA = {"hearts": "دل", "diamonds": "خشت", "spades": "پیک", "clubs": "گشنیز"}
-DICE_EMOJIS = {1: "1️⃣", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣", 5: "5️⃣", 6: "6️⃣"}
 
 # ============================== بانک سوالات کوییز ==============================
 QUIZ_QUESTIONS = [
@@ -351,13 +350,11 @@ penalty_games: dict[int, dict] = {}
 casino_pending: dict[int, dict] = {}
 daily_lock = asyncio.Lock()
 
-
 # ============================== کمکی‌ها ==============================
 def fa_to_en(text: str) -> str:
     return (text or "").translate(str.maketrans(PERSIAN_DIGITS, EN_DIGITS))
 
 def fmt(amount: int) -> str:
-    """اعداد با کاما - انگلیسی"""
     return f"{int(amount):,}"
 
 def parse_amount(text: str):
@@ -576,7 +573,6 @@ async def buy_asset(user_id: int, asset_type: str, asset_key: str, price: int, i
         try:
             await conn.begin()
             async with conn.cursor() as cur:
-                # حداکثر 5 عدد از هر نوع
                 await cur.execute(
                     "SELECT COUNT(*) FROM assets WHERE user_id=%s AND asset_key=%s",
                     (user_id, asset_key))
@@ -675,30 +671,31 @@ def bank_menu_kb():
         [InlineKeyboardButton("🔙 بازگشت", callback_data="menu:main")],
     ])
 
+# ✅ منوی عمودی برای ملک‌ها
 async def properties_menu_kb(user_id: int):
-    """منو با نمایش تعداد فعلی کاربر از هر ملک"""
-    rows, pair = [], []
+    rows = []
     for key, prop in sorted(PROPERTIES.items(), key=lambda x: x[1]["price"]):
         count = await count_assets_by_key(user_id, key)
-        label = f"{prop['emoji']} {prop['name']} | {fmt(prop['price'])} | {count}/{MAX_PER_KEY}"
-        pair.append(InlineKeyboardButton(label, callback_data=f"prop:buy:{key}"))
-        if len(pair) == 2:
-            rows.append(pair); pair = []
-    if pair:
-        rows.append(pair)
+        label = f"{prop['emoji']} {prop['name']} | قیمت: {fmt(prop['price'])} | سود: {fmt(prop['income'])}/روز"
+        if count >= MAX_PER_KEY:
+            label += " (تکمیل)"
+        else:
+            label += f" ({count}/{MAX_PER_KEY})"
+        rows.append([InlineKeyboardButton(label, callback_data=f"prop:select:{key}")])
     rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="menu:main")])
     return InlineKeyboardMarkup(rows)
 
+# ✅ منوی عمودی برای کارگرها
 async def workers_menu_kb(user_id: int):
-    rows, pair = [], []
+    rows = []
     for key, w in sorted(WORKERS.items(), key=lambda x: x[1]["price"]):
         count = await count_assets_by_key(user_id, key)
-        label = f"{w['emoji']} {w['name']} | {fmt(w['price'])} | {count}/{MAX_PER_KEY}"
-        pair.append(InlineKeyboardButton(label, callback_data=f"worker:buy:{key}"))
-        if len(pair) == 2:
-            rows.append(pair); pair = []
-    if pair:
-        rows.append(pair)
+        label = f"{w['emoji']} {w['name']} | قیمت: {fmt(w['price'])} | سود: {fmt(w['income'])}/روز"
+        if count >= MAX_PER_KEY:
+            label += " (تکمیل)"
+        else:
+            label += f" ({count}/{MAX_PER_KEY})"
+        rows.append([InlineKeyboardButton(label, callback_data=f"worker:select:{key}")])
     rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="menu:main")])
     return InlineKeyboardMarkup(rows)
 
@@ -724,14 +721,17 @@ def casino_menu_kb():
 def casino_back_kb():
     return InlineKeyboardMarkup([[InlineKeyboardButton("🎰 بازگشت به کازینو", callback_data="game:casino")]])
 
+# ✅ کیبورد جدید تاس با گزینه‌های زوج/فرد و دقیق
 def casino_dice_kb():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("1", callback_data="casino:play:dice:1"),
-         InlineKeyboardButton("2", callback_data="casino:play:dice:2"),
-         InlineKeyboardButton("3", callback_data="casino:play:dice:3")],
-        [InlineKeyboardButton("4", callback_data="casino:play:dice:4"),
-         InlineKeyboardButton("5", callback_data="casino:play:dice:5"),
-         InlineKeyboardButton("6", callback_data="casino:play:dice:6")],
+        [InlineKeyboardButton("دقیقاً 1 (3x)", callback_data="casino:play:dice:exact:1"),
+         InlineKeyboardButton("دقیقاً 2 (3x)", callback_data="casino:play:dice:exact:2"),
+         InlineKeyboardButton("دقیقاً 3 (3x)", callback_data="casino:play:dice:exact:3")],
+        [InlineKeyboardButton("دقیقاً 4 (3x)", callback_data="casino:play:dice:exact:4"),
+         InlineKeyboardButton("دقیقاً 5 (3x)", callback_data="casino:play:dice:exact:5"),
+         InlineKeyboardButton("دقیقاً 6 (3x)", callback_data="casino:play:dice:exact:6")],
+        [InlineKeyboardButton("زوج (1.5x)", callback_data="casino:play:dice:parity:even"),
+         InlineKeyboardButton("فرد (1.5x)", callback_data="casino:play:dice:parity:odd")],
         [InlineKeyboardButton("❌ لغو و بازگشت پول", callback_data="casino:cancel")],
     ])
 
@@ -829,7 +829,6 @@ async def build_assets_text(user_id, asset_type):
     owned = await get_assets(user_id, asset_type)
     total_daily = sum(int(a["daily_income"]) for a in owned)
 
-    # گروه‌بندی بر اساس نوع
     grouped = {}
     for a in owned:
         k = a["asset_key"]
@@ -858,7 +857,6 @@ async def build_assets_text(user_id, asset_type):
 
 # ============================== کامندها ==============================
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """شروع کار - در چت خصوصی و گروه"""
     await ensure_user(update.effective_user)
     await update.message.reply_text(
         await build_main_menu_text(update.effective_user.id),
@@ -938,6 +936,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data or ""
     user_id = query.from_user.id
 
+    # اگه بازی کازینو در جریانه و کاربر داره چیز دیگه‌ای می‌زنه، پولش رو برگردون
     pending = casino_pending.get(user_id)
     if pending:
         is_valid_choice = data.startswith(f"casino:play:{pending['game']}:")
@@ -974,72 +973,131 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_edit(query, "🏧 <b>برداشت از بانک</b>\n\nمبلغ مورد نظر رو بفرست:", back_main_kb())
         return
 
+    # ------------------ ملک‌ها ------------------
     if data == "prop:menu":
         await query.answer()
         await ensure_user(query.from_user)
         await safe_edit(query, await build_assets_text(user_id, "property") +
-                        "\n\n👇 از لیست زیر بخر (حداکثر 5 از هر نوع):",
+                        "\n\n👇 از لیست زیر انتخاب کن (حداکثر 5 از هر نوع):",
                         await properties_menu_kb(user_id))
         return
-    if data.startswith("prop:buy:"):
-        key = data.split(":", 2)[2]
+        
+    if data.startswith("prop:select:"):
+        await query.answer()
+        key = data.split(":")[2]
         prop = PROPERTIES.get(key)
         if not prop:
             await query.answer("❌ ملک نامعتبر", show_alert=True); return
-        await ensure_user(query.from_user)
+        
         count = await count_assets_by_key(user_id, key)
         if count >= MAX_PER_KEY:
             await query.answer(f"❌ حداکثر {MAX_PER_KEY} عدد از این ملک مجاز است!", show_alert=True); return
+            
         user = await get_user(user_id)
         if int(user["balance"]) < prop["price"]:
             await query.answer("❌ موجودی کافی نیست", show_alert=True); return
+            
+        text = (
+            f"🏠 <b>تایید خرید ملک</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"🏷 نام: {prop['emoji']} <b>{prop['name']}</b>\n"
+            f"💰 قیمت: <b>{fmt(prop['price'])}</b> زرکوین\n"
+            f"📈 سود روزانه: <b>{fmt(prop['income'])}</b> زرکوین\n"
+            f"📊 تعداد فعلی شما: {count}/{MAX_PER_KEY}\n\n"
+            f"آیا از خرید مطمئنی؟"
+        )
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ بله، بخر", callback_data=f"prop:confirm:{key}")],
+            [InlineKeyboardButton("❌ انصراف", callback_data="prop:menu")]
+        ])
+        await safe_edit(query, text, kb)
+        return
+
+    if data.startswith("prop:confirm:"):
+        await query.answer()
+        key = data.split(":")[2]
+        prop = PROPERTIES.get(key)
+        if not prop:
+            await query.answer("❌ ملک نامعتبر", show_alert=True); return
+            
         r = await buy_asset(user_id, "property", key, prop["price"], prop["income"])
         if r == "ok":
-            await query.answer(f"✅ {prop['name']} خریداری شد! ({count+1}/{MAX_PER_KEY})", show_alert=True)
+            await query.answer(f"✅ {prop['name']} خریداری شد!", show_alert=True)
         elif r == "limit":
             await query.answer(f"❌ حداکثر {MAX_PER_KEY} عدد از این ملک مجاز است!", show_alert=True)
         elif r == "balance":
             await query.answer("❌ موجودی کافی نیست", show_alert=True)
         else:
             await query.answer("❌ خطا", show_alert=True)
+            
         await safe_edit(query, await build_assets_text(user_id, "property") +
-                        "\n\n👇 از لیست زیر بخر (حداکثر 5 از هر نوع):",
+                        "\n\n👇 از لیست زیر انتخاب کن (حداکثر 5 از هر نوع):",
                         await properties_menu_kb(user_id))
         return
 
+    # ------------------ کارگرها ------------------
     if data == "worker:menu":
         await query.answer()
         await ensure_user(query.from_user)
         await safe_edit(query, await build_assets_text(user_id, "worker") +
-                        "\n\n👇 از لیست زیر استخدام کن (حداکثر 5 از هر نوع):",
+                        "\n\n👇 از لیست زیر انتخاب کن (حداکثر 5 از هر نوع):",
                         await workers_menu_kb(user_id))
         return
-    if data.startswith("worker:buy:"):
-        key = data.split(":", 2)[2]
+        
+    if data.startswith("worker:select:"):
+        await query.answer()
+        key = data.split(":")[2]
         w = WORKERS.get(key)
         if not w:
-            await query.answer("❌ نامعتبر", show_alert=True); return
-        await ensure_user(query.from_user)
+            await query.answer("❌ کارگر نامعتبر", show_alert=True); return
+            
         count = await count_assets_by_key(user_id, key)
         if count >= MAX_PER_KEY:
             await query.answer(f"❌ حداکثر {MAX_PER_KEY} عدد از این کارگر مجاز است!", show_alert=True); return
+            
         user = await get_user(user_id)
         if int(user["balance"]) < w["price"]:
             await query.answer("❌ موجودی کافی نیست", show_alert=True); return
+            
+        text = (
+            f"👷 <b>تایید استخدام کارگر</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"🏷 نام: {w['emoji']} <b>{w['name']}</b>\n"
+            f"💰 قیمت: <b>{fmt(w['price'])}</b> زرکوین\n"
+            f"📈 سود روزانه: <b>{fmt(w['income'])}</b> زرکوین\n"
+            f"📊 تعداد فعلی شما: {count}/{MAX_PER_KEY}\n\n"
+            f"آیا از استخدام مطمئنی؟"
+        )
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ بله، استخدام کن", callback_data=f"worker:confirm:{key}")],
+            [InlineKeyboardButton("❌ انصراف", callback_data="worker:menu")]
+        ])
+        await safe_edit(query, text, kb)
+        return
+
+    if data.startswith("worker:confirm:"):
+        await query.answer()
+        key = data.split(":")[2]
+        w = WORKERS.get(key)
+        if not w:
+            await query.answer("❌ کارگر نامعتبر", show_alert=True); return
+            
         r = await buy_asset(user_id, "worker", key, w["price"], w["income"])
         if r == "ok":
-            await query.answer(f"✅ {w['name']} استخدام شد! ({count+1}/{MAX_PER_KEY})", show_alert=True)
+            await query.answer(f"✅ {w['name']} استخدام شد!", show_alert=True)
         elif r == "limit":
             await query.answer(f"❌ حداکثر {MAX_PER_KEY} عدد از این کارگر مجاز است!", show_alert=True)
         elif r == "balance":
             await query.answer("❌ موجودی کافی نیست", show_alert=True)
         else:
             await query.answer("❌ خطا", show_alert=True)
+            
         await safe_edit(query, await build_assets_text(user_id, "worker") +
-                        "\n\n👇 از لیست زیر استخدام کن (حداکثر 5 از هر نوع):",
+                        "\n\n👇 از لیست زیر انتخاب کن (حداکثر 5 از هر نوع):",
                         await workers_menu_kb(user_id))
         return
 
+    # ------------------ بازی‌ها ------------------
     if data == "game:menu":
         await query.answer()
         await safe_edit(query,
@@ -1065,7 +1123,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "💵 کارمزد: <b>10%</b> از جایزه\n\n"
             "🎲 بازی‌ها:\n"
             "• 🎰 اسلات — تا 15 برابر\n"
-            "• 🎲 تاس — تا 6 برابر\n"
+            "• 🎲 تاس — تا 3 برابر\n"
             "• 🪙 شیر یا خط — 2 برابر\n"
             "• 🃏 کارت شانس — 4 برابر\n\n"
             "یکی رو انتخاب کن:",
@@ -1097,18 +1155,22 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data.startswith("casino:play:"):
         parts = data.split(":")
-        cg, choice = parts[2], parts[3]
+        cg = parts[2]
         pending = casino_pending.get(user_id)
         if not pending or pending["game"] != cg:
             await query.answer("❌ بازی فعالی نداری", show_alert=True); return
         casino_pending.pop(user_id, None)
         entry = pending["entry"]
+        
         if cg == "dice":
-            await resolve_dice(query, entry, choice)
+            # ✅ در بازی تاس، نوع انتخاب (exact/parity) و مقدار فرستاده میشه
+            choice_type = parts[3]
+            choice_val = parts[4]
+            await resolve_dice(query, entry, choice_type, choice_val)
         elif cg == "coin":
-            await resolve_coin(query, entry, choice)
+            await resolve_coin(query, entry, parts[3])
         elif cg == "card":
-            await resolve_card(query, entry, choice)
+            await resolve_card(query, entry, parts[3])
         return
 
     if data.startswith("game:") and data.count(":") == 1:
@@ -1445,24 +1507,48 @@ async def play_slots_message(update, user_id: int, entry: int):
         )
     await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=casino_back_kb())
 
-async def resolve_dice(query, entry: int, choice: str):
+# ✅ تابع جدید تاس با ایموجی تلگرام
+async def resolve_dice(query, entry: int, choice_type: str, choice_val: str):
+    # ارسال ایموجی تاس
     try:
-        user_num = int(choice)
-        if user_num < 1 or user_num > 6:
-            user_num = 1
-    except ValueError:
-        user_num = 1
-
-    dice = random.randint(1, 6)
+        dice_msg = await query.message.reply_dice(emoji="🎲")
+    except Exception:
+        dice_msg = await query.message.chat.send_dice(emoji="🎲")
+    
+    # صبر برای انیمیشن
+    await asyncio.sleep(4)
+    
+    result_num = dice_msg.dice.value
+    
     header = (
         f"🎲 <b>تاس</b>\n"
         f"━━━━━━━━━━━━━━━━━━\n"
-        f"🎯 تاس: <b>{DICE_EMOJIS[dice]}</b>\n"
-        f"انتخاب تو: {DICE_EMOJIS[user_num]}\n\n"
+        f"🎯 نتیجه: <b>{result_num}</b>\n"
+        f"انتخاب تو: "
     )
+    
+    is_win = False
+    multiplier = 0
+    
+    if choice_type == "exact":
+        header += f"دقیقاً {choice_val}\n\n"
+        if result_num == int(choice_val):
+            is_win = True
+            multiplier = 3.0
+    else: # parity
+        if choice_val == "even":
+            header += "زوج\n\n"
+            if result_num % 2 == 0:
+                is_win = True
+                multiplier = 1.5
+        else:
+            header += "فرد\n\n"
+            if result_num % 2 != 0:
+                is_win = True
+                multiplier = 1.5
 
-    if dice == user_num:
-        full_prize = entry * 6
+    if is_win:
+        full_prize = int(entry * multiplier)
         prize, comm = apply_commission(full_prize)
         await add_balance(query.from_user.id, prize)
         text = header + (
@@ -1473,7 +1559,9 @@ async def resolve_dice(query, entry: int, choice: str):
         )
     else:
         text = header + f"😢 باختی! {fmt(entry)} زرکوین از دست رفت."
+        
     await safe_edit(query, text, casino_back_kb())
+
 
 async def resolve_coin(query, entry: int, choice: str):
     result = random.choice(["heads", "tails"])
@@ -1679,7 +1767,10 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                     "chat_id": update.effective_chat.id}
         if cg == "dice":
             await update.message.reply_text(
-                f"🎲 <b>تاس</b>\n💰 ورودی: {fmt(amount)}\n\nانتخاب کن:",
+                f"🎲 <b>تاس</b>\n"
+                f"💰 ورودی: {fmt(amount)}\n\n"
+                f"⚠️ <b>دقت کن! اگر اشتباه حدس بزنی پولت برنمی‌گرده.</b>\n\n"
+                f"انتخاب کن:",
                 parse_mode=ParseMode.HTML, reply_markup=casino_dice_kb())
         elif cg == "coin":
             await update.message.reply_text(
@@ -1798,7 +1889,7 @@ HELP_TEXT = (
     "⚽ پنالتی — 2x\n\n"
     "🎰 <b>کازینو</b> (حداقل 10,000 زرکوین)\n"
     "🎰 اسلات — تا 15x\n"
-    "🎲 تاس — تا 6x\n"
+    "🎲 تاس (دقیق 3x | زوج/فرد 1.5x) — بدون بازگشت پول در صورت باخت\n"
     "🪙 شیر یا خط — 2x\n"
     "🃏 کارت شانس — 4x\n\n"
     "💵 <b>کارمزد بات</b>: 10% از هر برد\n\n"
@@ -1829,21 +1920,16 @@ def main():
     app = Application.builder().token(BOT_TOKEN) \
         .post_init(post_init).post_shutdown(post_shutdown).build()
 
-    # دستورات متنی (هم در گروه هم در چت خصوصی)
     app.add_handler(MessageHandler(filters.Regex(r"^زربات$"), cmd_zarbat))
     app.add_handler(MessageHandler(filters.Regex(r"^زر\s*بازی$"), cmd_zarbazi))
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("menu", cmd_menu))
 
-    # ادمین
     app.add_handler(ChatMemberHandler(chat_member_handler, ChatMemberHandler.MY_CHAT_MEMBER))
     app.add_handler(MessageHandler(
         filters.Regex(r"^انتقال زرکوین\s+[\d۰-۹,،]+"), owner_give))
 
-    # دکمه‌ها
     app.add_handler(CallbackQueryHandler(callback_handler))
-
-    # متن‌های دیگر
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
     logger.info("🚀 Bot starting...")
