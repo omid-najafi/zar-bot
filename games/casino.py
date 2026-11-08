@@ -6,7 +6,6 @@ from telegram.constants import ParseMode
 import utils, db, config
 
 logger = logging.getLogger("zarcoin")
-
 DICE_FACES = {1: "1️⃣", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣", 5: "5️⃣", 6: "6️⃣"}
 
 def casino_menu_kb():
@@ -16,8 +15,7 @@ def casino_menu_kb():
         [InlineKeyboardButton("🔙 بازگشت به بازی‌ها", callback_data="game:menu")],
     ])
 
-def casino_back_kb(): 
-    return InlineKeyboardMarkup([[InlineKeyboardButton("🎰 بازگشت به کازینو", callback_data="game:casino")]])
+def casino_back_kb(): return InlineKeyboardMarkup([[InlineKeyboardButton("🎰 بازگشت به کازینو", callback_data="game:casino")]])
 
 def casino_dice_kb():
     return InlineKeyboardMarkup([
@@ -40,7 +38,7 @@ def casino_card_kb():
         [InlineKeyboardButton("❌ لغو و بازگشت پول", callback_data="casino:cancel")],
     ])
 
-async def play_slots(update, user_id, amount):
+async def play_slots(update, user_id, amount, context):
     reels = [random.choice(config.SLOT_SYMBOLS) for _ in range(3)]
     reels_str = " | ".join(reels)
     if reels[0] == reels[1] == reels[2]:
@@ -59,6 +57,13 @@ async def play_slots(update, user_id, amount):
     
     msg = await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=casino_back_kb())
     utils.remember_owner(msg, user_id)
+    
+    # ✅ ثبت ماموریت‌ها
+    r_p = await db.progress_mission(user_id, "play_casino", 1, base_xp=config.BASE_XP_PLAY_GAME)
+    await utils.notify_mission(context, update.message.chat_id, r_p)
+    
+    r_any = await db.progress_mission(user_id, "play_any_game", 1, base_xp=0)
+    await utils.notify_mission(context, update.message.chat_id, r_any)
 
 async def handle_callback(query, context, data, user_id):
     if data == "casino:cancel":
@@ -89,16 +94,14 @@ async def handle_callback(query, context, data, user_id):
             await utils.safe_answer(query, "❌ بازی فعالی نداری", show_alert=True); return
         utils.casino_pending.pop(user_id, None)
         entry = pending["entry"]
+        chat_id = query.message.chat_id
         
         if cg == "dice":
-            # ✅ فقط از تاس استاندارد استفاده می‌کنیم
             try:
                 dice_msg = await context.bot.send_dice(
-                    chat_id=query.message.chat_id,
-                    emoji="🎲",
+                    chat_id=chat_id, emoji="🎲",
                     reply_to_message_id=query.message.message_id,
-                    allow_sending_without_reply=True,
-                )
+                    allow_sending_without_reply=True)
             except Exception as e:
                 logger.error(f"Dice send error: {e}")
                 await db.add_balance(user_id, entry)
@@ -108,8 +111,6 @@ async def handle_callback(query, context, data, user_id):
                 
             await asyncio.sleep(4.5)
             res = dice_msg.dice.value
-            logger.info(f"🎲 Dice result for user {user_id}: {res}")
-            
             face = DICE_FACES.get(res, "🎲")
             
             if parts[3] == "exact":
@@ -163,3 +164,10 @@ async def handle_callback(query, context, data, user_id):
                 text = header + f"😢 باختی! {utils.fmt(entry)} زرکوین از دست رفت."
             await utils.safe_edit(query, text, casino_back_kb())
             await utils.safe_answer(query)
+            
+        # ✅ ثبت ماموریت‌ها (برای تاس، شیر یا خط و کارت)
+        r_p = await db.progress_mission(user_id, "play_casino", 1, base_xp=config.BASE_XP_PLAY_GAME)
+        await utils.notify_mission(context, chat_id, r_p)
+        
+        r_any = await db.progress_mission(user_id, "play_any_game", 1, base_xp=0)
+        await utils.notify_mission(context, chat_id, r_any)
