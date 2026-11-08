@@ -8,6 +8,7 @@ from cachetools import TTLCache
 from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.constants import ParseMode
 from telegram.error import BadRequest, RetryAfter
+import config
 
 TEHRAN = ZoneInfo("Asia/Tehran")
 PERSIAN_DIGITS = "۰۱۲۳۴۵۶۷۸۹"
@@ -23,11 +24,12 @@ menu_owners = TTLCache(maxsize=10000, ttl=3600)
 user_states = TTLCache(maxsize=10000, ttl=3600)
 user_cache = TTLCache(maxsize=1000, ttl=30)
 
-# ✅ منوی اصلی با دکمه ماموریت‌ها
+# ═══════════ کیبوردهای ثابت ═══════════
 MAIN_MENU_KB = InlineKeyboardMarkup([
     [InlineKeyboardButton("🏦 بانک", callback_data="bank:menu"), InlineKeyboardButton("🏠 ملک‌ها", callback_data="prop:menu")],
     [InlineKeyboardButton("👷 کارگرها", callback_data="worker:menu"), InlineKeyboardButton("🎮 بازی‌ها", callback_data="game:menu")],
-    [InlineKeyboardButton("🎯 ماموریت‌ها", callback_data="mission:menu"), InlineKeyboardButton("💸 انتقال زرکوین", callback_data="transfer:start")],
+    [InlineKeyboardButton("🎯 ماموریت‌ها", callback_data="mission:menu"), InlineKeyboardButton("💸 انتقال", callback_data="transfer:start")],
+    [InlineKeyboardButton("🎭 کاباره زر", callback_data="kabareh:menu")],
     [InlineKeyboardButton("📚 راهنما", callback_data="help:menu")],
 ])
 
@@ -44,6 +46,7 @@ GAMES_MENU_KB = InlineKeyboardMarkup([
     [InlineKeyboardButton("🔙 بازگشت", callback_data="menu:main")],
 ])
 
+# ═══════════ کمکی‌ها ═══════════
 def fa_to_en(text: str) -> str:
     return (text or "").translate(str.maketrans(PERSIAN_DIGITS, EN_DIGITS))
 
@@ -109,14 +112,11 @@ async def safe_edit(query, text: str, reply_markup=None):
         else:
             return await query.from_user.send_message(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
     except BadRequest as e:
-        if "Message is not modified" in str(e):
-            return query.message
+        if "Message is not modified" in str(e): return query.message
         try:
             return await query.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup, disable_web_page_preview=True)
-        except Exception:
-            return None
-    except Exception:
-        return None
+        except Exception: return None
+    except Exception: return None
 
 def join_room_kb(room_id: str, game_key: str):
     return InlineKeyboardMarkup([
@@ -130,7 +130,6 @@ def transfer_confirm_kb(user_id: int):
         InlineKeyboardButton("❌ انصراف", callback_data=f"tr:x:{user_id}"),
     ]])
 
-# ═══════════ سیستم لول ═══════════
 def calc_level(total_xp: int) -> tuple[int, int, int]:
     level = 1
     cum = 0
@@ -150,23 +149,16 @@ def format_progress_bar(current: int, total: int, length: int = 10) -> str:
     filled = min(length, int(current * length / total))
     return "▓" * filled + "░" * (length - filled)
 
-# ═══════════ نوتیفیکیشن ماموریت ═══════════
 async def notify_mission(bot_or_context, chat_id: int, result: dict | None):
-    if not result or not result.get("completed"):
-        return
-    
+    if not result or not result.get("completed"): return
     bot = bot_or_context.bot if hasattr(bot_or_context, "bot") else bot_or_context
-    
     msg = "🎯 <b>ماموریت کامل شد!</b>\n━━━━━━━━━━━━━━━━━━\n"
     for m in result["completed"]:
         msg += f"✅ {m['desc']}\n   <i>+{m['xp']} XP</i>\n"
-    
     total = result.get("total_xp", 0)
     msg += f"\n✨ مجموع: <b>+{total} XP</b>"
-    
     if result.get("leveled_up"):
         msg += f"\n\n🎉 <b>لول آپ!</b>\nبه سطح <b>{result['new_level']}</b> رسیدی! 🌟"
-    
     try:
         await bot.send_message(chat_id, msg, parse_mode=ParseMode.HTML)
     except Exception:
