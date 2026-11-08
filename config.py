@@ -16,6 +16,45 @@ TRANSFER_FEE_RATE = 0.01
 TRANSFER_FEE_MIN = 1_000_000
 COMMISSION_RATE = 0.10
 
+# ═══════════ سیستم لول و ماموریت ═══════════
+DAILY_MISSION_COUNT = 6
+ZAR_COOLDOWN_SECONDS = 300  # 5 دقیقه
+
+# XP پایه برای کارهای روزانه
+BASE_XP_PLAY_GAME = 15
+BASE_XP_WIN_GAME = 30
+BASE_XP_BUY_ASSET = 40
+BASE_XP_DEPOSIT_10K = 10  # هر 10,000 واریز
+BASE_XP_TRANSFER = 20
+BASE_XP_ZAR = 10
+
+# ═══════════ قالب‌های ماموریت ═══════════
+# هر ماموریت کمتر از 500 XP دارد
+MISSION_TEMPLATES = {
+    "play_rps_1":     {"desc": "1 بازی سنگ کاغذ قیچی انجام بده", "type": "play_rps", "target": 1, "xp": 100},
+    "play_rps_3":     {"desc": "3 بازی سنگ کاغذ قیچی انجام بده", "type": "play_rps", "target": 3, "xp": 300},
+    "win_rps_1":      {"desc": "1 بازی سنگ کاغذ قیچی ببر", "type": "win_rps", "target": 1, "xp": 200},
+    "play_ttt_1":     {"desc": "1 بازی دوز انجام بده", "type": "play_ttt", "target": 1, "xp": 100},
+    "play_ttt_3":     {"desc": "3 بازی دوز انجام بده", "type": "play_ttt", "target": 3, "xp": 300},
+    "win_ttt_1":      {"desc": "1 بازی دوز ببر", "type": "win_ttt", "target": 1, "xp": 250},
+    "play_quiz_1":    {"desc": "1 کوییز بازی کن", "type": "play_quiz", "target": 1, "xp": 100},
+    "win_quiz_1":     {"desc": "1 کوییز ببر", "type": "win_quiz", "target": 1, "xp": 300},
+    "play_penalty_1": {"desc": "1 پنالتی بزن", "type": "play_penalty", "target": 1, "xp": 100},
+    "win_penalty_1":  {"desc": "1 پنالتی گل کن", "type": "win_penalty", "target": 1, "xp": 200},
+    "play_casino_1":  {"desc": "1 بازی کازینو انجام بده", "type": "play_casino", "target": 1, "xp": 100},
+    "play_casino_3":  {"desc": "3 بازی کازینو انجام بده", "type": "play_casino", "target": 3, "xp": 300},
+    "play_casino_5":  {"desc": "5 بازی کازینو انجام بده", "type": "play_casino", "target": 5, "xp": 450},
+    "buy_property_1": {"desc": "1 ملک بخر", "type": "buy_property", "target": 1, "xp": 250},
+    "buy_worker_1":   {"desc": "1 کارگر استخدام کن", "type": "buy_worker", "target": 1, "xp": 250},
+    "deposit_100k":   {"desc": "100,000 زرکوین به بانک واریز کن", "type": "deposit_bank", "target": 100000, "xp": 150},
+    "deposit_500k":   {"desc": "500,000 زرکوین به بانک واریز کن", "type": "deposit_bank", "target": 500000, "xp": 400},
+    "transfer_1":     {"desc": "1 انتقال زرکوین انجام بده", "type": "transfer", "target": 1, "xp": 200},
+    "zar_collect_3":  {"desc": "3 بار کلمه زر رو بفرست", "type": "zar_collect", "target": 3, "xp": 250},
+    "zar_collect_5":  {"desc": "5 بار کلمه زر رو بفرست", "type": "zar_collect", "target": 5, "xp": 400},
+    "play_games_5":   {"desc": "5 بازی (هر نوعی) انجام بده", "type": "play_any_game", "target": 5, "xp": 400},
+    "play_games_10":  {"desc": "10 بازی (هر نوعی) انجام بده", "type": "play_any_game", "target": 10, "xp": 500 if False else 450},
+}
+
 PROPERTIES = {
     "supermarket": {"name": "سوپرمارکت", "price": 500_000, "income": 125_000, "emoji": "🛒"},
     "fruit":       {"name": "میوه‌فروشی", "price": 800_000, "income": 200_000, "emoji": "🍎"},
@@ -61,13 +100,24 @@ HELP_TEXT = (
     "━━━━━━━━━━━━━━━━━━\n\n"
     "🪙 <b>زرکوین چیه؟</b>\n"
     "واحد پول بازی، قابل کسب از طریق خرید ملک، استخدام کارگر، سود بانکی و برد در بازی‌ها.\n\n"
+    "⭐ <b>لول و XP</b>\n"
+    "با انجام ماموریت‌ها و بازی‌ها XP می‌گیری و لولت بالا میره.\n"
+    "برای لول بعدی به <code>2^level × 1000</code> XP نیاز داری.\n\n"
+    "🎯 <b>ماموریت‌های روزانه</b>\n"
+    "هر روز 6 ماموریت رندوم برات انتخاب می‌شه.\n"
+    "هر ماموریت زیر 500 XP جایزه داره.\n\n"
+    "🌾 <b>دستور زر</b>\n"
+    "کلمه <code>زر</code> رو بفرست تا زرکوین رایگان بگیری.\n"
+    "هر 5 دقیقه یک بار.\n"
+    "مقدار جایزه بر اساس لولت:\n"
+    "لول 1: 100-200 | لول 2: 200-300 | لول 3: 300-400 و...\n\n"
     "🎯 <b>دستورات</b>\n"
-    "• <code>زربات</code> — باز کردن منوی اصلی\n"
-    "• <code>زر بازی</code> — رفتن به بخش بازی‌ها\n"
+    "• <code>زربات</code> — منوی اصلی\n"
+    "• <code>زر بازی</code> — بازی‌ها\n"
+    "• <code>زر</code> — دریافت زرکوین رایگان\n"
     "• <code>/start</code> یا <code>/menu</code> — منوی اصلی\n\n"
     "🏦 <b>بانک</b>\n"
-    "سود روزانه 2% که هر شب ساعت 00:00 واریز میشه.\n"
-    "شماره کارت اختصاصی بر اساس آیدی عددی.\n\n"
+    "سود روزانه 2% که هر شب ساعت 00:00 واریز میشه.\n\n"
     "🏠 <b>ملک‌ها</b> (حداکثر 5 عدد از هر نوع - سود 25%)\n"
     "🛒 500K→125K | 🍎 800K→200K | 🥩 1M→250K | 💊 1.8M→450K\n"
     "💈 2.2M→550K | 👕 3M→750K | 📚 3.5M→875K | 📱 4M→1M\n\n"
