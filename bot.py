@@ -118,53 +118,49 @@ async def build_missions_text(user_id):
 
 
 # ═══════════ Command Handlers ═══════════
-async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # ✅ بررسی جوین اجباری
-    if not await utils.verify_membership(update, context):
-        return
+async def _show_main_menu(update, context):
     user_id = update.effective_user.id
     if user_id in utils.casino_pending:
         pending = utils.casino_pending.pop(user_id)
         await db.add_balance(user_id, pending["entry"])
     await db.ensure_user(update.effective_user)
-    msg = await update.message.reply_text(await build_main_menu_text(user_id), parse_mode=ParseMode.HTML, reply_markup=utils.MAIN_MENU_KB)
+    msg = await update.message.reply_text(
+        await build_main_menu_text(user_id),
+        parse_mode=ParseMode.HTML,
+        reply_markup=utils.MAIN_MENU_KB
+    )
     utils.remember_owner(msg, user_id)
+
+
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await utils.verify_membership(update, context): return
+    await _show_main_menu(update, context)
 
 
 async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await utils.verify_membership(update, context):
-        return
-    await cmd_start_no_check(update, context)
-
-
-async def cmd_start_no_check(update, context):
-    user_id = update.effective_user.id
-    if user_id in utils.casino_pending:
-        pending = utils.casino_pending.pop(user_id)
-        await db.add_balance(user_id, pending["entry"])
-    await db.ensure_user(update.effective_user)
-    msg = await update.message.reply_text(await build_main_menu_text(user_id), parse_mode=ParseMode.HTML, reply_markup=utils.MAIN_MENU_KB)
-    utils.remember_owner(msg, user_id)
+    if not await utils.verify_membership(update, context): return
+    await _show_main_menu(update, context)
 
 
 async def cmd_zarbat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await utils.verify_membership(update, context):
-        return
-    await cmd_start_no_check(update, context)
+    if not await utils.verify_membership(update, context): return
+    await _show_main_menu(update, context)
 
 
 async def cmd_zarbazi(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await utils.verify_membership(update, context):
-        return
+    if not await utils.verify_membership(update, context): return
     user_id = update.effective_user.id
     await db.ensure_user(update.effective_user)
-    msg = await update.message.reply_text("🎮 <b>بازی‌ها</b>\n💰 حداقل 1,000\n💵 کارمزد 10%", parse_mode=ParseMode.HTML, reply_markup=utils.GAMES_MENU_KB)
+    msg = await update.message.reply_text(
+        "🎮 <b>بازی‌ها</b>\n💰 حداقل 1,000\n💵 کارمزد 10%",
+        parse_mode=ParseMode.HTML,
+        reply_markup=utils.GAMES_MENU_KB
+    )
     utils.remember_owner(msg, user_id)
 
 
 async def cmd_zar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await utils.verify_membership(update, context):
-        return
+    if not await utils.verify_membership(update, context): return
     user = update.effective_user
     user_id = user.id
     user_data = await db.ensure_user(user)
@@ -186,11 +182,14 @@ async def cmd_zar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await db.add_balance(user_id, reward)
     await db.set_last_zar(user_id, now.isoformat())
     result = await db.progress_mission(user_id, "zar_collect", 1, base_xp=config.BASE_XP_ZAR)
-    await update.message.reply_text(f"🌾 <b>زر!</b>\n💰 +{utils.fmt(reward)}\n⭐ لول {level}\n⏰ بعدی: 5 دقیقه", parse_mode=ParseMode.HTML)
+    await update.message.reply_text(
+        f"💰 <b>زر!</b>\n💵 +{utils.fmt(reward)}\n⭐ لول {level}\n⏰ بعدی: 5 دقیقه",
+        parse_mode=ParseMode.HTML
+    )
     await utils.notify_mission(context, update.message.chat_id, result)
 
 
-# ═══════════ Group Watcher (لاگ آیدی گروه) ═══════════
+# ═══════════ Group Watcher ═══════════
 async def group_watcher(update: Update, context: ContextTypes.DEFAULT_TYPE):
     utils.log_group_chat_id(update)
 
@@ -203,22 +202,21 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     prefix = data.split(":")[0]
 
-    # ✅ اولویت ویژه: بررسی عضویت
+    # ✅ دکمه بررسی عضویت
     if data == "check_membership":
         is_joined, missing = await utils.check_membership_force(context.bot, user_id)
         if is_joined:
             await query.answer("✅ عضویت تأیید شد!", show_alert=True)
             await db.ensure_user(query.from_user)
-            text = await build_main_menu_text(user_id)
-            msg = await utils.safe_edit(query, text, utils.MAIN_MENU_KB)
+            msg = await utils.safe_edit(query, await build_main_menu_text(user_id), utils.MAIN_MENU_KB)
             if msg: utils.remember_owner(msg, user_id)
         else:
             missing_txt = "\n".join(f"• {m}" for m in missing) if missing else "نامشخص"
             await query.answer(f"❌ هنوز عضو این‌ها نشدی:\n{missing_txt}", show_alert=True)
         return
 
-    # ✅ بررسی عضویت برای کال‌بک‌های حساس
-    if data in ("menu:main", "kabareh:menu", "game:menu", "mission:menu"):
+    # ✅ بررسی جوین برای کال‌بک‌های حساس
+    if data in ("menu:main", "kabareh:menu", "game:menu", "mission:menu", "prop:menu", "worker:menu", "bank:menu"):
         if not await utils.verify_membership(update, context):
             return
 
@@ -383,15 +381,15 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text: return
     user, user_id, text = update.effective_user, update.effective_user.id, update.message.text.strip()
-    
+
     if text == "لغو" and update.message.reply_to_message:
         await handle_cancel(user_id, update.message); return
-    
+
     if user_id in utils.casino_pending:
         pending = utils.casino_pending.pop(user_id)
         await db.add_balance(user_id, pending["entry"])
         await update.message.reply_text(f"⚠️ بازی لغو شد. {utils.fmt(pending['entry'])} برگشت."); return
-    
+
     state = utils.user_states.get(user_id)
     if not state: return
     action = state["action"]
@@ -536,8 +534,7 @@ async def post_init(app: Application):
     try: await db.daily_payout()
     except Exception as e: logger.exception(f"payout: {e}")
     app.job_queue.run_daily(db.daily_payout, time=time(hour=0, minute=0, tzinfo=utils.TEHRAN), name="daily_payout")
-    
-    # لاگ کردن وضعیت جوین اجباری
+
     if config.REQUIRED_GROUP and config.REQUIRED_GROUP.get("id"):
         logger.info(f"✅ جوین گروه فعال: {config.REQUIRED_GROUP['name']}")
     else:
@@ -550,23 +547,18 @@ async def post_shutdown(app: Application):
 
 def main():
     app = Application.builder().token(config.BOT_TOKEN).post_init(post_init).post_shutdown(post_shutdown).build()
-    
-    # 👇 گروه‌وانچر (اول از همه برای لاگ آیدی گروه)
+
     app.add_handler(MessageHandler(filters.ChatType.GROUPS, group_watcher), group=-1)
-    
-    # دستورات
     app.add_handler(MessageHandler(filters.Regex(r"^زربات$"), cmd_zarbat))
     app.add_handler(MessageHandler(filters.Regex(r"^زر\s*بازی$"), cmd_zarbazi))
     app.add_handler(MessageHandler(filters.Regex(r"^زر$"), cmd_zar))
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("menu", cmd_menu))
-    
-    # سایر
     app.add_handler(ChatMemberHandler(chat_member_handler, ChatMemberHandler.MY_CHAT_MEMBER))
     app.add_handler(MessageHandler(filters.Regex(r"^انتقال زرکوین\s+[\d۰-۹,،]+"), owner_give))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
-    
+
     logger.info("🚀 Running...")
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
