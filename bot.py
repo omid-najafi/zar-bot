@@ -1,5 +1,6 @@
 import logging
 import re
+import asyncio
 from telegram import (
     ChatMember, InlineKeyboardButton, InlineKeyboardMarkup, Update,
 )
@@ -17,7 +18,6 @@ from games import rps, ttt, quiz, penalty, casino
 logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s", level=logging.INFO)
 logger = logging.getLogger("zarcoin")
 
-# --------------- متون و کیبوردهای خاص منوها ---------------
 async def properties_menu_kb(user_id: int):
     summary = await db.get_assets_summary(user_id)
     rows = []
@@ -82,7 +82,6 @@ async def build_assets_text(user_id, asset_type):
         lines.append("📭 هنوز چیزی نخریدی.")
     return "\n".join(lines)
 
-# --------------- Command Handlers ---------------
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id in utils.casino_pending:
@@ -104,25 +103,25 @@ async def cmd_zarbazi(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pending = utils.casino_pending.pop(user_id)
         await db.add_balance(user_id, pending["entry"])
     await db.ensure_user(update.effective_user)
-    msg = await update.message.reply_text(
-        "🎮 <b>بازی‌های زرکوین</b>\n━━━━━━━━━━━━━━━━━━\n💰 حداقل ورودی: <b>1,000</b> زرکوین\n💵 کارمزد: <b>10%</b> از جایزه\n\n✊ سنگ کاغذ قیچی — 1.5x\n❌ دوز — 1.7x\n🧠 کوییز — 1.8x\n⚽ پنالتی — 2x\n🎰 کازینو — تا 15x\n\nیکی رو انتخاب کن:",
-        parse_mode=ParseMode.HTML, reply_markup=utils.back_games_kb()) # Change to game:menu
-    # Wait, games menu needs its own kb. I will define it in bot.py for simplicity
-    msg = await update.message.reply_text("🎮 <b>بازی‌های زرکوین</b>", reply_markup=InlineKeyboardMarkup([
+    kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("✊ سنگ کاغذ قیچی", callback_data="game:rps"), InlineKeyboardButton("❌ دوز", callback_data="game:ttt")],
         [InlineKeyboardButton("🧠 کوییز", callback_data="game:quiz"), InlineKeyboardButton("⚽ پنالتی", callback_data="game:penalty")],
         [InlineKeyboardButton("🎰 کازینو", callback_data="game:casino")],
         [InlineKeyboardButton("🔙 بازگشت", callback_data="menu:main")],
-    ]))
+    ])
+    msg = await update.message.reply_text("🎮 <b>بازی‌های زرکوین</b>\n━━━━━━━━━━━━━━━━━━\n💰 حداقل ورودی: <b>1,000</b> زرکوین\n💵 کارمزد: <b>10%</b> از جایزه\n\n✊ سنگ کاغذ قیچی — 1.5x\n❌ دوز — 1.7x\n🧠 کوییز — 1.8x\n⚽ پنالتی — 2x\n🎰 کازینو — تا 15x\n\nیکی رو انتخاب کن:", parse_mode=ParseMode.HTML, reply_markup=kb)
     utils.remember_owner(msg, user_id)
 
-# --------------- Callback Router ---------------
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data or ""
     user_id = query.from_user.id
 
-    PERSONAL_PREFIXES = ("menu:", "bank:", "prop:", "worker:", "transfer:", "help:", "casino:", "pen:", "game:menu")
+    # ✅ پاسخ اولیه به تلگرام برای جلوگیری از اسپینر بی‌نهایت
+    await query.answer()
+
+    # ✅ اضافه کردن کازینو به لیست منوهای شخصی
+    PERSONAL_PREFIXES = ("menu:", "bank:", "prop:", "worker:", "transfer:", "help:", "casino:", "pen:", "game:menu", "game:casino")
     if data.startswith(PERSONAL_PREFIXES):
         owner = utils.menu_owners.get((query.message.chat_id, query.message.message_id))
         if owner is not None and owner != user_id:
@@ -139,24 +138,24 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     utils.user_states.pop(user_id, None)
 
     if data == "menu:main":
-        await query.answer(); await db.ensure_user(query.from_user)
+        await db.ensure_user(query.from_user)
         msg = await utils.safe_edit(query, await build_main_menu_text(user_id), utils.main_menu_kb()); utils.remember_owner(msg, user_id); return
 
     if data == "bank:menu":
-        await query.answer(); await db.ensure_user(query.from_user)
+        await db.ensure_user(query.from_user)
         msg = await utils.safe_edit(query, await build_bank_text(user_id), utils.bank_menu_kb()); utils.remember_owner(msg, user_id); return
     if data == "bank:deposit":
-        await query.answer(); utils.user_states.set(user_id, {"action": "bank_deposit"})
+        utils.user_states.set(user_id, {"action": "bank_deposit"})
         msg = await utils.safe_edit(query, "💰 <b>واریز به بانک</b>\n\nمبلغ مورد نظر رو بفرست:", utils.back_main_kb()); utils.remember_owner(msg, user_id); return
     if data == "bank:withdraw":
-        await query.answer(); utils.user_states.set(user_id, {"action": "bank_withdraw"})
+        utils.user_states.set(user_id, {"action": "bank_withdraw"})
         msg = await utils.safe_edit(query, "🏧 <b>برداشت از بانک</b>\n\nمبلغ مورد نظر رو بفرست:", utils.back_main_kb()); utils.remember_owner(msg, user_id); return
 
     if data == "prop:menu":
-        await query.answer(); await db.ensure_user(query.from_user)
+        await db.ensure_user(query.from_user)
         msg = await utils.safe_edit(query, await build_assets_text(user_id, "property") + "\n\n👇 از لیست زیر انتخاب کن (حداکثر 5 از هر نوع):", await properties_menu_kb(user_id)); utils.remember_owner(msg, user_id); return
     if data.startswith("prop:select:"):
-        await query.answer(); key = data.split(":")[2]; prop = config.PROPERTIES.get(key)
+        key = data.split(":")[2]; prop = config.PROPERTIES.get(key)
         if not prop: return
         summary = await db.get_assets_summary(user_id); count = summary.get(key, {}).get("count", 0)
         if count >= config.MAX_PER_KEY: await query.answer(f"❌ حداکثر {config.MAX_PER_KEY} عدد مجاز است!", show_alert=True); return
@@ -166,7 +165,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ بله، بخر", callback_data=f"prop:confirm:{key}")], [InlineKeyboardButton("❌ انصراف", callback_data="prop:menu")]])
         msg = await utils.safe_edit(query, text, kb); utils.remember_owner(msg, user_id); return
     if data.startswith("prop:confirm:"):
-        await query.answer(); key = data.split(":")[2]; prop = config.PROPERTIES.get(key)
+        key = data.split(":")[2]; prop = config.PROPERTIES.get(key)
         if not prop: return
         r = await db.buy_asset(user_id, "property", key, prop["price"], prop["income"])
         if r == "ok": await query.answer(f"✅ {prop['name']} خریداری شد!", show_alert=True)
@@ -176,10 +175,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = await utils.safe_edit(query, await build_assets_text(user_id, "property") + "\n\n👇 از لیست زیر انتخاب کن (حداکثر 5 از هر نوع):", await properties_menu_kb(user_id)); utils.remember_owner(msg, user_id); return
 
     if data == "worker:menu":
-        await query.answer(); await db.ensure_user(query.from_user)
+        await db.ensure_user(query.from_user)
         msg = await utils.safe_edit(query, await build_assets_text(user_id, "worker") + "\n\n👇 از لیست زیر انتخاب کن (حداکثر 5 از هر نوع):", await workers_menu_kb(user_id)); utils.remember_owner(msg, user_id); return
     if data.startswith("worker:select:"):
-        await query.answer(); key = data.split(":")[2]; w = config.WORKERS.get(key)
+        key = data.split(":")[2]; w = config.WORKERS.get(key)
         if not w: return
         summary = await db.get_assets_summary(user_id); count = summary.get(key, {}).get("count", 0)
         if count >= config.MAX_PER_KEY: await query.answer(f"❌ حداکثر {config.MAX_PER_KEY} عدد مجاز است!", show_alert=True); return
@@ -189,7 +188,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ بله، استخدام کن", callback_data=f"worker:confirm:{key}")], [InlineKeyboardButton("❌ انصراف", callback_data="worker:menu")]])
         msg = await utils.safe_edit(query, text, kb); utils.remember_owner(msg, user_id); return
     if data.startswith("worker:confirm:"):
-        await query.answer(); key = data.split(":")[2]; w = config.WORKERS.get(key)
+        key = data.split(":")[2]; w = config.WORKERS.get(key)
         if not w: return
         r = await db.buy_asset(user_id, "worker", key, w["price"], w["income"])
         if r == "ok": await query.answer(f"✅ {w['name']} استخدام شد!", show_alert=True)
@@ -199,7 +198,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = await utils.safe_edit(query, await build_assets_text(user_id, "worker") + "\n\n👇 از لیست زیر انتخاب کن (حداکثر 5 از هر نوع):", await workers_menu_kb(user_id)); utils.remember_owner(msg, user_id); return
 
     if data == "game:menu":
-        await query.answer()
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("✊ سنگ کاغذ قیچی", callback_data="game:rps"), InlineKeyboardButton("❌ دوز", callback_data="game:ttt")],
             [InlineKeyboardButton("🧠 کوییز", callback_data="game:quiz"), InlineKeyboardButton("⚽ پنالتی", callback_data="game:penalty")],
@@ -210,7 +208,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         utils.remember_owner(msg, user_id); return
 
     if data == "game:casino":
-        await query.answer()
         msg = await utils.safe_edit(query, "🎰 <b>کازینو زر</b>\n━━━━━━━━━━━━━━━━━━\n💰 حداقل ورودی: <b>10,000</b> زرکوین\n💵 کارمزد: <b>10%</b> از جایزه\n\n🎲 بازی‌ها:\n• 🎰 اسلات — تا 15 برابر\n• 🎲 تاس — تا 3 برابر\n• 🪙 شیر یا خط — 2 برابر\n• 🃏 کارت شانس — 4 برابر\n\nیکی رو انتخاب کن:", casino.casino_menu_kb())
         utils.remember_owner(msg, user_id); return
 
@@ -223,31 +220,30 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             utils.remember_owner(msg, user_id)
         return
 
+    # ✅ هندل کردن کازینو با یک فایل جداگانه
+    if data.startswith("casino:"):
+        await casino.handle_callback(query, context, data, user_id); return
+
     if data.startswith("rps:"): await rps.handle_callback(query, context, data, user_id); return
     if data.startswith("ttt:"): await ttt.handle_callback(query, context, data, user_id); return
     if data.startswith("quiz:"): await quiz.handle_callback(query, context, data, user_id); return
     if data.startswith("pen:"): await penalty.handle_callback(query, context, data, user_id); return
-    if data.startswith("casino:"): await casino.handle_callback(query, context, data, user_id); return
 
     if data == "help:menu":
-        await query.answer()
         msg = await utils.safe_edit(query, config.HELP_TEXT, utils.back_main_kb()); utils.remember_owner(msg, user_id); return
 
     if data == "transfer:start":
-        await query.answer(); utils.user_states.set(user_id, {"action": "transfer_amount"})
+        utils.user_states.set(user_id, {"action": "transfer_amount"})
         msg = await utils.safe_edit(query, "💸 <b>انتقال زرکوین</b>\n\nمبلغ مورد نظر رو بفرست:", utils.back_main_kb()); utils.remember_owner(msg, user_id); return
     if data.startswith("tr:c:"):
-        await query.answer(); await confirm_transfer(query, int(data.split(":")[2])); return
+        await confirm_transfer(query, int(data.split(":")[2])); return
     if data.startswith("tr:x:"):
-        await query.answer(); utils.pending_transfers.pop(user_id, None)
+        utils.pending_transfers.pop(user_id, None)
         msg = await utils.safe_edit(query, "❌ انتقال لغو شد.", utils.back_main_kb()); utils.remember_owner(msg, user_id); return
 
     if data.startswith("room:cancel:"):
-        await query.answer(); await cancel_room(query, data.split(":")[2]); return
+        await cancel_room(query, data.split(":")[2]); return
 
-    await query.answer()
-
-# --------------- Text Router ---------------
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text: return
     user, user_id, text = update.effective_user, update.effective_user.id, update.message.text.strip()
@@ -336,7 +332,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = await update.message.reply_text(f"💸 <b>تأیید انتقال</b>\n━━━━━━━━━━━━━━━━━━\n👤 گیرنده: {utils.escape(recipient['first_name'])}\n💳 کارت: <code>{utils.format_card(recipient['card_number'])}</code>\n💰 مبلغ: <b>{utils.fmt(amount)}</b>\n💵 کارمزد: <b>{utils.fmt(fee)}</b>\n📊 مجموع کسر: <b>{utils.fmt(amount+fee)}</b>\n\nآیا تأیید می‌کنی؟", parse_mode=ParseMode.HTML, reply_markup=utils.transfer_confirm_kb(user_id))
         utils.remember_owner(msg, user_id); return
 
-# --------------- Other Handlers ---------------
 async def handle_cancel(user_id: int, message):
     sess = utils.casino_pending.pop(user_id, None)
     if sess: await db.add_balance(user_id, sess["entry"]); await message.reply_text(f"❌ بازی کازینو لغو شد.\n💰 <b>{utils.fmt(sess['entry'])}</b> زرکوین برگشت.", parse_mode=ParseMode.HTML); return
@@ -391,7 +386,6 @@ async def chat_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         try: await context.bot.send_message(update.effective_chat.id, "✨ <b>زرکوین بات در این گروه فعال شد!</b> ✨\n\n💡 برای شروع بنویس: <code>زربات</code>\n🎮 برای بازی‌ها بنویس: <code>زر بازی</code>", parse_mode=ParseMode.HTML)
         except Exception: pass
 
-# --------------- Main Setup ---------------
 async def post_init(app: Application):
     await db.init_db_pool(); await db.init_db()
     try: await db.daily_payout()
@@ -403,7 +397,6 @@ async def post_shutdown(app: Application):
 
 def main():
     app = Application.builder().token(config.BOT_TOKEN).post_init(post_init).post_shutdown(post_shutdown).build()
-
     app.add_handler(MessageHandler(filters.Regex(r"^زربات$"), cmd_zarbat))
     app.add_handler(MessageHandler(filters.Regex(r"^زر\s*بازی$"), cmd_zarbazi))
     app.add_handler(CommandHandler("start", cmd_start))
@@ -412,7 +405,6 @@ def main():
     app.add_handler(MessageHandler(filters.Regex(r"^انتقال زرکوین\s+[\d۰-۹,،]+"), owner_give))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
-
     logger.info("🚀 Bot starting...")
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
