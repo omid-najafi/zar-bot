@@ -8,14 +8,12 @@ logger = logging.getLogger("zarcoin")
 db_pool = None
 
 SCHEMA_STATEMENTS = [
-    # ✅ ایندکس‌گذاری هوشمند برای افزایش سرعت کوئری‌های تکراری
     "CREATE TABLE IF NOT EXISTS users (user_id BIGINT PRIMARY KEY, username VARCHAR(255), first_name VARCHAR(255), balance BIGINT NOT NULL DEFAULT 0, bank_balance BIGINT NOT NULL DEFAULT 0, card_number VARCHAR(16) UNIQUE, last_daily VARCHAR(10), created_at VARCHAR(32) NOT NULL, INDEX idx_card (card_number)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;",
     "CREATE TABLE IF NOT EXISTS assets (id INT PRIMARY KEY AUTO_INCREMENT, user_id BIGINT NOT NULL, asset_type VARCHAR(32) NOT NULL, asset_key VARCHAR(64) NOT NULL, purchase_price BIGINT NOT NULL, daily_income BIGINT NOT NULL, purchased_at VARCHAR(32) NOT NULL, INDEX idx_user_asset (user_id, asset_type), INDEX idx_user_key (user_id, asset_key)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;"
 ]
 
 async def init_db_pool():
     global db_pool
-    # ✅ افزایش maxsize برای پردازش همزمان درخواست‌های بیشتر
     db_pool = await aiomysql.create_pool(
         host=config.DB_HOST, port=config.DB_PORT, user=config.DB_USER, password=config.DB_PASSWORD,
         db=config.DB_NAME, autocommit=False, minsize=2, maxsize=30, charset="utf8mb4")
@@ -34,7 +32,6 @@ async def init_db():
             await conn.commit()
 
 async def ensure_user(user) -> dict:
-    # ✅ چک کردن کش (بدون تماس با دیتابیس اگر کاربر در کش باشد)
     if user.id in utils.user_cache:
         return utils.user_cache[user.id]
 
@@ -123,11 +120,13 @@ async def transfer_coins(sender_id: int, recipient_id: int, amount: int, fee: in
         except Exception:
             await conn.rollback(); return False
 
+# ✅ رفع باگ: تبدیل قطعی مقادیر به int برای جلوگیری از خطای مقایسه و محدودیت 5 عدد
 async def get_assets_summary(user_id: int) -> dict:
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
             await cur.execute("SELECT asset_key, COUNT(*) as count, SUM(daily_income) as total_income FROM assets WHERE user_id=%s GROUP BY asset_key", (user_id,))
-            return {r["asset_key"]: r for r in await cur.fetchall()}
+            rows = await cur.fetchall()
+            return {r["asset_key"]: {"count": int(r["count"]), "total_income": int(r["total_income"])} for r in rows}
 
 async def get_assets(user_id: int, asset_type: str) -> list[dict]:
     async with db_pool.acquire() as conn:
@@ -141,12 +140,16 @@ async def buy_asset(user_id: int, asset_type: str, asset_key: str, price: int, i
         try:
             await conn.begin()
             async with conn.cursor() as cur:
+                # ✅ چک کردن محدودیت داخل تراکنش (کاملاً امن)
                 await cur.execute("SELECT COUNT(*) FROM assets WHERE user_id=%s AND asset_key=%s", (user_id, asset_key))
-                if int((await cur.fetchone())[0]) >= config.MAX_PER_KEY:
+                count = int((await cur.fetchone())[0])
+                if count >= config.MAX_PER_KEY:
                     await conn.rollback(); return "limit"
+                
                 await cur.execute("UPDATE users SET balance = balance - %s WHERE user_id=%s AND balance >= %s", (price, user_id, price))
                 if cur.rowcount != 1:
                     await conn.rollback(); return "balance"
+                
                 await cur.execute("INSERT INTO assets (user_id, asset_type, asset_key, purchase_price, daily_income, purchased_at) VALUES (%s, %s, %s, %s, %s, %s)", (user_id, asset_type, asset_key, price, income, utils.now_iso()))
             await conn.commit(); return "ok"
         except Exception:
