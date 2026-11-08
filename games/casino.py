@@ -85,17 +85,23 @@ async def handle_callback(query, context, data, user_id):
         entry = pending["entry"]
         
         if cg == "dice":
+            # ✅ انتخاب تصادفی از بین تاس‌های ۶ وجهی تلگرام
+            DICE_EMOJIS = ["🎲", "🎯", "🎳"]
+            emoji = random.choice(DICE_EMOJIS)
+            
             try:
-                dice_msg = await context.bot.send_dice(chat_id=query.message.chat_id, emoji="🎲")
-            except Exception:
+                # ✅ ارسال تاس به صورت ریپلای روی پیام بازی تا مشخص باشد
+                dice_msg = await query.message.reply_dice(emoji=emoji)
+            except Exception as e:
                 await db.add_balance(user_id, entry)
                 await utils.safe_edit(query, "❌ خطا در ارتباط با تلگرام. پول شما برگشت داده شد.", casino_back_kb())
                 await utils.safe_answer(query)
                 return
+                
             await asyncio.sleep(4)
             res = dice_msg.dice.value
             
-            header = f"🎲 <b>تاس</b>\n━━━━━━━━━━━━━━━━━━\n🎯 نتیجه: <b>{res}</b>\nانتخاب تو: "
+            header = f"{emoji} <b>تاس</b>\n━━━━━━━━━━━━━━━━━━\n🎯 نتیجه: <b>{res}</b>\nانتخاب تو: "
             is_win, mult = False, 0
             
             if parts[3] == "exact":
