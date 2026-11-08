@@ -126,3 +126,38 @@ def transfer_confirm_kb(user_id: int):
         InlineKeyboardButton("✅ تأیید", callback_data=f"tr:c:{user_id}"),
         InlineKeyboardButton("❌ انصراف", callback_data=f"tr:x:{user_id}"),
     ]])
+# ═══════════ به‌روزرسانی MAIN_MENU_KB ═══════════
+MAIN_MENU_KB = InlineKeyboardMarkup([
+    [InlineKeyboardButton("🏦 بانک", callback_data="bank:menu"), InlineKeyboardButton("🏠 ملک‌ها", callback_data="prop:menu")],
+    [InlineKeyboardButton("👷 کارگرها", callback_data="worker:menu"), InlineKeyboardButton("🎮 بازی‌ها", callback_data="game:menu")],
+    [InlineKeyboardButton("🎯 ماموریت‌ها", callback_data="mission:menu"), InlineKeyboardButton("💸 انتقال زرکوین", callback_data="transfer:start")],
+    [InlineKeyboardButton("📚 راهنما", callback_data="help:menu")],
+])
+
+# ═══════════ توابع جدید ═══════════
+def today_str() -> str:
+    return datetime.now(TEHRAN).date().isoformat()
+
+def calc_level(total_xp: int) -> tuple[int, int, int]:
+    """
+    محاسبه لول از روی کل XP.
+    خروجی: (level, xp_in_current_level, xp_needed_for_next_level)
+    فرمول: برای رفتن از لول N به N+1 نیاز به 2^N × 1000 XP
+    """
+    level = 1
+    cum = 0
+    while True:
+        cost = (2 ** level) * 1000
+        if total_xp >= cum + cost:
+            cum += cost
+            level += 1
+        else:
+            break
+    xp_in_level = total_xp - cum
+    xp_for_next = (2 ** level) * 1000
+    return level, xp_in_level, xp_for_next
+
+def format_progress_bar(current: int, total: int, length: int = 10) -> str:
+    if total <= 0: return "░" * length
+    filled = min(length, int(current * length / total))
+    return "▓" * filled + "░" * (length - filled)
