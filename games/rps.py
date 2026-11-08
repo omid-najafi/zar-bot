@@ -29,12 +29,13 @@ async def handle_callback(query, context, data, user_id):
     if action == "join":
         room = utils.rooms.get(room_id)
         if not room or room["status"] != "waiting" or user_id in room["players"]:
-            await query.answer("❌ نمی‌تونی وارد بشی", show_alert=True); return
+            await utils.safe_answer(query, "❌ نمی‌تونی وارد بشی", show_alert=True); return
         if utils.find_user_room(user_id):
-            await query.answer("⚠️ در بازی دیگر فعالی", show_alert=True); return
+            await utils.safe_answer(query, "⚠️ در بازی دیگر فعالی", show_alert=True); return
+            
         await db.ensure_user(query.from_user)
         if not await db.deduct_balance(user_id, room["entry"]):
-            await query.answer("❌ موجودی کافی نیست", show_alert=True); return
+            await utils.safe_answer(query, "❌ موجودی کافی نیست", show_alert=True); return
             
         room["players"].append(user_id)
         room["user_names"][user_id] = query.from_user.first_name or str(user_id)
@@ -46,19 +47,19 @@ async def handle_callback(query, context, data, user_id):
                 f"👤 بازیکن ۲: {utils.escape(room['user_names'][room['players'][1]])}\n\nهر دو یک گزینه بزنید:")
         msg = await utils.safe_edit(query, text, kb(room_id))
         utils.remember_owner(msg, room["players"][0])
-        await query.answer()
+        await utils.safe_answer(query)
         
     elif action == "c":
         choice = parts[3]
         room = utils.rooms.get(room_id)
         if not room or room["status"] != "playing" or user_id not in room["players"]:
-            await query.answer("❌ بازی فعال نیست", show_alert=True); return
+            await utils.safe_answer(query, "❌ بازی فعال نیست", show_alert=True); return
         if user_id in room["choices"]:
-            await query.answer("✅ قبلاً انتخاب کردی", show_alert=True); return
+            await utils.safe_answer(query, "✅ قبلاً انتخاب کردی", show_alert=True); return
             
         room["choices"][user_id] = choice
         if len(room["choices"]) < 2:
-            await query.answer("✅ ثبت شد، منتظر حریف...", show_alert=True)
+            await utils.safe_answer(query, "✅ ثبت شد، منتظر حریف...", show_alert=True)
             return
             
         names = {"rock": "سنگ ✊", "paper": "کاغذ ✋", "scissors": "قیچی ✌️"}
@@ -80,5 +81,5 @@ async def handle_callback(query, context, data, user_id):
                 f"👤 {utils.escape(room['user_names'][p1])}: {names[c1]}\n"
                 f"👤 {utils.escape(room['user_names'][p2])}: {names[c2]}\n\n{result}")
         room["status"] = "finished"; utils.rooms.pop(room_id, None)
-        await utils.safe_edit(query, text, utils.back_games_kb())
-        await query.answer()
+        await utils.safe_edit(query, text, utils.BACK_GAMES_KB)
+        await utils.safe_answer(query)
