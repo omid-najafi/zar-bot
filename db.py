@@ -120,7 +120,6 @@ async def transfer_coins(sender_id: int, recipient_id: int, amount: int, fee: in
         except Exception:
             await conn.rollback(); return False
 
-# ✅ رفع باگ: تبدیل قطعی مقادیر به int برای جلوگیری از خطای مقایسه و محدودیت 5 عدد
 async def get_assets_summary(user_id: int) -> dict:
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
@@ -140,7 +139,6 @@ async def buy_asset(user_id: int, asset_type: str, asset_key: str, price: int, i
         try:
             await conn.begin()
             async with conn.cursor() as cur:
-                # ✅ چک کردن محدودیت داخل تراکنش (کاملاً امن)
                 await cur.execute("SELECT COUNT(*) FROM assets WHERE user_id=%s AND asset_key=%s", (user_id, asset_key))
                 count = int((await cur.fetchone())[0])
                 if count >= config.MAX_PER_KEY:
