@@ -13,10 +13,11 @@ async def start_game(update, amount):
     utils.remember_owner(msg, user_id)
 
 async def handle_callback(query, context, data, user_id):
-    if data != "pen:shoot": return
+    if data != "pen:shoot":
+        await utils.safe_answer(query); return
     game = utils.penalty_games.pop(user_id, None)
     if not game:
-        await query.answer("❌ بازی فعالی نداری", show_alert=True); return
+        await utils.safe_answer(query, "❌ بازی فعالی نداری", show_alert=True); return
         
     if random.random() < 0.5:
         full = game["entry"] * 2
@@ -26,5 +27,5 @@ async def handle_callback(query, context, data, user_id):
     else:
         text = f"⚽ <b>دروازه‌بان گرفت!</b> 😢\n\n💸 متأسفانه {utils.fmt(game['entry'])} زرکوین از دست رفت."
         
-    await utils.safe_edit(query, text, utils.back_games_kb())
-    await query.answer()
+    await utils.safe_edit(query, text, utils.BACK_GAMES_KB)
+    await utils.safe_answer(query)
