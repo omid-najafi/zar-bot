@@ -13,34 +13,38 @@ TEHRAN = ZoneInfo("Asia/Tehran")
 PERSIAN_DIGITS = "۰۱۲۳۴۵۶۷۸۹"
 EN_DIGITS = "0123456789"
 
-# دیکشنری‌های اشتراکی
-rooms: dict[str, dict] = {}
-pending_transfers: dict[int, dict] = {}
-penalty_games: dict[int, dict] = {}
-casino_pending: dict[int, dict] = {}
+rooms = {}
+pending_transfers = {}
+penalty_games = {}
+casino_pending = {}
 daily_lock = asyncio.Lock()
 
 class LRUCache:
     def __init__(self, capacity=5000):
         self.cache = OrderedDict()
         self.capacity = capacity
+    
     def get(self, key):
         if key not in self.cache: return None
         self.cache.move_to_end(key)
         return self.cache[key]
+        
     def set(self, key, value):
         self.cache[key] = value
         self.cache.move_to_end(key)
         if len(self.cache) > self.capacity:
             self.cache.popitem(last=False)
-    def pop(self, key):
-        return self.cache.pop(key, None)
+            
+    def pop(self, key, default=None):
+        # ✅ این خط اصلاح شد تا باگ کرش کردن ربات برطرف شود
+        return self.cache.pop(key, default)
+        
     def __contains__(self, key):
         return key in self.cache
 
 menu_owners = LRUCache(10000)
 user_states = LRUCache(10000)
-user_cache: dict[int, tuple[dict, float]] = {}
+user_cache = {}
 
 def fa_to_en(text: str) -> str:
     return (text or "").translate(str.maketrans(PERSIAN_DIGITS, EN_DIGITS))
@@ -98,7 +102,6 @@ async def safe_edit(query, text: str, reply_markup=None):
         if "Message is not modified" in str(e): return query.message
         return await query.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup, disable_web_page_preview=True)
 
-# کیبوردهای عمومی
 def main_menu_kb():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🏦 بانک", callback_data="bank:menu"), InlineKeyboardButton("🏠 ملک‌ها", callback_data="prop:menu")],
