@@ -14,12 +14,13 @@ from telegram.ext import (
 import config
 import utils
 import db
+import kabareh  # ✅ ماژول کاباره
 from games import rps, ttt, quiz, penalty, casino
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s", level=logging.INFO)
 logger = logging.getLogger("zarcoin")
 
-# ═══════════ کیبوردهای محلی ═══════════
+# ═══════════ کیبوردهای ملک و کارگر ═══════════
 async def properties_menu_kb(user_id: int):
     summary = await db.get_assets_summary(user_id)
     rows = []
@@ -69,7 +70,7 @@ async def build_bank_text(user_id):
         f"💰 کیف پول: <b>{utils.fmt(bal)}</b>\n"
         f"🏦 بانک: <b>{utils.fmt(bank)}</b>\n"
         f"📈 سود روزانه (2%): <b>{utils.fmt(interest)}</b>\n\n"
-        "⏰ سود هر شب ساعت <b>00:00</b> به وقت تهران واریز میشه."
+        "⏰ سود هر شب ساعت <b>00:00</b> واریز میشه."
     )
 
 async def build_assets_text(user_id, asset_type):
@@ -84,12 +85,11 @@ async def build_assets_text(user_id, asset_type):
         grouped.setdefault(a["asset_key"], {"count": 0, "daily": 0})
         grouped[a["asset_key"]]["count"] += 1
         grouped[a["asset_key"]]["daily"] += int(a["daily_income"])
-        
-    lines = [f"{emoji} <b>{title}</b>", "━━━━━━━━━━━━━━━━━━", f"📊 تعداد کل: <b>{len(owned)}</b>", f"💵 درآمد روزانه کل: <b>{utils.fmt(total_daily)}</b> زرکوین\n"]
+    lines = [f"{emoji} <b>{title}</b>", "━━━━━━━━━━━━━━━━━━", f"📊 تعداد کل: <b>{len(owned)}</b>", f"💵 درآمد روزانه: <b>{utils.fmt(total_daily)}</b>\n"]
     if grouped:
         for key, data in grouped.items():
             info = store.get(key, {})
-            lines.append(f"{info.get('emoji','•')} {info.get('name', key)}: {data['count']} عدد (سود کل: {utils.fmt(data['daily'])}/روز)")
+            lines.append(f"{info.get('emoji','•')} {info.get('name', key)}: {data['count']} عدد (سود: {utils.fmt(data['daily'])}/روز)")
     else:
         lines.append("📭 هنوز چیزی نخریدی.")
     return "\n".join(lines)
@@ -100,24 +100,14 @@ async def build_missions_text(user_id):
     user = await db.get_user(user_id)
     total_xp = int(user.get("total_xp", 0)) if user else 0
     level, xp_in, xp_next = utils.calc_level(total_xp)
-    
-    lines = [
-        "🎯 <b>ماموریت‌های امروز</b>",
-        "━━━━━━━━━━━━━━━━━━",
-        "هر روز 6 ماموریت جدید برات انتخاب می‌شه!\n",
-    ]
-    
-    completed_count = 0
+    lines = ["🎯 <b>ماموریت‌های امروز</b>", "━━━━━━━━━━━━━━━━━━", "هر روز 6 ماموریت جدید!\n"]
+    completed = 0
     for i, m in enumerate(missions, 1):
         template = config.MISSION_TEMPLATES.get(m["mission_key"], {})
         desc = template.get("desc", m["mission_key"])
-        xp = int(m["xp_reward"])
-        progress = int(m["progress"])
-        target = int(m["target"])
-        is_done = m["completed"]
-        
+        xp = int(m["xp_reward"]); progress = int(m["progress"]); target = int(m["target"]); is_done = m["completed"]
         if is_done:
-            completed_count += 1
+            completed += 1
             lines.append(f"✅ {i}. {desc}")
             lines.append(f"   <i>+{xp} XP دریافت شد</i>\n")
         else:
@@ -125,13 +115,11 @@ async def build_missions_text(user_id):
             bar = utils.format_progress_bar(progress, target, 8)
             lines.append(f"🔄 {i}. {desc}")
             lines.append(f"   {bar} {progress}/{target} ({pct}%) | +{xp} XP\n")
-    
-    lines.append(f"📊 <b>{completed_count}/{config.DAILY_MISSION_COUNT}</b> ماموریت انجام شده")
+    lines.append(f"📊 <b>{completed}/{config.DAILY_MISSION_COUNT}</b> انجام شده")
     lines.append(f"\n⭐ لول: <b>{level}</b> | ✨ XP: {xp_in}/{xp_next}")
-    
     return "\n".join(lines)
 
-# ═══════════ Command Handlers ═══════════
+# ═══════════ Commands ═══════════
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id in utils.casino_pending:
@@ -150,18 +138,13 @@ async def cmd_zarbazi(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pending = utils.casino_pending.pop(user_id)
         await db.add_balance(user_id, pending["entry"])
     await db.ensure_user(update.effective_user)
-    msg = await update.message.reply_text("🎮 <b>بازی‌های زرکوین</b>\n━━━━━━━━━━━━━━━━━━\n💰 حداقل ورودی: <b>1,000</b> زرکوین\n💵 کارمزد: <b>10%</b> از جایزه\n\n✊ سنگ کاغذ قیچی — 1.5x\n❌ دوز — 1.7x\n🧠 کوییز — 1.8x\n⚽ پنالتی — 2x\n🎰 کازینو — تا 15x\n\nیکی رو انتخاب کن:", parse_mode=ParseMode.HTML, reply_markup=utils.GAMES_MENU_KB)
+    msg = await update.message.reply_text("🎮 <b>بازی‌های زرکوین</b>\n━━━━━━━━━━━━━━━━━━\n💰 حداقل ورودی: <b>1,000</b>\n💵 کارمزد: <b>10%</b>\n\nیکی رو انتخاب کن:", parse_mode=ParseMode.HTML, reply_markup=utils.GAMES_MENU_KB)
     utils.remember_owner(msg, user_id)
 
-# ═══════════ «زر» — دریافت زرکوین رایگان ═══════════
 async def cmd_zar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id
-    chat_id = update.effective_chat.id
-    
     user_data = await db.ensure_user(user)
-    
-    # چک کول‌داون
     last_zar = user_data.get("last_zar")
     now = datetime.now(utils.TEHRAN)
     if last_zar:
@@ -170,42 +153,20 @@ async def cmd_zar(update: Update, context: ContextTypes.DEFAULT_TYPE):
             elapsed = (now - last_dt).total_seconds()
             if elapsed < config.ZAR_COOLDOWN_SECONDS:
                 remaining = int(config.ZAR_COOLDOWN_SECONDS - elapsed)
-                mins = remaining // 60
-                secs = remaining % 60
-                await update.message.reply_text(
-                    f"⏳ <b>صبر کن!</b>\n\n"
-                    f"تا دریافت بعدی: <b>{mins}:{secs:02d}</b>",
-                    parse_mode=ParseMode.HTML)
+                mins = remaining // 60; secs = remaining % 60
+                await update.message.reply_text(f"⏳ <b>صبر کن!</b>\n\nتا دریافت بعدی: <b>{mins}:{secs:02d}</b>", parse_mode=ParseMode.HTML)
                 return
-        except Exception:
-            pass
-    
-    # محاسبه جایزه بر اساس لول
+        except Exception: pass
     total_xp = int(user_data.get("total_xp", 0))
     level, _, _ = utils.calc_level(total_xp)
-    min_coin = level * 100
-    max_coin = level * 100 + 100
+    min_coin = level * 100; max_coin = level * 100 + 100
     reward = random.randint(min_coin, max_coin)
-    
-    # پاداش
     await db.add_balance(user_id, reward)
     await db.set_last_zar(user_id, now.isoformat())
-    
-    # پیشرفت ماموریت
     result = await db.progress_mission(user_id, "zar_collect", 1, base_xp=config.BASE_XP_ZAR)
-    
-    text = (
-        f"🌾 <b>زر دریافت شد!</b>\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"💰 <b>+{utils.fmt(reward)}</b> زرکوین\n"
-        f"⭐ لول شما: <b>{level}</b>\n"
-        f"🎁 بازه دریافت: {utils.fmt(min_coin)} - {utils.fmt(max_coin)}\n"
-        f"⏰ دریافت بعدی: <b>5 دقیقه دیگه</b>"
-    )
+    text = f"🌾 <b>زر دریافت شد!</b>\n━━━━━━━━━━━━━━━━━━\n💰 <b>+{utils.fmt(reward)}</b> زرکوین\n⭐ لول: <b>{level}</b>\n🎁 بازه: {utils.fmt(min_coin)} - {utils.fmt(max_coin)}\n⏰ بعدی: <b>5 دقیقه دیگه</b>"
     await update.message.reply_text(text, parse_mode=ParseMode.HTML)
-    
-    # نوتیفیکیشن ماموریت
-    await utils.notify_mission(context, chat_id, result)
+    await utils.notify_mission(context, update.message.chat_id, result)
 
 # ═══════════ Callback Router ═══════════
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -214,26 +175,34 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     prefix = data.split(":")[0]
 
-    # بازی‌ها (بازی‌ها خودشون safe_answer میکنن)
+    # ✅ بازی‌ها (خودشون safe_answer می‌کنن)
     if prefix == "rps": await rps.handle_callback(query, context, data, user_id); return
     if prefix == "ttt": await ttt.handle_callback(query, context, data, user_id); return
     if prefix == "quiz": await quiz.handle_callback(query, context, data, user_id); return
     if prefix == "pen": await penalty.handle_callback(query, context, data, user_id); return
     if prefix == "casino": await casino.handle_callback(query, context, data, user_id); return
 
-    await utils.safe_answer(query)
-
-    PERSONAL_PREFIXES = ("menu", "bank", "prop", "worker", "transfer", "help", "game", "mission")
+    # ✅ چک مالکیت منو برای همه منوهای شخصی (شامل کاباره)
+    PERSONAL_PREFIXES = ("menu", "bank", "prop", "worker", "transfer", "help", "game", "mission", "kabareh")
     if prefix in PERSONAL_PREFIXES:
         owner = utils.menu_owners.get((query.message.chat_id, query.message.message_id))
         if owner is not None and owner != user_id:
-            await utils.safe_answer(query, "❌ این منو برای شما نیست! لطفاً /start بزنید.", show_alert=True); return
+            await utils.safe_answer(query, "❌ این منو برای شما نیست! لطفاً /start بزنید.", show_alert=True)
+            return
+
+    # ✅ روت به کاباره (خودش safe_answer می‌کنه)
+    if prefix == "kabareh":
+        await kabareh.handle_callback(query, context, data, user_id)
+        return
+
+    # بقیه منوها
+    await utils.safe_answer(query)
 
     pending = utils.casino_pending.get(user_id)
     if pending and prefix != "casino":
         utils.casino_pending.pop(user_id, None)
         await db.add_balance(user_id, pending["entry"])
-        await utils.safe_answer(query, f"⚠️ بازی قبلی لغو شد و {utils.fmt(pending['entry'])} زرکوین برگشت.", show_alert=True)
+        await utils.safe_answer(query, f"⚠️ بازی قبلی لغو شد و {utils.fmt(pending['entry'])} برگشت.", show_alert=True)
 
     utils.user_states.pop(user_id, None)
 
@@ -250,100 +219,73 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = await utils.safe_edit(query, await build_bank_text(user_id), utils.BANK_MENU_KB); utils.remember_owner(msg, user_id); return
     if data == "bank:deposit":
         utils.user_states[user_id] = {"action": "bank_deposit"}
-        msg = await utils.safe_edit(query, "💰 <b>واریز به بانک</b>\n\nمبلغ مورد نظر رو بفرست:", utils.BACK_MAIN_KB); utils.remember_owner(msg, user_id); return
+        msg = await utils.safe_edit(query, "💰 <b>واریز</b>\n\nمبلغ:", utils.BACK_MAIN_KB); utils.remember_owner(msg, user_id); return
     if data == "bank:withdraw":
         utils.user_states[user_id] = {"action": "bank_withdraw"}
-        msg = await utils.safe_edit(query, "🏧 <b>برداشت از بانک</b>\n\nمبلغ مورد نظر رو بفرست:", utils.BACK_MAIN_KB); utils.remember_owner(msg, user_id); return
+        msg = await utils.safe_edit(query, "🏧 <b>برداشت</b>\n\nمبلغ:", utils.BACK_MAIN_KB); utils.remember_owner(msg, user_id); return
 
     if data == "prop:menu":
         await db.ensure_user(query.from_user)
-        msg = await utils.safe_edit(query, await build_assets_text(user_id, "property") + "\n\n👇 از لیست زیر انتخاب کن:", await properties_menu_kb(user_id)); utils.remember_owner(msg, user_id); return
+        msg = await utils.safe_edit(query, await build_assets_text(user_id, "property") + "\n\n👇 انتخاب کن:", await properties_menu_kb(user_id)); utils.remember_owner(msg, user_id); return
     if data.startswith("prop:select:"):
         key = data.split(":")[2]; prop = config.PROPERTIES.get(key)
         if not prop: return
-        summary = await db.get_assets_summary(user_id)
-        count = summary.get(key, {}).get("count", 0)
-        if count >= config.MAX_PER_KEY: await utils.safe_answer(query, f"❌ حداکثر {config.MAX_PER_KEY} عدد!", show_alert=True); return
+        summary = await db.get_assets_summary(user_id); count = summary.get(key, {}).get("count", 0)
+        if count >= config.MAX_PER_KEY: await utils.safe_answer(query, "❌ محدودیت!", show_alert=True); return
         user = await db.get_user(user_id)
-        if int(user["balance"]) < prop["price"]: await utils.safe_answer(query, "❌ موجودی کافی نیست", show_alert=True); return
-        
+        if int(user["balance"]) < prop["price"]: await utils.safe_answer(query, "❌ موجودی!", show_alert=True); return
         new_total = (count + 1) * prop['income']
-        text = (
-            f"🏠 <b>تایید خرید ملک</b>\n━━━━━━━━━━━━━━━━━━\n"
-            f"🏷 نام: {prop['emoji']} <b>{prop['name']}</b>\n"
-            f"💰 قیمت: <b>{utils.fmt(prop['price'])}</b>\n"
-            f"📈 سود هر عدد: <b>{utils.fmt(prop['income'])}</b>\n"
-            f"📊 تعداد فعلی: {count}/{config.MAX_PER_KEY}\n"
-            f"💰 سود کل بعد از خرید: <b>{utils.fmt(new_total)}</b>\n\n"
-            f"آیا از خرید مطمئنی؟"
-        )
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ بله، بخر", callback_data=f"prop:confirm:{key}")], [InlineKeyboardButton("❌ انصراف", callback_data="prop:menu")]])
+        text = f"🏠 <b>تایید خرید</b>\n━━━━━━━━━━━━━━━━━━\n{prop['emoji']} <b>{prop['name']}</b>\n💰 {utils.fmt(prop['price'])}\n📈 سود هر عدد: {utils.fmt(prop['income'])}\n📊 تعداد: {count}/{config.MAX_PER_KEY}\n💰 سود کل بعد: {utils.fmt(new_total)}\n\nمطمئنی؟"
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ بخر", callback_data=f"prop:confirm:{key}")], [InlineKeyboardButton("❌ انصراف", callback_data="prop:menu")]])
         msg = await utils.safe_edit(query, text, kb); utils.remember_owner(msg, user_id); return
     if data.startswith("prop:confirm:"):
         key = data.split(":")[2]; prop = config.PROPERTIES.get(key)
         if not prop: return
         r = await db.buy_asset(user_id, "property", key, prop["price"], prop["income"])
         if r == "ok":
-            await utils.safe_answer(query, f"✅ {prop['name']} خریداری شد!", show_alert=True)
+            await utils.safe_answer(query, f"✅ خریداری شد!", show_alert=True)
             result = await db.progress_mission(user_id, "buy_property", 1, base_xp=config.BASE_XP_BUY_ASSET)
             await utils.notify_mission(context, query.message.chat_id, result)
-        elif r == "limit": await utils.safe_answer(query, "❌ محدودیت تعداد!", show_alert=True)
-        elif r == "balance": await utils.safe_answer(query, "❌ موجودی کافی نیست", show_alert=True)
-        else: await utils.safe_answer(query, "❌ خطا", show_alert=True)
-        msg = await utils.safe_edit(query, await build_assets_text(user_id, "property") + "\n\n👇 از لیست زیر انتخاب کن:", await properties_menu_kb(user_id)); utils.remember_owner(msg, user_id); return
+        elif r == "limit": await utils.safe_answer(query, "❌ محدودیت!", show_alert=True)
+        elif r == "balance": await utils.safe_answer(query, "❌ موجودی!", show_alert=True)
+        msg = await utils.safe_edit(query, await build_assets_text(user_id, "property") + "\n\n👇 انتخاب کن:", await properties_menu_kb(user_id)); utils.remember_owner(msg, user_id); return
 
     if data == "worker:menu":
         await db.ensure_user(query.from_user)
-        msg = await utils.safe_edit(query, await build_assets_text(user_id, "worker") + "\n\n👇 از لیست زیر انتخاب کن:", await workers_menu_kb(user_id)); utils.remember_owner(msg, user_id); return
+        msg = await utils.safe_edit(query, await build_assets_text(user_id, "worker") + "\n\n👇 انتخاب کن:", await workers_menu_kb(user_id)); utils.remember_owner(msg, user_id); return
     if data.startswith("worker:select:"):
         key = data.split(":")[2]; w = config.WORKERS.get(key)
         if not w: return
-        summary = await db.get_assets_summary(user_id)
-        count = summary.get(key, {}).get("count", 0)
-        if count >= config.MAX_PER_KEY: await utils.safe_answer(query, f"❌ حداکثر {config.MAX_PER_KEY} عدد!", show_alert=True); return
+        summary = await db.get_assets_summary(user_id); count = summary.get(key, {}).get("count", 0)
+        if count >= config.MAX_PER_KEY: await utils.safe_answer(query, "❌ محدودیت!", show_alert=True); return
         user = await db.get_user(user_id)
-        if int(user["balance"]) < w["price"]: await utils.safe_answer(query, "❌ موجودی کافی نیست", show_alert=True); return
-        
+        if int(user["balance"]) < w["price"]: await utils.safe_answer(query, "❌ موجودی!", show_alert=True); return
         new_total = (count + 1) * w['income']
-        text = (
-            f"👷 <b>تایید استخدام کارگر</b>\n━━━━━━━━━━━━━━━━━━\n"
-            f"🏷 نام: {w['emoji']} <b>{w['name']}</b>\n"
-            f"💰 قیمت: <b>{utils.fmt(w['price'])}</b>\n"
-            f"📈 سود هر عدد: <b>{utils.fmt(w['income'])}</b>\n"
-            f"📊 تعداد فعلی: {count}/{config.MAX_PER_KEY}\n"
-            f"💰 سود کل بعد از خرید: <b>{utils.fmt(new_total)}</b>\n\n"
-            f"آیا از استخدام مطمئنی؟"
-        )
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ بله، استخدام کن", callback_data=f"worker:confirm:{key}")], [InlineKeyboardButton("❌ انصراف", callback_data="worker:menu")]])
+        text = f"👷 <b>تایید استخدام</b>\n━━━━━━━━━━━━━━━━━━\n{w['emoji']} <b>{w['name']}</b>\n💰 {utils.fmt(w['price'])}\n📈 سود هر عدد: {utils.fmt(w['income'])}\n📊 تعداد: {count}/{config.MAX_PER_KEY}\n💰 سود کل بعد: {utils.fmt(new_total)}\n\nمطمئنی؟"
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ استخدام", callback_data=f"worker:confirm:{key}")], [InlineKeyboardButton("❌ انصراف", callback_data="worker:menu")]])
         msg = await utils.safe_edit(query, text, kb); utils.remember_owner(msg, user_id); return
     if data.startswith("worker:confirm:"):
         key = data.split(":")[2]; w = config.WORKERS.get(key)
         if not w: return
         r = await db.buy_asset(user_id, "worker", key, w["price"], w["income"])
         if r == "ok":
-            await utils.safe_answer(query, f"✅ {w['name']} استخدام شد!", show_alert=True)
+            await utils.safe_answer(query, f"✅ استخدام شد!", show_alert=True)
             result = await db.progress_mission(user_id, "buy_worker", 1, base_xp=config.BASE_XP_BUY_ASSET)
             await utils.notify_mission(context, query.message.chat_id, result)
-        elif r == "limit": await utils.safe_answer(query, "❌ محدودیت تعداد!", show_alert=True)
-        elif r == "balance": await utils.safe_answer(query, "❌ موجودی کافی نیست", show_alert=True)
-        else: await utils.safe_answer(query, "❌ خطا", show_alert=True)
-        msg = await utils.safe_edit(query, await build_assets_text(user_id, "worker") + "\n\n👇 از لیست زیر انتخاب کن:", await workers_menu_kb(user_id)); utils.remember_owner(msg, user_id); return
+        elif r == "limit": await utils.safe_answer(query, "❌ محدودیت!", show_alert=True)
+        elif r == "balance": await utils.safe_answer(query, "❌ موجودی!", show_alert=True)
+        msg = await utils.safe_edit(query, await build_assets_text(user_id, "worker") + "\n\n👇 انتخاب کن:", await workers_menu_kb(user_id)); utils.remember_owner(msg, user_id); return
 
     if data == "game:menu":
-        msg = await utils.safe_edit(query, "🎮 <b>بازی‌های زرکوین</b>\n━━━━━━━━━━━━━━━━━━\n💰 حداقل ورودی: <b>1,000</b> زرکوین\n💵 کارمزد: <b>10%</b>\n\n✊ سنگ کاغذ قیچی — 1.5x\n❌ دوز — 1.7x\n🧠 کوییز — 1.8x\n⚽ پنالتی — 2x\n🎰 کازینو — تا 15x\n\nیکی رو انتخاب کن:", utils.GAMES_MENU_KB)
-        utils.remember_owner(msg, user_id); return
-
+        msg = await utils.safe_edit(query, "🎮 <b>بازی‌ها</b>\n━━━━━━━━━━━━━━━━━━\n💰 حداقل: <b>1,000</b>\n💵 کارمزد: <b>10%</b>\n\nیکی رو انتخاب کن:", utils.GAMES_MENU_KB); utils.remember_owner(msg, user_id); return
     if data == "game:casino":
-        msg = await utils.safe_edit(query, "🎰 <b>کازینو زر</b>\n━━━━━━━━━━━━━━━━━━\n💰 حداقل ورودی: <b>10,000</b> زرکوین\n💵 کارمزد: <b>10%</b>\n\n🎰 اسلات | 🎲 تاس | 🪙 شیر یا خط | 🃏 کارت شانس\n\nیکی رو انتخاب کن:", casino.casino_menu_kb())
-        utils.remember_owner(msg, user_id); return
-
+        msg = await utils.safe_edit(query, "🎰 <b>کازینو</b>\n━━━━━━━━━━━━━━━━━━\n💰 حداقل: <b>10,000</b>\n💵 کارمزد: <b>10%</b>\n\nیکی رو انتخاب کن:", casino.casino_menu_kb()); utils.remember_owner(msg, user_id); return
     if data.startswith("game:") and data.count(":") == 1:
         gk = data.split(":", 1)[1]
         if gk in config.GAMES:
             g = config.GAMES[gk]
             utils.user_states[user_id] = {"action": "game_entry", "game": gk}
-            msg = await utils.safe_edit(query, f"{g['emoji']} <b>{g['name']}</b>\n━━━━━━━━━━━━━━━━━━\n💰 حداقل ورودی: <b>{utils.fmt(g['min'])}</b>\n👥 بازیکنان: {g['players']}\n💵 کارمزد: <b>10%</b>\n\nمبلغ ورودی رو بفرست:", utils.BACK_GAMES_KB)
-            utils.remember_owner(msg, user_id)
+            msg = await utils.safe_edit(query, f"{g['emoji']} <b>{g['name']}</b>\n━━━━━━━━━━━━━━━━━━\n💰 حداقل: <b>{utils.fmt(g['min'])}</b>\n👥 بازیکنان: {g['players']}\n💵 کارمزد: <b>10%</b>\n\nمبلغ ورودی:", utils.BACK_GAMES_KB); utils.remember_owner(msg, user_id)
         return
 
     if data == "help:menu":
@@ -351,12 +293,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "transfer:start":
         utils.user_states[user_id] = {"action": "transfer_amount"}
-        msg = await utils.safe_edit(query, "💸 <b>انتقال زرکوین</b>\n\nمبلغ مورد نظر رو بفرست:", utils.BACK_MAIN_KB); utils.remember_owner(msg, user_id); return
+        msg = await utils.safe_edit(query, "💸 <b>انتقال</b>\n\nمبلغ:", utils.BACK_MAIN_KB); utils.remember_owner(msg, user_id); return
     if data.startswith("tr:c:"):
         await confirm_transfer(query, int(data.split(":")[2])); return
     if data.startswith("tr:x:"):
         utils.pending_transfers.pop(user_id, None)
-        msg = await utils.safe_edit(query, "❌ انتقال لغو شد.", utils.BACK_MAIN_KB); utils.remember_owner(msg, user_id); return
+        msg = await utils.safe_edit(query, "❌ لغو شد.", utils.BACK_MAIN_KB); utils.remember_owner(msg, user_id); return
 
     if data.startswith("room:cancel:"):
         await cancel_room(query, data.split(":")[2]); return
@@ -372,7 +314,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id in utils.casino_pending:
         pending = utils.casino_pending.pop(user_id)
         await db.add_balance(user_id, pending["entry"])
-        await update.message.reply_text(f"⚠️ بازی قبلی کازینو لغو شد و {utils.fmt(pending['entry'])} زرکوین برگشت."); return
+        await update.message.reply_text(f"⚠️ بازی لغو شد و {utils.fmt(pending['entry'])} برگشت."); return
 
     state = utils.user_states.get(user_id)
     if not state: return
@@ -385,7 +327,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ok = await db.bank_deposit(user_id, amount) if action == "bank_deposit" else await db.bank_withdraw(user_id, amount)
         utils.user_states.pop(user_id, None)
         if ok:
-            msg = await update.message.reply_text(f"✅ <b>{utils.fmt(amount)}</b> زرکوین {'واریز' if action == 'bank_deposit' else 'برداشت'} شد.", parse_mode=ParseMode.HTML, reply_markup=utils.MAIN_MENU_KB)
+            await update.message.reply_text(f"✅ <b>{utils.fmt(amount)}</b> {'واریز' if action == 'bank_deposit' else 'برداشت'} شد.", parse_mode=ParseMode.HTML, reply_markup=utils.MAIN_MENU_KB)
             if action == "bank_deposit":
                 base = (amount // 10000) * config.BASE_XP_DEPOSIT_10K
                 result = await db.progress_mission(user_id, "deposit_bank", amount, base_xp=min(base, 500))
@@ -398,9 +340,9 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         g = config.GAMES.get(gk)
         amount = utils.parse_amount(text)
         if not amount: await update.message.reply_text("❌ مبلغ نامعتبر"); return
-        if amount < g["min"]: await update.message.reply_text(f"❌ حداقل ورودی {utils.fmt(g['min'])}"); return
+        if amount < g["min"]: await update.message.reply_text(f"❌ حداقل {utils.fmt(g['min'])}"); return
         await db.ensure_user(user)
-        if not await db.deduct_balance(user_id, amount): await update.message.reply_text("❌ موجودی کافی نیست"); return
+        if not await db.deduct_balance(user_id, amount): await update.message.reply_text("❌ موجودی!"); return
         utils.user_states.pop(user_id, None)
 
         if gk == "penalty": await penalty.start_game(update, amount, context)
@@ -414,24 +356,20 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         g = config.CASINO_GAMES.get(cg)
         amount = utils.parse_amount(text)
         if not amount: await update.message.reply_text("❌ مبلغ نامعتبر"); return
-        if amount < g["min"]: await update.message.reply_text(f"❌ حداقل ورودی {utils.fmt(g['min'])}"); return
+        if amount < g["min"]: await update.message.reply_text(f"❌ حداقل {utils.fmt(g['min'])}"); return
         await db.ensure_user(user)
-        if not await db.deduct_balance(user_id, amount): await update.message.reply_text("❌ موجودی کافی نیست"); return
+        if not await db.deduct_balance(user_id, amount): await update.message.reply_text("❌ موجودی!"); return
         utils.user_states.pop(user_id, None)
 
-        if cg == "slots":
-            await casino.play_slots(update, user_id, amount, context)
+        if cg == "slots": await casino.play_slots(update, user_id, amount, context)
         else:
             utils.casino_pending[user_id] = {"entry": amount, "game": cg, "chat_id": update.effective_chat.id}
             if cg == "dice":
-                msg = await update.message.reply_text(f"🎲 <b>تاس</b>\n💰 ورودی: {utils.fmt(amount)}\n\n⚠️ اگر اشتباه حدس بزنی پولت برنمی‌گرده.\n\nانتخاب کن:", parse_mode=ParseMode.HTML, reply_markup=casino.casino_dice_kb())
-                utils.remember_owner(msg, user_id)
+                msg = await update.message.reply_text(f"🎲 <b>تاس</b>\n💰 {utils.fmt(amount)}\n\n⚠️ اگر ببازی پولت برنمی‌گرده.\n\nانتخاب:", parse_mode=ParseMode.HTML, reply_markup=casino.casino_dice_kb()); utils.remember_owner(msg, user_id)
             elif cg == "coin":
-                msg = await update.message.reply_text(f"🪙 <b>شیر یا خط</b>\n💰 ورودی: {utils.fmt(amount)}\n\nانتخاب کن:", parse_mode=ParseMode.HTML, reply_markup=casino.casino_coin_kb())
-                utils.remember_owner(msg, user_id)
+                msg = await update.message.reply_text(f"🪙 <b>شیر یا خط</b>\n💰 {utils.fmt(amount)}\n\nانتخاب:", parse_mode=ParseMode.HTML, reply_markup=casino.casino_coin_kb()); utils.remember_owner(msg, user_id)
             elif cg == "card":
-                msg = await update.message.reply_text(f"🃏 <b>کارت شانس</b>\n💰 ورودی: {utils.fmt(amount)}\n\nکدام خال؟", parse_mode=ParseMode.HTML, reply_markup=casino.casino_card_kb())
-                utils.remember_owner(msg, user_id)
+                msg = await update.message.reply_text(f"🃏 <b>کارت</b>\n💰 {utils.fmt(amount)}\n\nکدام خال؟", parse_mode=ParseMode.HTML, reply_markup=casino.casino_card_kb()); utils.remember_owner(msg, user_id)
         return
 
     if action == "transfer_amount":
@@ -440,22 +378,19 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         fee = int(amount * config.TRANSFER_FEE_RATE) if amount > config.TRANSFER_FEE_MIN else 0
         total = amount + fee
         u = await db.get_user(user_id)
-        if int(u["balance"]) < total: await update.message.reply_text(f"❌ موجودی کافی نیست (نیاز: {utils.fmt(total)})"); return
+        if int(u["balance"]) < total: await update.message.reply_text(f"❌ نیاز: {utils.fmt(total)}"); return
         utils.user_states[user_id] = {"action": "transfer_card", "amount": amount, "fee": fee}
-        msg = await update.message.reply_text(f"💸 مبلغ: <b>{utils.fmt(amount)}</b>\n💵 کارمزد: <b>{utils.fmt(fee)}</b>\n\nشماره کارت مقصد:", parse_mode=ParseMode.HTML, reply_markup=utils.BACK_MAIN_KB)
-        utils.remember_owner(msg, user_id); return
+        msg = await update.message.reply_text(f"💸 مبلغ: <b>{utils.fmt(amount)}</b>\n💵 کارمزد: {utils.fmt(fee)}\n\nکارت مقصد:", parse_mode=ParseMode.HTML, reply_markup=utils.BACK_MAIN_KB); utils.remember_owner(msg, user_id); return
 
     if action == "transfer_card":
         recipient = await db.find_user_by_card(text)
-        if not recipient: await update.message.reply_text("❌ کاربری با این شماره کارت پیدا نشد"); return
-        if recipient["user_id"] == user_id: await update.message.reply_text("❌ به خودت نمی‌تونی انتقال بدی"); return
+        if not recipient: await update.message.reply_text("❌ کاربر پیدا نشد"); return
+        if recipient["user_id"] == user_id: await update.message.reply_text("❌ به خودت نمی‌تونی"); return
         amount, fee = state["amount"], state["fee"]
-        utils.pending_transfers[user_id] = {"recipient_id": recipient["user_id"], "recipient_name": recipient["first_name"] or str(recipient["user_id"]), "amount": amount, "fee": fee, "total": amount+fee}
+        utils.pending_transfers[user_id] = {"recipient_id": recipient["user_id"], "recipient_name": recipient["first_name"] or str(recipient["user_id"]), "amount": amount, "fee": fee}
         utils.user_states.pop(user_id, None)
-        msg = await update.message.reply_text(f"💸 <b>تأیید انتقال</b>\n━━━━━━━━━━━━━━━━━━\n👤 گیرنده: {utils.escape(recipient['first_name'])}\n💰 مبلغ: <b>{utils.fmt(amount)}</b>\n💵 کارمزد: <b>{utils.fmt(fee)}</b>\n\nآیا تأیید می‌کنی؟", parse_mode=ParseMode.HTML, reply_markup=utils.transfer_confirm_kb(user_id))
-        utils.remember_owner(msg, user_id); return
+        msg = await update.message.reply_text(f"💸 <b>تایید انتقال</b>\n━━━━━━━━━━━━━━━━━━\n👤 {utils.escape(recipient['first_name'])}\n💰 {utils.fmt(amount)}\n💵 کارمزد: {utils.fmt(fee)}\n\nتایید؟", parse_mode=ParseMode.HTML, reply_markup=utils.transfer_confirm_kb(user_id)); utils.remember_owner(msg, user_id); return
 
-# ═══════════ Others ═══════════
 async def handle_cancel(user_id: int, message):
     sess = utils.casino_pending.pop(user_id, None)
     if sess: await db.add_balance(user_id, sess["entry"]); await message.reply_text(f"❌ لغو شد. {utils.fmt(sess['entry'])} برگشت."); return
@@ -474,24 +409,22 @@ async def handle_cancel(user_id: int, message):
 async def cancel_room(query, room_id: str):
     room = utils.rooms.get(room_id)
     if not room: await utils.safe_answer(query, "❌ اتاق نیست", show_alert=True); return
-    if query.from_user.id not in room["players"] and query.from_user.id != room["creator"]: await utils.safe_answer(query, "❌ اجازه نداری", show_alert=True); return
+    if query.from_user.id not in room["players"] and query.from_user.id != room["creator"]: await utils.safe_answer(query, "❌ اجازه!", show_alert=True); return
     if room["status"] == "finished": return
     for pid in room["players"]: await db.add_balance(pid, room["entry"])
     room["status"] = "cancelled"; utils.rooms.pop(room_id, None)
-    await utils.safe_edit(query, "❌ بازی لغو شد و پول‌ها برگشت.", utils.BACK_GAMES_KB)
-    await utils.safe_answer(query)
+    await utils.safe_edit(query, "❌ بازی لغو شد.", utils.BACK_GAMES_KB); await utils.safe_answer(query)
 
 async def confirm_transfer(query, owner_id: int):
-    if query.from_user.id != owner_id: await utils.safe_answer(query, "❌ این دکمه برای تو نیست", show_alert=True); return
+    if query.from_user.id != owner_id: await utils.safe_answer(query, "❌ دکمه برای تو نیست", show_alert=True); return
     pending = utils.pending_transfers.pop(owner_id, None)
-    if not pending: await utils.safe_answer(query, "❌ منقضی شده", show_alert=True); return
+    if not pending: await utils.safe_answer(query, "❌ منقضی شد", show_alert=True); return
     if not await db.transfer_coins(owner_id, pending["recipient_id"], pending["amount"], pending["fee"]):
         await utils.safe_answer(query, "❌ موجودی کافی نیست", show_alert=True); await utils.safe_edit(query, "❌ انجام نشد.", utils.BACK_MAIN_KB); return
     await utils.safe_edit(query, f"✅ <b>انتقال انجام شد!</b>\n\n👤 {utils.escape(pending['recipient_name'])}\n💰 {utils.fmt(pending['amount'])}\n💵 کارمزد: {utils.fmt(pending['fee'])}", utils.BACK_MAIN_KB)
     await utils.safe_answer(query)
-    try: await query.bot.send_message(pending["recipient_id"], f"🎁 <b>زرکوین دریافت کردی!</b>\n\n💰 {utils.fmt(pending['amount'])} زرکوین\n👤 از طرف: {utils.escape(query.from_user.first_name)}", parse_mode=ParseMode.HTML)
+    try: await query.bot.send_message(pending["recipient_id"], f"🎁 <b>زرکوین!</b>\n\n💰 {utils.fmt(pending['amount'])}\n👤 از طرف: {utils.escape(query.from_user.first_name)}", parse_mode=ParseMode.HTML)
     except Exception: pass
-    # ماموریت انتقال
     result = await db.progress_mission(owner_id, "transfer", 1, base_xp=config.BASE_XP_TRANSFER)
     await utils.notify_mission(query.bot, query.message.chat_id, result)
 
@@ -506,13 +439,13 @@ async def owner_give(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target = msg.reply_to_message.from_user
     if target.is_bot: await msg.reply_text("❌ به بات نمی‌شه"); return
     await db.ensure_user(target); await db.add_balance(target.id, amount)
-    await msg.reply_text(f"✅ {utils.fmt(amount)} زرکوین به {utils.escape(target.first_name)} واریز شد.", parse_mode=ParseMode.HTML)
+    await msg.reply_text(f"✅ {utils.fmt(amount)} به {utils.escape(target.first_name)} واریز شد.", parse_mode=ParseMode.HTML)
 
 async def chat_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cm = update.my_chat_member
     if not cm or not update.effective_chat or update.effective_chat.type not in ("group", "supergroup"): return
     if cm.new_chat_member.status in (ChatMember.MEMBER, ChatMember.ADMINISTRATOR) and cm.old_chat_member.status in (ChatMember.LEFT, ChatMember.KICKED):
-        try: await context.bot.send_message(update.effective_chat.id, "✨ <b>زرکوین بات در این گروه فعال شد!</b> ✨\n\n💡 برای شروع بنویس: <code>زربات</code>\n🎮 برای بازی‌ها: <code>زر بازی</code>\n🌾 برای دریافت زرکوین: <code>زر</code>", parse_mode=ParseMode.HTML)
+        try: await context.bot.send_message(update.effective_chat.id, "✨ <b>زرکوین بات فعال شد!</b> ✨\n\n💡 <code>زربات</code> | <code>زر بازی</code> | <code>زر</code>", parse_mode=ParseMode.HTML)
         except Exception: pass
 
 async def post_init(app: Application):
