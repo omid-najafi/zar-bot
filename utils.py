@@ -23,12 +23,14 @@ menu_owners = TTLCache(maxsize=10000, ttl=3600)
 user_states = TTLCache(maxsize=10000, ttl=3600)
 user_cache = TTLCache(maxsize=1000, ttl=30)
 
+# ✅ منوی اصلی با دکمه ماموریت‌ها
 MAIN_MENU_KB = InlineKeyboardMarkup([
     [InlineKeyboardButton("🏦 بانک", callback_data="bank:menu"), InlineKeyboardButton("🏠 ملک‌ها", callback_data="prop:menu")],
     [InlineKeyboardButton("👷 کارگرها", callback_data="worker:menu"), InlineKeyboardButton("🎮 بازی‌ها", callback_data="game:menu")],
-    [InlineKeyboardButton("💸 انتقال زرکوین", callback_data="transfer:start")],
+    [InlineKeyboardButton("🎯 ماموریت‌ها", callback_data="mission:menu"), InlineKeyboardButton("💸 انتقال زرکوین", callback_data="transfer:start")],
     [InlineKeyboardButton("📚 راهنما", callback_data="help:menu")],
 ])
+
 BACK_MAIN_KB = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="menu:main")]])
 BACK_GAMES_KB = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت به بازی‌ها", callback_data="game:menu")]])
 BANK_MENU_KB = InlineKeyboardMarkup([
@@ -64,6 +66,9 @@ def format_card(card: str) -> str:
 def now_iso() -> str:
     return datetime.now(TEHRAN).isoformat()
 
+def today_str() -> str:
+    return datetime.now(TEHRAN).date().isoformat()
+
 def escape(text) -> str:
     return html.escape(str(text or ""))
 
@@ -90,14 +95,12 @@ def apply_commission(full_prize: int, rate: float) -> tuple[int, int]:
     commission = int(full_prize * rate)
     return full_prize - commission, commission
 
-# ✅ پاسخ امن به دکمه‌ها (جلوگیری از کرش کردن)
 async def safe_answer(query, text=None, show_alert=False):
     try:
         await query.answer(text=text, show_alert=show_alert)
     except Exception:
         pass
 
-# ✅ ادیت امن پیام‌ها
 async def safe_edit(query, text: str, reply_markup=None):
     try:
         if query.message:
@@ -126,24 +129,9 @@ def transfer_confirm_kb(user_id: int):
         InlineKeyboardButton("✅ تأیید", callback_data=f"tr:c:{user_id}"),
         InlineKeyboardButton("❌ انصراف", callback_data=f"tr:x:{user_id}"),
     ]])
-# ═══════════ به‌روزرسانی MAIN_MENU_KB ═══════════
-MAIN_MENU_KB = InlineKeyboardMarkup([
-    [InlineKeyboardButton("🏦 بانک", callback_data="bank:menu"), InlineKeyboardButton("🏠 ملک‌ها", callback_data="prop:menu")],
-    [InlineKeyboardButton("👷 کارگرها", callback_data="worker:menu"), InlineKeyboardButton("🎮 بازی‌ها", callback_data="game:menu")],
-    [InlineKeyboardButton("🎯 ماموریت‌ها", callback_data="mission:menu"), InlineKeyboardButton("💸 انتقال زرکوین", callback_data="transfer:start")],
-    [InlineKeyboardButton("📚 راهنما", callback_data="help:menu")],
-])
 
-# ═══════════ توابع جدید ═══════════
-def today_str() -> str:
-    return datetime.now(TEHRAN).date().isoformat()
-
+# ═══════════ سیستم لول ═══════════
 def calc_level(total_xp: int) -> tuple[int, int, int]:
-    """
-    محاسبه لول از روی کل XP.
-    خروجی: (level, xp_in_current_level, xp_needed_for_next_level)
-    فرمول: برای رفتن از لول N به N+1 نیاز به 2^N × 1000 XP
-    """
     level = 1
     cum = 0
     while True:
@@ -161,8 +149,9 @@ def format_progress_bar(current: int, total: int, length: int = 10) -> str:
     if total <= 0: return "░" * length
     filled = min(length, int(current * length / total))
     return "▓" * filled + "░" * (length - filled)
+
+# ═══════════ نوتیفیکیشن ماموریت ═══════════
 async def notify_mission(bot_or_context, chat_id: int, result: dict | None):
-    """ارسال نوتیفیکیشن ماموریت به کاربر"""
     if not result or not result.get("completed"):
         return
     
