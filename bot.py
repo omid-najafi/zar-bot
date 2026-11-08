@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""ربات زرکوین (بات زر) - نسخه نهایی باگ‌گیری شده"""
+"""ربات زرکوین (بات زر) - نسخه نهایی با رفع باگ منو و سود 25%"""
 import asyncio
 import html
 import logging
@@ -51,23 +51,28 @@ TRANSFER_FEE_RATE = 0.01
 TRANSFER_FEE_MIN = 1_000_000
 COMMISSION_RATE = 0.10
 
+# ✅ سود همه به نسبت 25% (یعنی 2.5 به 10) تنظیم شد
 PROPERTIES = {
-    "supermarket": {"name": "سوپرمارکت", "price": 500_000, "income": 50_000, "emoji": "🛒"},
-    "fruit":       {"name": "میوه‌فروشی", "price": 800_000, "income": 80_000, "emoji": "🍎"},
-    "butcher":     {"name": "قصابی", "price": 1_000_000, "income": 100_000, "emoji": "🥩"},
-    "pharmacy":    {"name": "داروخانه", "price": 1_800_000, "income": 180_000, "emoji": "💊"},
-    "barber":      {"name": "آرایشگاه", "price": 2_200_000, "income": 220_000, "emoji": "💈"},
-    "clothing":    {"name": "فروشگاه پوشاک", "price": 3_000_000, "income": 300_000, "emoji": "👕"},
-    "bookstore":   {"name": "کتاب‌فروشی", "price": 3_500_000, "income": 350_000, "emoji": "📚"},
-    "mobile":      {"name": "موبایل‌فروشی", "price": 4_000_000, "income": 400_000, "emoji": "📱"},
+    "supermarket": {"name": "سوپرمارکت", "price": 500_000, "income": 125_000, "emoji": "🛒"},
+    "fruit":       {"name": "میوه‌فروشی", "price": 800_000, "income": 200_000, "emoji": "🍎"},
+    "butcher":     {"name": "قصابی", "price": 1_000_000, "income": 250_000, "emoji": "🥩"},
+    "pharmacy":    {"name": "داروخانه", "price": 1_800_000, "income": 450_000, "emoji": "💊"},
+    "barber":      {"name": "آرایشگاه", "price": 2_200_000, "income": 550_000, "emoji": "💈"},
+    "clothing":    {"name": "فروشگاه پوشاک", "price": 3_000_000, "income": 750_000, "emoji": "👕"},
+    "bookstore":   {"name": "کتاب‌فروشی", "price": 3_500_000, "income": 875_000, "emoji": "📚"},
+    "mobile":      {"name": "موبایل‌فروشی", "price": 4_000_000, "income": 1_000_000, "emoji": "📱"},
 }
 
+# ✅ کارگرهای جدید (خلبان، جراح، مدیرعامل) + نسبت 25% اضافه شدند
 WORKERS = {
-    "teacher":   {"name": "معلم", "price": 300_000, "income": 30_000, "emoji": "👨‍🏫"},
-    "doctor":    {"name": "پزشک", "price": 500_000, "income": 50_000, "emoji": "👨‍⚕️"},
-    "driver":    {"name": "راننده", "price": 800_000, "income": 80_000, "emoji": "🚕"},
-    "developer": {"name": "برنامه‌نویس", "price": 1_200_000, "income": 120_000, "emoji": "👨‍💻"},
-    "ai_expert": {"name": "متخصص هوش مصنوعی", "price": 2_000_000, "income": 200_000, "emoji": "🤖"},
+    "teacher":   {"name": "معلم", "price": 300_000, "income": 75_000, "emoji": "👨‍🏫"},
+    "doctor":    {"name": "پزشک", "price": 500_000, "income": 125_000, "emoji": "👨‍⚕️"},
+    "driver":    {"name": "راننده", "price": 800_000, "income": 200_000, "emoji": "🚕"},
+    "developer": {"name": "برنامه‌نویس", "price": 1_200_000, "income": 300_000, "emoji": "👨‍💻"},
+    "ai_expert": {"name": "متخصص هوش مصنوعی", "price": 2_000_000, "income": 500_000, "emoji": "🤖"},
+    "pilot":     {"name": "خلبان", "price": 2_600_000, "income": 650_000, "emoji": "✈️"},
+    "surgeon":   {"name": "جراح", "price": 3_000_000, "income": 750_000, "emoji": "🩺"},
+    "ceo":       {"name": "مدیرعامل", "price": 3_500_000, "income": 875_000, "emoji": "💼"},
 }
 
 GAMES = {
@@ -346,6 +351,13 @@ pending_transfers: dict[int, dict] = {}
 penalty_games: dict[int, dict] = {}
 casino_pending: dict[int, dict] = {}
 daily_lock = asyncio.Lock()
+
+# ✅ دیکشنری برای ذخیره صاحب منو (Chat ID, Message ID) -> User ID
+menu_owners: dict[tuple[int, int], int] = {}
+
+def remember_owner(message, user_id: int):
+    if message:
+        menu_owners[(message.chat_id, message.message_id)] = user_id
 
 # ============================== کمکی‌ها ==============================
 def fa_to_en(text: str) -> str:
@@ -664,7 +676,6 @@ def bank_menu_kb():
         [InlineKeyboardButton("🔙 بازگشت", callback_data="menu:main")],
     ])
 
-# ✅ کوتاه کردن متن دکمه‌های ملک برای جلوگیری از خطای طولانی بودن
 async def properties_menu_kb(user_id: int):
     rows = []
     for key, prop in sorted(PROPERTIES.items(), key=lambda x: x[1]["price"]):
@@ -674,7 +685,6 @@ async def properties_menu_kb(user_id: int):
     rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="menu:main")])
     return InlineKeyboardMarkup(rows)
 
-# ✅ کوتاه کردن متن دکمه‌های کارگر برای جلوگیری از خطای طولانی بودن
 async def workers_menu_kb(user_id: int):
     rows = []
     for key, w in sorted(WORKERS.items(), key=lambda x: x[1]["price"]):
@@ -844,9 +854,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pending = casino_pending.pop(user_id)
         await add_balance(user_id, pending["entry"])
     await ensure_user(update.effective_user)
-    await update.message.reply_text(
+    msg = await update.message.reply_text(
         await build_main_menu_text(user_id),
         parse_mode=ParseMode.HTML, reply_markup=main_menu_kb())
+    remember_owner(msg, user_id)
 
 async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -854,9 +865,10 @@ async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pending = casino_pending.pop(user_id)
         await add_balance(user_id, pending["entry"])
     await ensure_user(update.effective_user)
-    await update.message.reply_text(
+    msg = await update.message.reply_text(
         await build_main_menu_text(user_id),
         parse_mode=ParseMode.HTML, reply_markup=main_menu_kb())
+    remember_owner(msg, user_id)
 
 async def cmd_zarbat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -864,9 +876,10 @@ async def cmd_zarbat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pending = casino_pending.pop(user_id)
         await add_balance(user_id, pending["entry"])
     await ensure_user(update.effective_user)
-    await update.message.reply_text(
+    msg = await update.message.reply_text(
         await build_main_menu_text(user_id),
         parse_mode=ParseMode.HTML, reply_markup=main_menu_kb())
+    remember_owner(msg, user_id)
 
 async def cmd_zarbazi(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -874,7 +887,7 @@ async def cmd_zarbazi(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pending = casino_pending.pop(user_id)
         await add_balance(user_id, pending["entry"])
     await ensure_user(update.effective_user)
-    await update.message.reply_text(
+    msg = await update.message.reply_text(
         "🎮 <b>بازی‌های زرکوین</b>\n"
         "━━━━━━━━━━━━━━━━━━\n"
         "💰 حداقل ورودی: <b>1,000</b> زرکوین\n"
@@ -886,6 +899,7 @@ async def cmd_zarbazi(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🎰 کازینو — تا 15x\n\n"
         "یکی رو انتخاب کن:",
         parse_mode=ParseMode.HTML, reply_markup=games_menu_kb())
+    remember_owner(msg, user_id)
 
 # ============================== لغو با ریپلای ==============================
 async def handle_cancel(user_id: int, message):
@@ -931,6 +945,17 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data or ""
     user_id = query.from_user.id
+
+    # ✅ جلوگیری از استفاده دیگران از منوی شخصی
+    PERSONAL_PREFIXES = (
+        "menu:", "bank:", "prop:", "worker:", "transfer:", "help:", 
+        "casino:", "pen:", "game:menu"
+    )
+    if data.startswith(PERSONAL_PREFIXES):
+        owner = menu_owners.get((query.message.chat_id, query.message.message_id))
+        if owner is not None and owner != user_id:
+            await query.answer("❌ این منو برای شما نیست! لطفاً /start بزنید تا منوی خودتان باز شود.", show_alert=True)
+            return
 
     pending = casino_pending.get(user_id)
     if pending:
@@ -1499,7 +1524,6 @@ async def play_slots_message(update, user_id: int, entry: int):
         )
     await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=casino_back_kb())
 
-# ✅ اصلاح ارسال تاس با context و مدیریت خطا
 async def resolve_dice(query, context, entry: int, choice_type: str, choice_val: str):
     try:
         dice_msg = await context.bot.send_dice(chat_id=query.message.chat_id, emoji="🎲")
@@ -1661,7 +1685,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_cancel(user_id, update.message)
         return
 
-    # ✅ جلوگیری از گیر افتادن پول اگر کاربر توی کازینو پیام متنی فرستاد
     if user_id in casino_pending:
         pending = casino_pending.pop(user_id)
         await add_balance(user_id, pending["entry"])
@@ -1862,21 +1885,24 @@ HELP_TEXT = (
     "🏦 <b>بانک</b>\n"
     "سود روزانه 2% که هر شب ساعت 00:00 واریز میشه.\n"
     "شماره کارت اختصاصی بر اساس آیدی عددی.\n\n"
-    "🏠 <b>ملک‌ها</b> (حداکثر 5 عدد از هر نوع)\n"
-    "🛒 سوپرمارکت 500K → 50K/روز\n"
-    "🍎 میوه‌فروشی 800K → 80K/روز\n"
-    "🥩 قصابی 1M → 100K/روز\n"
-    "💊 داروخانه 1.8M → 180K/روز\n"
-    "💈 آرایشگاه 2.2M → 220K/روز\n"
-    "👕 پوشاک 3M → 300K/روز\n"
-    "📚 کتاب‌فروشی 3.5M → 350K/روز\n"
-    "📱 موبایل 4M → 400K/روز\n\n"
-    "👷 <b>کارگرها</b> (حداکثر 5 عدد از هر نوع)\n"
-    "👨‍🏫 معلم 300K → 30K/روز\n"
-    "👨‍⚕️ پزشک 500K → 50K/روز\n"
-    "🚕 راننده 800K → 80K/روز\n"
-    "👨‍💻 برنامه‌نویس 1.2M → 120K/روز\n"
-    "🤖 متخصص AI 2M → 200K/روز\n\n"
+    "🏠 <b>ملک‌ها</b> (حداکثر 5 عدد از هر نوع - سود 25%)\n"
+    "🛒 سوپرمارکت 500K → 125K/روز\n"
+    "🍎 میوه‌فروشی 800K → 200K/روز\n"
+    "🥩 قصابی 1M → 250K/روز\n"
+    "💊 داروخانه 1.8M → 450K/روز\n"
+    "💈 آرایشگاه 2.2M → 550K/روز\n"
+    "👕 پوشاک 3M → 750K/روز\n"
+    "📚 کتاب‌فروشی 3.5M → 875K/روز\n"
+    "📱 موبایل 4M → 1M/روز\n\n"
+    "👷 <b>کارگرها</b> (حداکثر 5 عدد از هر نوع - سود 25%)\n"
+    "👨‍🏫 معلم 300K → 75K/روز\n"
+    "👨‍⚕️ پزشک 500K → 125K/روز\n"
+    "🚕 راننده 800K → 200K/روز\n"
+    "👨‍💻 برنامه‌نویس 1.2M → 300K/روز\n"
+    "🤖 متخصص AI 2M → 500K/روز\n"
+    "✈️ خلبان 2.6M → 650K/روز\n"
+    "🩺 جراح 3M → 750K/روز\n"
+    "💼 مدیرعامل 3.5M → 875K/روز\n\n"
     "🎮 <b>بازی‌ها</b> (حداقل 1,000 زرکوین)\n"
     "✊ سنگ کاغذ قیچی — 1.5x\n"
     "❌ دوز — 1.7x\n"
