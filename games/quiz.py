@@ -197,19 +197,24 @@ def get_random_q():
     
     kind = random.choice(["add", "sub", "mul"])
     if kind == "add":
-        a, b = random.randint(11, 999), random.randint(11, 999)
+        a, b = random.randint(11, 99), random.randint(11, 99)
         ans = a + b; q = f"{a} + {b} = ?"
     elif kind == "sub":
-        a, b = random.randint(50, 999), random.randint(1, 49)
+        a, b = random.randint(50, 99), random.randint(1, 49)
         ans = a - b; q = f"{a} - {b} = ?"
     else:
-        a, b = random.randint(2, 20), random.randint(2, 20)
+        a, b = random.randint(2, 15), random.randint(2, 15)
         ans = a * b; q = f"{a} × {b} = ?"
-    wrongs = set()
-    while len(wrongs) < 3:
-        w = ans + random.choice([-3,-2,-1,1,2,3,4])
-        if w > 0 and w != ans: wrongs.add(w)
-    opts = [ans] + list(wrongs)
+    
+    offsets = [-4, -3, -2, -1, 1, 2, 3, 4, 5]
+    random.shuffle(offsets)
+    wrongs = []
+    for off in offsets:
+        if len(wrongs) == 3: break
+        w = ans + off
+        if w > 0: wrongs.append(w)
+        
+    opts = [ans] + wrongs
     random.shuffle(opts)
     return {"q": q, "opts": [str(x) for x in opts], "ans": opts.index(ans)}
 
@@ -236,13 +241,13 @@ async def handle_callback(query, context, data, user_id):
     if action == "join":
         room = utils.rooms.get(room_id)
         if not room or room["status"] != "waiting" or user_id in room["players"]:
-            await query.answer("❌ نمی‌تونی وارد بشی", show_alert=True); return
+            await utils.safe_answer(query, "❌ نمی‌تونی وارد بشی", show_alert=True); return
         if utils.find_user_room(user_id):
-            await query.answer("⚠️ در بازی دیگر فعالی", show_alert=True); return
+            await utils.safe_answer(query, "⚠️ در بازی دیگر فعالی", show_alert=True); return
             
         await db.ensure_user(query.from_user)
         if not await db.deduct_balance(user_id, room["entry"]):
-            await query.answer("❌ موجودی کافی نیست", show_alert=True); return
+            await utils.safe_answer(query, "❌ موجودی کافی نیست", show_alert=True); return
             
         room["players"].append(user_id)
         room["user_names"][user_id] = query.from_user.first_name or str(user_id)
@@ -254,12 +259,13 @@ async def handle_callback(query, context, data, user_id):
         text = f"🧠 <b>کوییز</b>\n💰 ورودی: {utils.fmt(room['entry'])}\n\n❓ <b>{utils.escape(q['q'])}</b>\n\nاولین کسی که درست جواب بده برنده‌ست:"
         msg = await utils.safe_edit(query, text, kb(room_id, q["opts"]))
         utils.remember_owner(msg, room["players"][0])
+        await utils.safe_answer(query)
         
     elif action == "a":
         idx = int(parts[3])
         room = utils.rooms.get(room_id)
         if not room or room["status"] != "playing" or room.get("answered"): 
-            await query.answer("❌ تمام شده", show_alert=True); return
+            await utils.safe_answer(query, "❌ تمام شده", show_alert=True); return
             
         q = room["question"]
         if idx == q["ans"]:
@@ -270,6 +276,17 @@ async def handle_callback(query, context, data, user_id):
             room["status"] = "finished"; utils.rooms.pop(room_id, None)
             
             text = f"🧠 <b>نتیجه کوییز</b>\n❓ {utils.escape(q['q'])}\n\n🏆 برنده: <b>{utils.escape(query.from_user.first_name)}</b>\n💰 جایزه: {utils.fmt(full)}\n💵 کارمزد 10%: {utils.fmt(comm)}\n✅ دریافتی: <b>{utils.fmt(prize)}</b>"
-            await utils.safe_edit(query, text, utils.back_games_kb())
+            await utils.safe_edit(query, text, utils.BACK_GAMES_KB)
+            await utils.safe_answer(query)
+            
+            # ✅ ثبت ماموریت‌ها
+            r_p = await db.progress_mission(user_id, "play_quiz", 1, base_xp=config.BASE_XP_PLAY_GAME)
+            await utils.notify_mission(context, room["chat_id"], r_p)
+            
+            r_any = await db.progress_mission(user_id, "play_any_game", 1, base_xp=0)
+            await utils.notify_mission(context, room["chat_id"], r_any)
+            
+            r_win = await db.progress_mission(user_id, "win_quiz", 1, base_xp=config.BASE_XP_WIN_GAME)
+            await utils.notify_mission(context, room["chat_id"], r_win)
         else:
-            await query.answer("❌ اشتباه! دوباره تلاش کن", show_alert=True)
+            await utils.safe_answer(query, "❌ اشتباه! دوباره تلاش کن", show_alert=True)
