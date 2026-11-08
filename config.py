@@ -18,7 +18,7 @@ COMMISSION_RATE = 0.10
 
 # ═══════════ کاباره زر ═══════════
 KABAREH_UNLOCK_COST = 25_000_000
-KABAREH_COOLDOWN_HOURS = 24  # ← کول‌داون 24 ساعته (جدید)
+KABAREH_COOLDOWN_HOURS = 24
 KABAREH_GIRLS = {
     "fox":    {"name": "خانم روباه",   "emoji": "🦊", "price": 2_000_000},
     "angela": {"name": "خانم آنجلا",   "emoji": "👱‍♀️", "price": 3_000_000},
@@ -28,6 +28,23 @@ KABAREH_GIRLS = {
 }
 KABAREH_BABY_COST = 1_000_000
 KABAREH_BABY_XP = 2000
+
+# ═══════════ جوین اجباری ═══════════
+# برای کانال‌های عمومی از @username استفاده کن
+REQUIRED_CHANNELS = [
+    {"name": "کانال ربات زر", "id": "@zarbotchanel", "url": "https://t.me/zarbotchanel"},
+    {"name": "کانال زر ۲", "id": "@zarchanel2", "url": "https://t.me/zarchanel2"},
+]
+
+# برای گروه خصوصی، آیدی عددی لازم است (با -100 شروع می‌شه)
+# ⚠️ اگر id را None بذاری، جوین گروه چک نمی‌شه
+# برای گرفتن آیدی: ربات را به گروه اضافه کن، در گروه یک پیام بفرست،
+# آیدی گروه توی Railway Logs چاپ میشه (با علامت 💬)
+REQUIRED_GROUP = {
+    "name": "گروه پشتیبانی زر",
+    "id": None,  # ← بعد از دیدن لاگ‌ها، آیدی عددی مثل -1001234567890 اینجا بذار
+    "url": "https://t.me/+PZ6RRCYv5TtjMjRk",
+}
 
 # ═══════════ لول و ماموریت ═══════════
 DAILY_MISSION_COUNT = 6
@@ -119,16 +136,3 @@ HELP_TEXT = (
     "🎰 <b>کازینو</b>: حداقل 10,000\n"
     "💸 <b>انتقال</b>: بالای 1M کارمزد 1%"
 )
-# ═══════════ جوین اجباری ═══════════
-# کانال‌ها
-REQUIRED_CHANNELS = [
-    {"name": "کانال زر ۲", "id": -1002375117545, "url": "https://t.me/zarchanel2"},
-    {"name": "کانال ربات زر", "id": -1002289695537, "url": "https://t.me/zarbotchanel"},
-]
-
-# گروه (اختیاری)
-REQUIRED_GROUP = {
-    "name": "گروه پشتیبانی زر",
-    "id": -1002375117545,  # ← این آیدی را بعد از افزودن ربات به گروه جایگزین کن
-    "url": "https://t.me/+PZ6RRCYv5TtjMjRk",
-}
