@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import logging
 import random
 import aiomysql
@@ -15,7 +14,6 @@ SCHEMA_STATEMENTS = [
     "CREATE TABLE IF NOT EXISTS user_missions (id INT PRIMARY KEY AUTO_INCREMENT, user_id BIGINT NOT NULL, mission_key VARCHAR(64) NOT NULL, mission_date VARCHAR(10) NOT NULL, progress INT DEFAULT 0, target INT NOT NULL, xp_reward INT NOT NULL, completed TINYINT DEFAULT 0, INDEX idx_user_date (user_id, mission_date)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;",
 ]
 
-# ✅ ستون‌های جدید که باید به جدول users اضافه بشن
 EXTRA_COLUMNS = [
     ("total_xp", "BIGINT NOT NULL DEFAULT 0"),
     ("level", "INT NOT NULL DEFAULT 1"),
@@ -44,13 +42,12 @@ async def init_db():
         async with conn.cursor() as cur:
             for stmt in SCHEMA_STATEMENTS:
                 await cur.execute(stmt)
-            # اضافه کردن ستون‌های جدید (اگر وجود نداشته باشند)
             for col_name, col_type in EXTRA_COLUMNS:
                 try:
                     await cur.execute(f"ALTER TABLE users ADD COLUMN {col_name} {col_type}")
                     logger.info(f"✅ ستون {col_name} اضافه شد.")
                 except Exception:
-                    pass  # ستون از قبل وجود داره
+                    pass
             await conn.commit()
     logger.info("✅ دیتابیس آماده است.")
 
@@ -58,13 +55,11 @@ async def init_db():
 async def ensure_user(user) -> dict:
     if user.id in utils.user_cache:
         return utils.user_cache[user.id]
-
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
             await cur.execute(
                 "INSERT IGNORE INTO users (user_id, username, first_name, balance, bank_balance, card_number, created_at) VALUES (%s, %s, %s, %s, 0, %s, %s)",
-                (user.id, user.username, user.first_name, config.START_BALANCE, utils.card_number_for(user.id), utils.now_iso())
-            )
+                (user.id, user.username, user.first_name, config.START_BALANCE, utils.card_number_for(user.id), utils.now_iso()))
             await cur.execute("UPDATE users SET username=%s, first_name=%s WHERE user_id=%s", (user.username, user.first_name, user.id))
             await cur.execute("SELECT * FROM users WHERE user_id=%s", (user.id,))
             row = await cur.fetchone()
@@ -77,7 +72,6 @@ async def ensure_user(user) -> dict:
 async def get_user(user_id: int):
     if user_id in utils.user_cache:
         return utils.user_cache[user_id]
-
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
             await cur.execute("SELECT * FROM users WHERE user_id=%s", (user_id,))
@@ -228,13 +222,8 @@ async def daily_payout(context=None):
                 await conn.commit()
 
 
-# ═══════════════════════════════════════════
-# ═══════════ XP & Level ═══════════
-# ═══════════════════════════════════════════
 async def add_xp(user_id: int, amount: int) -> tuple[int, int, bool]:
-    """اضافه کردن XP. خروجی: (new_xp, new_level, leveled_up)"""
-    if amount <= 0:
-        return 0, 1, False
+    if amount <= 0: return 0, 1, False
     utils.invalidate_cache(user_id)
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
@@ -242,68 +231,39 @@ async def add_xp(user_id: int, amount: int) -> tuple[int, int, bool]:
             row = await cur.fetchone()
             old_xp = int(row["total_xp"] or 0) if row else 0
             new_xp = old_xp + amount
-
-            # محاسبه لول جدید
             new_level, _, _ = utils.calc_level(new_xp)
             old_level, _, _ = utils.calc_level(old_xp)
-
             await cur.execute("UPDATE users SET total_xp = %s, level = %s WHERE user_id=%s", (new_xp, new_level, user_id))
             await conn.commit()
-
     return new_xp, new_level, new_level > old_level
 
 
-# ═══════════════════════════════════════════
-# ═══════════ Kabareh (کاباره) ═══════════
-# ═══════════════════════════════════════════
 async def unlock_kabareh(user_id: int) -> bool:
-    """
-    باز کردن کاباره.
-    خروجی: True اگه موفق، False اگر موجودی کم بود یا از قبل باز بود.
-    """
     utils.invalidate_cache(user_id)
     async with db_pool.acquire() as conn:
         try:
             await conn.begin()
             async with conn.cursor() as cur:
-                # 1. چک کردن اینکه قبلاً باز نشده
                 await cur.execute("SELECT kabareh_unlocked, balance FROM users WHERE user_id=%s FOR UPDATE", (user_id,))
                 row = await cur.fetchone()
                 if not row:
-                    await conn.rollback()
-                    return False
-                kabareh_unlocked = int(row[0] or 0)
-                balance = int(row[1] or 0)
-
-                if kabareh_unlocked == 1:
-                    await conn.rollback()
-                    return False  # قبلاً باز شده
-
-                if balance < config.KABAREH_UNLOCK_COST:
-                    await conn.rollback()
-                    return False  # موجودی کافی نیست
-
-                # 2. کسر پول و باز کردن
+                    await conn.rollback(); return False
+                kab = int(row[0] or 0); bal = int(row[1] or 0)
+                if kab == 1 or bal < config.KABAREH_UNLOCK_COST:
+                    await conn.rollback(); return False
                 await cur.execute(
                     "UPDATE users SET balance = balance - %s, kabareh_unlocked = 1 WHERE user_id=%s AND kabareh_unlocked = 0 AND balance >= %s",
-                    (config.KABAREH_UNLOCK_COST, user_id, config.KABAREH_UNLOCK_COST)
-                )
+                    (config.KABAREH_UNLOCK_COST, user_id, config.KABAREH_UNLOCK_COST))
                 if cur.rowcount != 1:
-                    await conn.rollback()
-                    return False
-
+                    await conn.rollback(); return False
             await conn.commit()
-            logger.info(f"✅ Kabareh unlocked for user {user_id}")
             return True
-        except Exception as e:
+        except Exception:
             await conn.rollback()
-            logger.exception(f"unlock_kabareh failed: {e}")
+            logger.exception("unlock_kabareh failed")
             return False
 
 
-# ═══════════════════════════════════════════
-# ═══════════ Missions (ماموریت‌ها) ═══════════
-# ═══════════════════════════════════════════
 async def ensure_daily_missions(user_id: int):
     today = utils.today_str()
     async with db_pool.acquire() as conn:
@@ -312,26 +272,16 @@ async def ensure_daily_missions(user_id: int):
             row = await cur.fetchone()
             if row and row["last_mission_date"] == today:
                 return
-
-            await cur.execute(
-                "UPDATE users SET last_mission_date=%s WHERE user_id=%s AND (last_mission_date IS NULL OR last_mission_date != %s)",
-                (today, user_id, today)
-            )
+            await cur.execute("UPDATE users SET last_mission_date=%s WHERE user_id=%s AND (last_mission_date IS NULL OR last_mission_date != %s)", (today, user_id, today))
             if cur.rowcount == 0:
-                await conn.commit()
-                return
-
+                await conn.commit(); return
             await cur.execute("DELETE FROM user_missions WHERE user_id=%s", (user_id,))
             keys = list(config.MISSION_TEMPLATES.keys())
             n = min(config.DAILY_MISSION_COUNT, len(keys))
             chosen = random.sample(keys, n)
-
             for key in chosen:
                 t = config.MISSION_TEMPLATES[key]
-                await cur.execute(
-                    "INSERT INTO user_missions (user_id, mission_key, mission_date, progress, target, xp_reward) VALUES (%s, %s, %s, 0, %s, %s)",
-                    (user_id, key, today, t["target"], t["xp"])
-                )
+                await cur.execute("INSERT INTO user_missions (user_id, mission_key, mission_date, progress, target, xp_reward) VALUES (%s, %s, %s, 0, %s, %s)", (user_id, key, today, t["target"], t["xp"]))
             await conn.commit()
 
 
@@ -339,65 +289,36 @@ async def get_user_missions(user_id: int) -> list[dict]:
     today = utils.today_str()
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
-            await cur.execute(
-                "SELECT * FROM user_missions WHERE user_id=%s AND mission_date=%s ORDER BY id ASC",
-                (user_id, today)
-            )
+            await cur.execute("SELECT * FROM user_missions WHERE user_id=%s AND mission_date=%s ORDER BY id ASC", (user_id, today))
             return [dict(r) for r in await cur.fetchall()]
 
 
 async def progress_mission(user_id: int, mission_type: str, amount: int = 1, base_xp: int = 0) -> dict | None:
     await ensure_daily_missions(user_id)
     today = utils.today_str()
-
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
-            await cur.execute(
-                "SELECT id, mission_key, progress, target, xp_reward FROM user_missions WHERE user_id=%s AND mission_date=%s AND completed=0",
-                (user_id, today)
-            )
+            await cur.execute("SELECT id, mission_key, progress, target, xp_reward FROM user_missions WHERE user_id=%s AND mission_date=%s AND completed=0", (user_id, today))
             missions = await cur.fetchall()
             completed_missions = []
-
             for m in missions:
                 template = config.MISSION_TEMPLATES.get(m["mission_key"])
-                if not template or template["type"] != mission_type:
-                    continue
-                target = int(m["target"])
-                new_progress = int(m["progress"]) + amount
-
+                if not template or template["type"] != mission_type: continue
+                target = int(m["target"]); new_progress = int(m["progress"]) + amount
                 if new_progress >= target:
                     await cur.execute("UPDATE user_missions SET progress=%s, completed=1 WHERE id=%s", (target, m["id"]))
-                    completed_missions.append({
-                        "key": m["mission_key"],
-                        "desc": template["desc"],
-                        "xp": int(m["xp_reward"])
-                    })
+                    completed_missions.append({"key": m["mission_key"], "desc": template["desc"], "xp": int(m["xp_reward"])})
                 else:
                     await cur.execute("UPDATE user_missions SET progress=%s WHERE id=%s", (new_progress, m["id"]))
             await conn.commit()
-
     mission_xp = sum(cm["xp"] for cm in completed_missions)
     total_xp = base_xp + mission_xp
-    if total_xp <= 0:
-        return None
-
+    if total_xp <= 0: return None
     new_xp, new_level, leveled_up = await add_xp(user_id, total_xp)
-    return {
-        "user_id": user_id,
-        "completed": completed_missions,
-        "mission_xp": mission_xp,
-        "base_xp": base_xp,
-        "total_xp": total_xp,
-        "new_level": new_level,
-        "leveled_up": leveled_up,
-    }
+    return {"user_id": user_id, "completed": completed_missions, "mission_xp": mission_xp, "base_xp": base_xp, "total_xp": total_xp, "new_level": new_level, "leveled_up": leveled_up}
 
 
-# ═══════════════════════════════════════════
-# ═══════════ Zar Cooldown ═══════════
-# ═══════════════════════════════════════════
-async def get_last_zar(user_id: int) -> str | None:
+async def get_last_zar(user_id: int):
     async with db_pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("SELECT last_zar FROM users WHERE user_id=%s", (user_id,))
