@@ -19,12 +19,10 @@ penalty_games = {}
 casino_pending = {}
 daily_lock = asyncio.Lock()
 
-# ✅ کش کردن دیتا برای جلوگیری از تماس‌های تکراری با دیتابیس
 menu_owners = TTLCache(maxsize=10000, ttl=3600)
 user_states = TTLCache(maxsize=10000, ttl=3600)
 user_cache = TTLCache(maxsize=1000, ttl=30)
 
-# ✅ ساخت کیبوردها فقط یک بار در ابتدای اجرا (سرعت بالا)
 MAIN_MENU_KB = InlineKeyboardMarkup([
     [InlineKeyboardButton("🏦 بانک", callback_data="bank:menu"), InlineKeyboardButton("🏠 ملک‌ها", callback_data="prop:menu")],
     [InlineKeyboardButton("👷 کارگرها", callback_data="worker:menu"), InlineKeyboardButton("🎮 بازی‌ها", callback_data="game:menu")],
@@ -92,19 +90,30 @@ def apply_commission(full_prize: int, rate: float) -> tuple[int, int]:
     commission = int(full_prize * rate)
     return full_prize - commission, commission
 
+# ✅ پاسخ امن به دکمه‌ها (جلوگیری از کرش کردن)
+async def safe_answer(query, text=None, show_alert=False):
+    try:
+        await query.answer(text=text, show_alert=show_alert)
+    except Exception:
+        pass
+
+# ✅ ادیت امن پیام‌ها
 async def safe_edit(query, text: str, reply_markup=None):
     try:
-        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup, disable_web_page_preview=True)
-        return query.message
+        if query.message:
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup, disable_web_page_preview=True)
+            return query.message
+        else:
+            return await query.from_user.send_message(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
     except BadRequest as e:
         if "Message is not modified" in str(e):
             return query.message
-        return await query.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup, disable_web_page_preview=True)
-    except RetryAfter as e:
-        await asyncio.sleep(e.retry_after)
-        return await safe_edit(query, text, reply_markup)
+        try:
+            return await query.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup, disable_web_page_preview=True)
+        except Exception:
+            return None
     except Exception:
-        return query.message
+        return None
 
 def join_room_kb(room_id: str, game_key: str):
     return InlineKeyboardMarkup([
