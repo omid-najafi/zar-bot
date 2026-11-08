@@ -1,8 +1,13 @@
 import asyncio
 import random
+import logging
 from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.constants import ParseMode
 import utils, db, config
+
+logger = logging.getLogger("zarcoin")
+
+DICE_FACES = {1: "1️⃣", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣", 5: "5️⃣", 6: "6️⃣"}
 
 def casino_menu_kb():
     return InlineKeyboardMarkup([
@@ -11,7 +16,8 @@ def casino_menu_kb():
         [InlineKeyboardButton("🔙 بازگشت به بازی‌ها", callback_data="game:menu")],
     ])
 
-def casino_back_kb(): return InlineKeyboardMarkup([[InlineKeyboardButton("🎰 بازگشت به کازینو", callback_data="game:casino")]])
+def casino_back_kb(): 
+    return InlineKeyboardMarkup([[InlineKeyboardButton("🎰 بازگشت به کازینو", callback_data="game:casino")]])
 
 def casino_dice_kb():
     return InlineKeyboardMarkup([
@@ -85,36 +91,42 @@ async def handle_callback(query, context, data, user_id):
         entry = pending["entry"]
         
         if cg == "dice":
-            # ✅ انتخاب تصادفی از بین تاس‌های ۶ وجهی تلگرام
-            DICE_EMOJIS = ["🎲", "🎯", "🎳"]
-            emoji = random.choice(DICE_EMOJIS)
-            
+            # ✅ فقط از تاس استاندارد استفاده می‌کنیم
             try:
-                # ✅ ارسال تاس به صورت ریپلای روی پیام بازی تا مشخص باشد
-                dice_msg = await query.message.reply_dice(emoji=emoji)
+                dice_msg = await context.bot.send_dice(
+                    chat_id=query.message.chat_id,
+                    emoji="🎲",
+                    reply_to_message_id=query.message.message_id,
+                    allow_sending_without_reply=True,
+                )
             except Exception as e:
+                logger.error(f"Dice send error: {e}")
                 await db.add_balance(user_id, entry)
                 await utils.safe_edit(query, "❌ خطا در ارتباط با تلگرام. پول شما برگشت داده شد.", casino_back_kb())
                 await utils.safe_answer(query)
                 return
                 
-            await asyncio.sleep(4)
+            await asyncio.sleep(4.5)
             res = dice_msg.dice.value
+            logger.info(f"🎲 Dice result for user {user_id}: {res}")
             
-            header = f"{emoji} <b>تاس</b>\n━━━━━━━━━━━━━━━━━━\n🎯 نتیجه: <b>{res}</b>\nانتخاب تو: "
-            is_win, mult = False, 0
+            face = DICE_FACES.get(res, "🎲")
             
             if parts[3] == "exact":
-                header += f"دقیقاً {parts[4]}\n\n"
-                if res == int(parts[4]): is_win, mult = True, 3.0
+                choice_text = f"دقیقاً {parts[4]}"
+                is_win = (res == int(parts[4]))
+                mult = 3.0
             else:
                 if parts[4] == "even":
-                    header += "زوج\n\n"
-                    if res % 2 == 0: is_win, mult = True, 1.5
+                    choice_text = "زوج"
+                    is_win = (res % 2 == 0)
                 else:
-                    header += "فرد\n\n"
-                    if res % 2 != 0: is_win, mult = True, 1.5
-                    
+                    choice_text = "فرد"
+                    is_win = (res % 2 != 0)
+                mult = 1.5
+            
+            header = f"🎲 <b>تاس</b>\n━━━━━━━━━━━━━━━━━━\n🎯 نتیجه: {face} <b>{res}</b>\nانتخاب تو: {choice_text}\n\n"
+            
             if is_win:
                 full = int(entry * mult)
                 prize, comm = utils.apply_commission(full, config.COMMISSION_RATE)
@@ -122,6 +134,7 @@ async def handle_callback(query, context, data, user_id):
                 text = header + f"🎉 <b>بردی!</b>\n💰 جایزه: {utils.fmt(full)}\n💵 کارمزد 10%: {utils.fmt(comm)}\n✅ دریافتی: <b>{utils.fmt(prize)}</b> زرکوین"
             else:
                 text = header + f"😢 باختی! {utils.fmt(entry)} زرکوین از دست رفت."
+                
             await utils.safe_edit(query, text, casino_back_kb())
             await utils.safe_answer(query)
             
