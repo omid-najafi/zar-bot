@@ -62,15 +62,17 @@ async def handle_callback(query, context, data, user_id):
             await utils.safe_edit(query, f"❌ بازی لغو شد و {utils.fmt(pending['entry'])} زرکوین برگشت.", casino_menu_kb())
         else:
             await utils.safe_edit(query, "❌ بازی فعالی نداشتی.", casino_menu_kb())
+        await utils.safe_answer(query)
         return
 
     if data.count(":") == 1:
         cg = data.split(":")[1]
         if cg in config.CASINO_GAMES:
             g = config.CASINO_GAMES[cg]
-            utils.user_states.set(user_id, {"action": "casino_entry", "game": cg})
+            utils.user_states[user_id] = {"action": "casino_entry", "game": cg}
             msg = await utils.safe_edit(query, f"{g['emoji']} <b>{g['name']}</b>\n━━━━━━━━━━━━━━━━━━\n💰 حداقل ورودی: <b>{utils.fmt(g['min'])}</b> زرکوین\n💵 کارمزد: <b>10%</b> از جایزه\n\nمبلغ ورودی رو بفرست:", casino_back_kb())
             utils.remember_owner(msg, user_id)
+        await utils.safe_answer(query)
         return
 
     if data.startswith("casino:play:"):
@@ -78,7 +80,7 @@ async def handle_callback(query, context, data, user_id):
         cg = parts[2]
         pending = utils.casino_pending.get(user_id)
         if not pending or pending["game"] != cg:
-            await query.answer("❌ بازی فعالی نداری", show_alert=True); return
+            await utils.safe_answer(query, "❌ بازی فعالی نداری", show_alert=True); return
         utils.casino_pending.pop(user_id, None)
         entry = pending["entry"]
         
@@ -88,6 +90,7 @@ async def handle_callback(query, context, data, user_id):
             except Exception:
                 await db.add_balance(user_id, entry)
                 await utils.safe_edit(query, "❌ خطا در ارتباط با تلگرام. پول شما برگشت داده شد.", casino_back_kb())
+                await utils.safe_answer(query)
                 return
             await asyncio.sleep(4)
             res = dice_msg.dice.value
@@ -114,6 +117,7 @@ async def handle_callback(query, context, data, user_id):
             else:
                 text = header + f"😢 باختی! {utils.fmt(entry)} زرکوین از دست رفت."
             await utils.safe_edit(query, text, casino_back_kb())
+            await utils.safe_answer(query)
             
         elif cg == "coin":
             res = random.choice(["heads", "tails"])
@@ -126,6 +130,7 @@ async def handle_callback(query, context, data, user_id):
             else:
                 text = header + f"😢 باختی! {utils.fmt(entry)} زرکوین از دست رفت."
             await utils.safe_edit(query, text, casino_back_kb())
+            await utils.safe_answer(query)
             
         elif cg == "card":
             res = random.choice(list(config.CARD_SUITS.keys()))
@@ -138,3 +143,4 @@ async def handle_callback(query, context, data, user_id):
             else:
                 text = header + f"😢 باختی! {utils.fmt(entry)} زرکوین از دست رفت."
             await utils.safe_edit(query, text, casino_back_kb())
+            await utils.safe_answer(query)
