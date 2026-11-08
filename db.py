@@ -8,15 +8,17 @@ logger = logging.getLogger("zarcoin")
 db_pool = None
 
 SCHEMA_STATEMENTS = [
-    "CREATE TABLE IF NOT EXISTS users (user_id BIGINT PRIMARY KEY, username VARCHAR(255), first_name VARCHAR(255), balance BIGINT NOT NULL DEFAULT 0, bank_balance BIGINT NOT NULL DEFAULT 0, card_number VARCHAR(16) UNIQUE, last_daily VARCHAR(10), created_at VARCHAR(32) NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;",
-    "CREATE TABLE IF NOT EXISTS assets (id INT PRIMARY KEY AUTO_INCREMENT, user_id BIGINT NOT NULL, asset_type VARCHAR(32) NOT NULL, asset_key VARCHAR(64) NOT NULL, purchase_price BIGINT NOT NULL, daily_income BIGINT NOT NULL, purchased_at VARCHAR(32) NOT NULL, INDEX idx_assets (user_id, asset_type, asset_key)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;"
+    # ✅ ایندکس‌گذاری هوشمند برای افزایش سرعت کوئری‌های تکراری
+    "CREATE TABLE IF NOT EXISTS users (user_id BIGINT PRIMARY KEY, username VARCHAR(255), first_name VARCHAR(255), balance BIGINT NOT NULL DEFAULT 0, bank_balance BIGINT NOT NULL DEFAULT 0, card_number VARCHAR(16) UNIQUE, last_daily VARCHAR(10), created_at VARCHAR(32) NOT NULL, INDEX idx_card (card_number)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;",
+    "CREATE TABLE IF NOT EXISTS assets (id INT PRIMARY KEY AUTO_INCREMENT, user_id BIGINT NOT NULL, asset_type VARCHAR(32) NOT NULL, asset_key VARCHAR(64) NOT NULL, purchase_price BIGINT NOT NULL, daily_income BIGINT NOT NULL, purchased_at VARCHAR(32) NOT NULL, INDEX idx_user_asset (user_id, asset_type), INDEX idx_user_key (user_id, asset_key)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;"
 ]
 
 async def init_db_pool():
     global db_pool
+    # ✅ افزایش maxsize برای پردازش همزمان درخواست‌های بیشتر
     db_pool = await aiomysql.create_pool(
         host=config.DB_HOST, port=config.DB_PORT, user=config.DB_USER, password=config.DB_PASSWORD,
-        db=config.DB_NAME, autocommit=False, minsize=1, maxsize=20, charset="utf8mb4")
+        db=config.DB_NAME, autocommit=False, minsize=2, maxsize=30, charset="utf8mb4")
     logger.info("✅ Connection Pool به MySQL ساخته شد.")
 
 async def close_db_pool():
@@ -32,10 +34,9 @@ async def init_db():
             await conn.commit()
 
 async def ensure_user(user) -> dict:
-    now = datetime.now(utils.TEHRAN).timestamp()
+    # ✅ چک کردن کش (بدون تماس با دیتابیس اگر کاربر در کش باشد)
     if user.id in utils.user_cache:
-        cached_data, ts = utils.user_cache[user.id]
-        if now - ts < 60: return cached_data
+        return utils.user_cache[user.id]
 
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
@@ -45,14 +46,12 @@ async def ensure_user(user) -> dict:
             row = await cur.fetchone()
             await conn.commit()
             user_dict = dict(row)
-            utils.user_cache[user.id] = (user_dict, now)
+            utils.user_cache[user.id] = user_dict
             return user_dict
 
 async def get_user(user_id: int):
-    now = datetime.now(utils.TEHRAN).timestamp()
     if user_id in utils.user_cache:
-        cached_data, ts = utils.user_cache[user_id]
-        if now - ts < 60: return cached_data
+        return utils.user_cache[user_id]
 
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
@@ -60,7 +59,7 @@ async def get_user(user_id: int):
             row = await cur.fetchone()
             if row:
                 user_dict = dict(row)
-                utils.user_cache[user_id] = (user_dict, now)
+                utils.user_cache[user_id] = user_dict
                 return user_dict
             return None
 
