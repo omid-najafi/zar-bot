@@ -161,3 +161,24 @@ def format_progress_bar(current: int, total: int, length: int = 10) -> str:
     if total <= 0: return "░" * length
     filled = min(length, int(current * length / total))
     return "▓" * filled + "░" * (length - filled)
+async def notify_mission(bot_or_context, chat_id: int, result: dict | None):
+    """ارسال نوتیفیکیشن ماموریت به کاربر"""
+    if not result or not result.get("completed"):
+        return
+    
+    bot = bot_or_context.bot if hasattr(bot_or_context, "bot") else bot_or_context
+    
+    msg = "🎯 <b>ماموریت کامل شد!</b>\n━━━━━━━━━━━━━━━━━━\n"
+    for m in result["completed"]:
+        msg += f"✅ {m['desc']}\n   <i>+{m['xp']} XP</i>\n"
+    
+    total = result.get("total_xp", 0)
+    msg += f"\n✨ مجموع: <b>+{total} XP</b>"
+    
+    if result.get("leveled_up"):
+        msg += f"\n\n🎉 <b>لول آپ!</b>\nبه سطح <b>{result['new_level']}</b> رسیدی! 🌟"
+    
+    try:
+        await bot.send_message(chat_id, msg, parse_mode=ParseMode.HTML)
+    except Exception:
+        pass
