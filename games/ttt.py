@@ -99,6 +99,22 @@ async def handle_callback(query, context, data, user_id):
             room["status"] = "finished"; utils.rooms.pop(room_id, None)
             await utils.safe_edit(query, text, utils.BACK_GAMES_KB)
             await utils.safe_answer(query)
+            
+            # ✅ ثبت ماموریت‌ها
+            r_p1 = await db.progress_mission(p1, "play_ttt", 1, base_xp=config.BASE_XP_PLAY_GAME)
+            r_p2 = await db.progress_mission(p2, "play_ttt", 1, base_xp=config.BASE_XP_PLAY_GAME)
+            await utils.notify_mission(context, room["chat_id"], r_p1)
+            await utils.notify_mission(context, room["chat_id"], r_p2)
+            
+            r_any_p1 = await db.progress_mission(p1, "play_any_game", 1, base_xp=0)
+            r_any_p2 = await db.progress_mission(p2, "play_any_game", 1, base_xp=0)
+            await utils.notify_mission(context, room["chat_id"], r_any_p1)
+            await utils.notify_mission(context, room["chat_id"], r_any_p2)
+            
+            if winner in ("X", "O"):
+                w_id = p1 if winner == "X" else p2
+                r_win = await db.progress_mission(w_id, "win_ttt", 1, base_xp=config.BASE_XP_WIN_GAME)
+                await utils.notify_mission(context, room["chat_id"], r_win)
             return
             
         room["turn"] = p2 if room["turn"] == p1 else p1
