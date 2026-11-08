@@ -49,19 +49,19 @@ async def handle_callback(query, context, data, user_id):
     action = parts[1]
     
     if action == "noop":
-        await query.answer(); return
+        await utils.safe_answer(query); return
         
     room_id = parts[2]
     if action == "join":
         room = utils.rooms.get(room_id)
         if not room or room["status"] != "waiting" or user_id in room["players"]:
-            await query.answer("❌ نمی‌تونی وارد بشی", show_alert=True); return
+            await utils.safe_answer(query, "❌ نمی‌تونی وارد بشی", show_alert=True); return
         if utils.find_user_room(user_id):
-            await query.answer("⚠️ در بازی دیگر فعالی", show_alert=True); return
+            await utils.safe_answer(query, "⚠️ در بازی دیگر فعالی", show_alert=True); return
             
         await db.ensure_user(query.from_user)
         if not await db.deduct_balance(user_id, room["entry"]):
-            await query.answer("❌ موجودی کافی نیست", show_alert=True); return
+            await utils.safe_answer(query, "❌ موجودی کافی نیست", show_alert=True); return
             
         room["players"].append(user_id)
         room["user_names"][user_id] = query.from_user.first_name or str(user_id)
@@ -70,16 +70,17 @@ async def handle_callback(query, context, data, user_id):
         room["turn"] = room["players"][0]
         room["symbols"] = {room["players"][0]: "X", room["players"][1]: "O"}
         await render(query, room)
-        await query.answer()
+        await utils.safe_answer(query)
         
     elif action == "m":
         idx = int(parts[3])
         room = utils.rooms.get(room_id)
-        if not room or room["status"] != "playing": return
+        if not room or room["status"] != "playing":
+            await utils.safe_answer(query, "❌ بازی فعال نیست", show_alert=True); return
         if user_id != room["turn"]:
-            await query.answer("⏳ نوبت تو نیست", show_alert=True); return
+            await utils.safe_answer(query, "⏳ نوبت تو نیست", show_alert=True); return
         if room["board"][idx]:
-            await query.answer("❌ خانه پر است", show_alert=True); return
+            await utils.safe_answer(query, "❌ خانه پر است", show_alert=True); return
             
         p1, p2 = room["players"]
         room["board"][idx] = room["symbols"][user_id]
@@ -96,10 +97,10 @@ async def handle_callback(query, context, data, user_id):
                 await db.add_balance(w_id, prize)
                 text = f"🏆 <b>{utils.escape(room['user_names'][w_id])}</b> برنده شد!\n💰 جایزه: {utils.fmt(full)}\n💵 کارمزد 10%: {utils.fmt(comm)}\n✅ دریافتی: <b>{utils.fmt(prize)}</b>"
             room["status"] = "finished"; utils.rooms.pop(room_id, None)
-            await utils.safe_edit(query, text, utils.back_games_kb())
-            await query.answer()
+            await utils.safe_edit(query, text, utils.BACK_GAMES_KB)
+            await utils.safe_answer(query)
             return
             
         room["turn"] = p2 if room["turn"] == p1 else p1
         await render(query, room)
-        await query.answer()
+        await utils.safe_answer(query)
