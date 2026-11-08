@@ -2,9 +2,9 @@ import html
 import secrets
 import string
 import asyncio
-from collections import OrderedDict
-from datetime import datetime
+from datetime import datetime, time
 from zoneinfo import ZoneInfo
+from cachetools import TTLCache
 from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.constants import ParseMode
 from telegram.error import BadRequest
@@ -19,32 +19,12 @@ penalty_games = {}
 casino_pending = {}
 daily_lock = asyncio.Lock()
 
-class LRUCache:
-    def __init__(self, capacity=5000):
-        self.cache = OrderedDict()
-        self.capacity = capacity
-    
-    def get(self, key):
-        if key not in self.cache: return None
-        self.cache.move_to_end(key)
-        return self.cache[key]
-        
-    def set(self, key, value):
-        self.cache[key] = value
-        self.cache.move_to_end(key)
-        if len(self.cache) > self.capacity:
-            self.cache.popitem(last=False)
-            
-    def pop(self, key, default=None):
-        # ✅ این خط اصلاح شد تا باگ کرش کردن ربات برطرف شود
-        return self.cache.pop(key, default)
-        
-    def __contains__(self, key):
-        return key in self.cache
+# ✅ کش فوق‌سریع: حداکثر ۱۰,۰۰۰ آیتم، منقضی شده بعد از ۱ ساعت (برای جلوگیری از پر شدن رم)
+menu_owners = TTLCache(maxsize=10000, ttl=3600)
+user_states = TTLCache(maxsize=10000, ttl=3600)
 
-menu_owners = LRUCache(10000)
-user_states = LRUCache(10000)
-user_cache = {}
+# ✅ کش کاربران: ۱۰۰۰ کاربر، منقضی شده بعد از ۳۰ ثانیه (کاهش شدید فشار روی دیتابیس)
+user_cache = TTLCache(maxsize=1000, ttl=30)
 
 def fa_to_en(text: str) -> str:
     return (text or "").translate(str.maketrans(PERSIAN_DIGITS, EN_DIGITS))
@@ -85,7 +65,7 @@ def find_user_room(user_id: int):
 
 def remember_owner(message, user_id: int):
     if message:
-        menu_owners.set((message.chat_id, message.message_id), user_id)
+        menu_owners[(message.chat_id, message.message_id)] = user_id
 
 def invalidate_cache(user_id):
     user_cache.pop(user_id, None)
@@ -95,12 +75,17 @@ def apply_commission(full_prize: int, rate: float) -> tuple[int, int]:
     return full_prize - commission, commission
 
 async def safe_edit(query, text: str, reply_markup=None):
+    """✅ بهینه‌سازی: در صورت خطا پیام جدید نمی‌فرستد تا از شلوغی و کندی جلوگیری شود"""
     try:
         await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup, disable_web_page_preview=True)
         return query.message
     except BadRequest as e:
-        if "Message is not modified" in str(e): return query.message
+        if "Message is not modified" in str(e):
+            return query.message
+        # اگر پیام قدیمی بود و ارور داد، پیام جدید می‌فرستیم
         return await query.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup, disable_web_page_preview=True)
+    except Exception:
+        return query.message
 
 def main_menu_kb():
     return InlineKeyboardMarkup([
