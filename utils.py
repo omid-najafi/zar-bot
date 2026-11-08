@@ -27,11 +27,11 @@ menu_owners = TTLCache(maxsize=10000, ttl=3600)
 user_states = TTLCache(maxsize=10000, ttl=3600)
 user_cache = TTLCache(maxsize=1000, ttl=30)
 
-# ✅ کش بررسی عضویت (5 دقیقه)
-_membership_cache = TTLCache(maxsize=1000, ttl=300)
-# ✅ گروه‌های شناسایی شده (برای لاگ آیدی)
+# ✅ کش بررسی عضویت — فقط برای نتایج مثبت
+_membership_cache = TTLCache(maxsize=1000, ttl=600)
 _logged_groups = set()
 
+# ═══════════ منوی اصلی — ایموجی‌های اصلی ═══════════
 MAIN_MENU_KB = InlineKeyboardMarkup([
     [InlineKeyboardButton("🏦 بانک", callback_data="bank:menu"), InlineKeyboardButton("🏠 ملک‌ها", callback_data="prop:menu")],
     [InlineKeyboardButton("👷 کارگرها", callback_data="worker:menu"), InlineKeyboardButton("🎮 بازی‌ها", callback_data="game:menu")],
@@ -173,7 +173,7 @@ async def notify_mission(bot_or_context, chat_id: int, result: dict | None):
 
 
 # ═══════════════════════════════════════════
-# ═══════════ جوین اجباری ═══════════
+# ═══════════ جوین اجباری (اصلاح‌شده) ═══════════
 # ═══════════════════════════════════════════
 
 def get_join_keyboard():
@@ -204,60 +204,62 @@ def get_join_text(missing: list = None) -> str:
 
 async def check_membership_quiet(bot, user_id: int, force: bool = False) -> tuple[bool, list]:
     """
-    بررسی عضویت. خروجی: (is_joined, missing_names)
-    با کش 5 دقیقه‌ای برای کاهش API calls.
+    ✅ اصلاح‌شده: فقط نتایج مثبت کش می‌شن.
+    کاربر بعد از عضویت فوراً شناسایی میشه.
     """
     if not force and user_id in _membership_cache:
-        return _membership_cache[user_id]
-    
+        cached = _membership_cache[user_id]
+        if cached[0]:  # فقط True کش میشه
+            return cached
+
     missing = []
-    
-    # بررسی کانال‌ها
+
     for ch in config.REQUIRED_CHANNELS:
         try:
             member = await bot.get_chat_member(chat_id=ch["id"], user_id=user_id)
-            if member.status in ("left", "kicked"):
+            status = getattr(member, "status", None)
+            if status in ("left", "kicked"):
                 missing.append(ch["name"])
         except Exception as e:
-            # اگر ربات نتونه چک کنه (مثلاً ادمین نیست)، خطا رو لاگ می‌کنیم ولی کاربر رو بلاک نمی‌کنیم
-            logger.warning(f"⚠️ چک عضویت کانال {ch['name']} ناموفق: {e}")
-    
-    # بررسی گروه (اگر id تنظیم شده باشه)
+            logger.warning(f"⚠️ چک عضویت {ch['name']} ناموفق: {e}")
+
     if config.REQUIRED_GROUP:
         group_id = config.REQUIRED_GROUP.get("id")
         if group_id:
             try:
                 member = await bot.get_chat_member(chat_id=group_id, user_id=user_id)
-                if member.status in ("left", "kicked"):
+                status = getattr(member, "status", None)
+                if status in ("left", "kicked"):
                     missing.append(config.REQUIRED_GROUP["name"])
             except Exception as e:
                 logger.warning(f"⚠️ چک عضویت گروه ناموفق: {e}")
-        else:
-            # فقط یک بار لاگ کن
-            if not getattr(check_membership_quiet, "_warned", False):
-                logger.warning("⚠️ REQUIRED_GROUP.id تنظیم نشده - بررسی جوین گروه غیرفعال است")
-                check_membership_quiet._warned = True
-    
+
     result = (len(missing) == 0, missing)
-    _membership_cache[user_id] = result
+
+    # ✅ فقط نتایج مثبت کش می‌شن
+    if result[0]:
+        _membership_cache[user_id] = result
+    else:
+        _membership_cache.pop(user_id, None)
+
     return result
 
 
+async def check_membership_force(bot, user_id: int) -> tuple[bool, list]:
+    return await check_membership_quiet(bot, user_id, force=True)
+
+
 async def verify_membership(update, context) -> bool:
-    """
-    بررسی عضویت و اگر عضو نبود، پیام جوین بفرست.
-    خروجی: True اگر عضو باشه (ادامه بده)، False اگر نباشه (پیام فرستاده شد).
-    """
     user_id = update.effective_user.id
     bot = context.bot
-    
+
     is_joined, missing = await check_membership_quiet(bot, user_id)
     if is_joined:
         return True
-    
+
     text = get_join_text(missing)
     kb = get_join_keyboard()
-    
+
     try:
         if update.callback_query:
             await update.callback_query.answer("❌ هنوز عضو نشدی!", show_alert=True)
@@ -266,17 +268,11 @@ async def verify_membership(update, context) -> bool:
             await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
     except Exception as e:
         logger.warning(f"ارسال پیام جوین ناموفق: {e}")
-    
+
     return False
 
 
-async def check_membership_force(bot, user_id: int) -> tuple[bool, list]:
-    """بررسی عضویت با نادیده گرفتن کش (برای دکمه «عضو شدم»)"""
-    return await check_membership_quiet(bot, user_id, force=True)
-
-
 def log_group_chat_id(update):
-    """لاگ کردن آیدی گروه برای ادمین (فقط یک بار در هر گروه)"""
     if not update.effective_chat: return
     if update.effective_chat.type not in ("group", "supergroup"): return
     chat_id = update.effective_chat.id
