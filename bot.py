@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""ربات زرکوین (بات زر) - نسخه نهایی با تاییدیه خرید و تاس تلگرام"""
+"""ربات زرکوین (بات زر) - نسخه نهایی باگ‌گیری شده"""
 import asyncio
 import html
 import logging
@@ -277,7 +277,6 @@ QUIZ_QUESTIONS = [
     {"q": "کدام شهر به شهر ابدی معروف است؟", "opts": ["رم", "آتن", "قاهره", "بغداد"], "ans": 0},
 ]
 
-# ============================== ژنراتور سوال ریاضی ==============================
 def generate_math_question() -> dict:
     kind = random.choice(["add", "sub", "mul", "div"])
     if kind == "add":
@@ -308,12 +307,10 @@ def generate_math_question() -> dict:
     random.shuffle(opts)
     return {"q": q, "opts": [str(x) for x in opts], "ans": opts.index(answer)}
 
-
 def get_random_quiz_question() -> dict:
     if random.random() < 0.7:
         return random.choice(QUIZ_QUESTIONS)
     return generate_math_question()
-
 
 # ============================== اسکیمای MySQL ==============================
 SCHEMA_STATEMENTS = [
@@ -417,7 +414,6 @@ async def safe_edit(query, text: str, reply_markup=None):
         except Exception:
             logger.exception("safe_edit failed")
 
-
 # ============================== اتصال DB ==============================
 async def init_db_pool():
     global db_pool
@@ -440,7 +436,6 @@ async def init_db():
                 await cur.execute(stmt)
             await conn.commit()
     logger.info("✅ جداول MySQL آماده شدند.")
-
 
 # ============================== توابع DB ==============================
 async def ensure_user(user) -> dict:
@@ -606,7 +601,6 @@ async def find_user_by_card(card: str):
             row = await cur.fetchone()
             return dict(row) if row else None
 
-
 # ============================== سود روزانه ==============================
 async def daily_payout(context: ContextTypes.DEFAULT_TYPE = None):
     async with daily_lock:
@@ -646,7 +640,6 @@ async def daily_payout(context: ContextTypes.DEFAULT_TYPE = None):
                 await conn.commit()
         logger.info("💰 سود روزانه %s پرداخت شد.", today_iso)
 
-
 # ============================== کیبوردها ==============================
 def main_menu_kb():
     return InlineKeyboardMarkup([
@@ -671,30 +664,22 @@ def bank_menu_kb():
         [InlineKeyboardButton("🔙 بازگشت", callback_data="menu:main")],
     ])
 
-# ✅ منوی عمودی برای ملک‌ها
+# ✅ کوتاه کردن متن دکمه‌های ملک برای جلوگیری از خطای طولانی بودن
 async def properties_menu_kb(user_id: int):
     rows = []
     for key, prop in sorted(PROPERTIES.items(), key=lambda x: x[1]["price"]):
         count = await count_assets_by_key(user_id, key)
-        label = f"{prop['emoji']} {prop['name']} | قیمت: {fmt(prop['price'])} | سود: {fmt(prop['income'])}/روز"
-        if count >= MAX_PER_KEY:
-            label += " (تکمیل)"
-        else:
-            label += f" ({count}/{MAX_PER_KEY})"
+        label = f"{prop['emoji']} {prop['name']} | {fmt(prop['price'])} | +{fmt(prop['income'])} ({count}/{MAX_PER_KEY})"
         rows.append([InlineKeyboardButton(label, callback_data=f"prop:select:{key}")])
     rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="menu:main")])
     return InlineKeyboardMarkup(rows)
 
-# ✅ منوی عمودی برای کارگرها
+# ✅ کوتاه کردن متن دکمه‌های کارگر برای جلوگیری از خطای طولانی بودن
 async def workers_menu_kb(user_id: int):
     rows = []
     for key, w in sorted(WORKERS.items(), key=lambda x: x[1]["price"]):
         count = await count_assets_by_key(user_id, key)
-        label = f"{w['emoji']} {w['name']} | قیمت: {fmt(w['price'])} | سود: {fmt(w['income'])}/روز"
-        if count >= MAX_PER_KEY:
-            label += " (تکمیل)"
-        else:
-            label += f" ({count}/{MAX_PER_KEY})"
+        label = f"{w['emoji']} {w['name']} | {fmt(w['price'])} | +{fmt(w['income'])} ({count}/{MAX_PER_KEY})"
         rows.append([InlineKeyboardButton(label, callback_data=f"worker:select:{key}")])
     rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="menu:main")])
     return InlineKeyboardMarkup(rows)
@@ -721,7 +706,6 @@ def casino_menu_kb():
 def casino_back_kb():
     return InlineKeyboardMarkup([[InlineKeyboardButton("🎰 بازگشت به کازینو", callback_data="game:casino")]])
 
-# ✅ کیبورد جدید تاس با گزینه‌های زوج/فرد و دقیق
 def casino_dice_kb():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("دقیقاً 1 (3x)", callback_data="casino:play:dice:exact:1"),
@@ -793,7 +777,6 @@ def transfer_confirm_kb(user_id: int):
         InlineKeyboardButton("❌ انصراف", callback_data=f"tr:x:{user_id}"),
     ]])
 
-
 # ============================== متن‌ها ==============================
 async def build_main_menu_text(user_id):
     user = await get_user(user_id)
@@ -854,27 +837,42 @@ async def build_assets_text(user_id, asset_type):
         lines.append("📭 هنوز چیزی نخریدی.")
     return "\n".join(lines)
 
-
 # ============================== کامندها ==============================
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id in casino_pending:
+        pending = casino_pending.pop(user_id)
+        await add_balance(user_id, pending["entry"])
     await ensure_user(update.effective_user)
     await update.message.reply_text(
-        await build_main_menu_text(update.effective_user.id),
+        await build_main_menu_text(user_id),
         parse_mode=ParseMode.HTML, reply_markup=main_menu_kb())
 
 async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id in casino_pending:
+        pending = casino_pending.pop(user_id)
+        await add_balance(user_id, pending["entry"])
     await ensure_user(update.effective_user)
     await update.message.reply_text(
-        await build_main_menu_text(update.effective_user.id),
+        await build_main_menu_text(user_id),
         parse_mode=ParseMode.HTML, reply_markup=main_menu_kb())
 
 async def cmd_zarbat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id in casino_pending:
+        pending = casino_pending.pop(user_id)
+        await add_balance(user_id, pending["entry"])
     await ensure_user(update.effective_user)
     await update.message.reply_text(
-        await build_main_menu_text(update.effective_user.id),
+        await build_main_menu_text(user_id),
         parse_mode=ParseMode.HTML, reply_markup=main_menu_kb())
 
 async def cmd_zarbazi(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id in casino_pending:
+        pending = casino_pending.pop(user_id)
+        await add_balance(user_id, pending["entry"])
     await ensure_user(update.effective_user)
     await update.message.reply_text(
         "🎮 <b>بازی‌های زرکوین</b>\n"
@@ -888,7 +886,6 @@ async def cmd_zarbazi(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🎰 کازینو — تا 15x\n\n"
         "یکی رو انتخاب کن:",
         parse_mode=ParseMode.HTML, reply_markup=games_menu_kb())
-
 
 # ============================== لغو با ریپلای ==============================
 async def handle_cancel(user_id: int, message):
@@ -929,14 +926,12 @@ async def handle_cancel(user_id: int, message):
 
     await message.reply_text("ℹ️ بازی فعالی برای لغو نداری.")
 
-
 # ============================== Callback router ==============================
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data or ""
     user_id = query.from_user.id
 
-    # اگه بازی کازینو در جریانه و کاربر داره چیز دیگه‌ای می‌زنه، پولش رو برگردون
     pending = casino_pending.get(user_id)
     if pending:
         is_valid_choice = data.startswith(f"casino:play:{pending['game']}:")
@@ -1163,10 +1158,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         entry = pending["entry"]
         
         if cg == "dice":
-            # ✅ در بازی تاس، نوع انتخاب (exact/parity) و مقدار فرستاده میشه
             choice_type = parts[3]
             choice_val = parts[4]
-            await resolve_dice(query, entry, choice_type, choice_val)
+            await resolve_dice(query, context, entry, choice_type, choice_val)
         elif cg == "coin":
             await resolve_coin(query, entry, parts[3])
         elif cg == "card":
@@ -1240,7 +1234,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await query.answer()
-
 
 # ============================== بازی‌های دو نفره ==============================
 async def start_game_entry(query, gk: str):
@@ -1468,7 +1461,6 @@ async def penalty_shoot(query, context):
             f"💸 متأسفانه {fmt(game['entry'])} زرکوین از دست رفت.",
             back_games_kb())
 
-
 # ============================== بازی کازینو ==============================
 async def play_slots_message(update, user_id: int, entry: int):
     reels = [random.choice(SLOT_SYMBOLS) for _ in range(3)]
@@ -1507,17 +1499,17 @@ async def play_slots_message(update, user_id: int, entry: int):
         )
     await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=casino_back_kb())
 
-# ✅ تابع جدید تاس با ایموجی تلگرام
-async def resolve_dice(query, entry: int, choice_type: str, choice_val: str):
-    # ارسال ایموجی تاس
+# ✅ اصلاح ارسال تاس با context و مدیریت خطا
+async def resolve_dice(query, context, entry: int, choice_type: str, choice_val: str):
     try:
-        dice_msg = await query.message.reply_dice(emoji="🎲")
-    except Exception:
-        dice_msg = await query.message.chat.send_dice(emoji="🎲")
+        dice_msg = await context.bot.send_dice(chat_id=query.message.chat_id, emoji="🎲")
+    except Exception as e:
+        logger.error(f"Error sending dice: {e}")
+        await add_balance(query.from_user.id, entry)
+        await safe_edit(query, "❌ خطا در ارتباط با تلگرام. پول شما برگشت داده شد.", casino_back_kb())
+        return
     
-    # صبر برای انیمیشن
     await asyncio.sleep(4)
-    
     result_num = dice_msg.dice.value
     
     header = (
@@ -1535,7 +1527,7 @@ async def resolve_dice(query, entry: int, choice_type: str, choice_val: str):
         if result_num == int(choice_val):
             is_win = True
             multiplier = 3.0
-    else: # parity
+    else: 
         if choice_val == "even":
             header += "زوج\n\n"
             if result_num % 2 == 0:
@@ -1561,7 +1553,6 @@ async def resolve_dice(query, entry: int, choice_type: str, choice_val: str):
         text = header + f"😢 باختی! {fmt(entry)} زرکوین از دست رفت."
         
     await safe_edit(query, text, casino_back_kb())
-
 
 async def resolve_coin(query, entry: int, choice: str):
     result = random.choice(["heads", "tails"])
@@ -1609,7 +1600,6 @@ async def resolve_card(query, entry: int, choice: str):
         text = header + f"😢 باختی! {fmt(entry)} زرکوین از دست رفت."
     await safe_edit(query, text, casino_back_kb())
 
-
 # ============================== انتقال ==============================
 async def confirm_transfer(query, owner_id: int):
     if query.from_user.id != owner_id:
@@ -1637,7 +1627,6 @@ async def confirm_transfer(query, owner_id: int):
     except Exception:
         pass
 
-
 # ============================== ادمین ==============================
 async def owner_give(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
@@ -1660,7 +1649,6 @@ async def owner_give(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"✅ <b>{fmt(amount)}</b> زرکوین به {escape(target.first_name)} واریز شد.",
         parse_mode=ParseMode.HTML)
 
-
 # ============================== پیام‌های متنی ==============================
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
@@ -1671,6 +1659,15 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text == "لغو" and update.message.reply_to_message:
         await handle_cancel(user_id, update.message)
+        return
+
+    # ✅ جلوگیری از گیر افتادن پول اگر کاربر توی کازینو پیام متنی فرستاد
+    if user_id in casino_pending:
+        pending = casino_pending.pop(user_id)
+        await add_balance(user_id, pending["entry"])
+        await update.message.reply_text(
+            f"⚠️ بازی قبلی کازینو لغو شد و {fmt(pending['entry'])} زرکوین برگشت."
+        )
         return
 
     state = user_states.get(user_id)
@@ -1833,7 +1830,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode=ParseMode.HTML, reply_markup=transfer_confirm_kb(user_id))
         return
 
-
 # ============================== خوش‌آمد گروه ==============================
 async def chat_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cm = update.my_chat_member
@@ -1852,7 +1848,6 @@ async def chat_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
                 parse_mode=ParseMode.HTML)
         except Exception:
             logger.exception("welcome failed")
-
 
 # ============================== راهنما ==============================
 HELP_TEXT = (
@@ -1899,7 +1894,6 @@ HELP_TEXT = (
     "<code>انتقال زرکوین 5000</code>"
 )
 
-
 # ============================== main ==============================
 async def post_init(app: Application):
     await init_db_pool()
@@ -1911,10 +1905,8 @@ async def post_init(app: Application):
     app.job_queue.run_daily(
         daily_payout, time=time(hour=0, minute=0, tzinfo=TEHRAN), name="daily_payout")
 
-
 async def post_shutdown(app: Application):
     await close_db_pool()
-
 
 def main():
     app = Application.builder().token(BOT_TOKEN) \
@@ -1934,7 +1926,6 @@ def main():
 
     logger.info("🚀 Bot starting...")
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
-
 
 if __name__ == "__main__":
     main()
