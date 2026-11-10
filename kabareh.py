@@ -97,7 +97,7 @@ def _confirm_kb(girl_key: str):
 
 def _menu_text(user) -> str:
     is_unlocked = bool(user.get("kabareh_unlocked", 0)) if user else False
-    
+
     if not is_unlocked:
         return (
             "🎭 <b>کاباره زر</b>\n"
@@ -111,16 +111,16 @@ def _menu_text(user) -> str:
             "• 10% بچه‌دار (سه برابر منهای 1M + 2000 XP)\n\n"
             "برای باز کردن کلیک کن 👇"
         )
-    
+
     base = "🎭 <b>کاباره زر</b>\n━━━━━━━━━━━━━━━━━━\n"
-    
+
     on_cd, txt = _check_cooldown(user)
     if on_cd:
         base += f"⏳ <b>صبر کن عزیزم!</b>\n"
         base += f"تا کاباره بعدی: <b>{txt}</b>\n\n"
     else:
         base += "با کی می‌خوای حال کنی؟ 😏\n\n"
-    
+
     base += "🎲 شانس‌ها:\n"
     base += "60% باخت | 30% برد | 10% بچه‌دار"
     return base
@@ -179,14 +179,14 @@ async def handle_callback(query, context, data, user_id):
             girl_key = parts[2] if len(parts) > 2 else ""
             if girl_key not in config.KABAREH_GIRLS:
                 await utils.safe_answer(query, "❌ نامعتبر", show_alert=True); return
-            
+
             user = await db.get_user(user_id)
-            
+
             # چک کول‌داون
             on_cd, txt = _check_cooldown(user)
             if on_cd:
                 await utils.safe_answer(query, f"⏳ صبر کن!\n\nتا کاباره بعدی: <b>{txt}</b>", show_alert=True); return
-            
+
             msg = await utils.safe_edit(query, _confirm_text(girl_key), _confirm_kb(girl_key))
             if msg: utils.remember_owner(msg, user_id)
             await utils.safe_answer(query); return
@@ -201,16 +201,18 @@ async def handle_callback(query, context, data, user_id):
             user = await db.get_user(user_id)
             if not user:
                 await utils.safe_answer(query, "❌ خطا", show_alert=True); return
-            
+
             # چک کول‌داون
             on_cd, txt = _check_cooldown(user)
             if on_cd:
                 await utils.safe_answer(query, f"⏳ صبر کن عزیزم!\n\nتا کاباره بعدی: <b>{txt}</b>", show_alert=True); return
-            
+
             price = girl["price"]
             if int(user["balance"]) < price:
                 await utils.safe_answer(query, f"❌ نیاز: {utils.fmt(price)}\nموجودی: {utils.fmt(int(user['balance']))}", show_alert=True); return
 
+            # واریز درآمد انباشته قبل از کسر
+            await db.accrue_income(user_id)
             if not await db.deduct_balance(user_id, price):
                 await utils.safe_answer(query, "❌ موجودی!", show_alert=True); return
 
@@ -261,6 +263,10 @@ async def handle_callback(query, context, data, user_id):
             msg = await utils.safe_edit(query, text, _menu_kb(True))
             if msg: utils.remember_owner(msg, user_id)
             await utils.safe_answer(query)
+
+            # ثبت ماموریت کاباره
+            result = await db.progress_mission(user_id, "kabareh", 1, base_xp=config.BASE_XP_KABAREH)
+            await utils.notify_mission(context, query.message.chat_id, result)
 
             if baby:
                 new_xp, new_level, leveled_up = await db.add_xp(user_id, config.KABAREH_BABY_XP)
