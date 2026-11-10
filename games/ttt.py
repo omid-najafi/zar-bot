@@ -16,9 +16,9 @@ def kb(room):
         for c in range(3):
             i = r * 3 + c
             v = room["board"][i]
-            if v == "X": row.append(InlineKeyboardButton("❌", callback_data="ttt:noop"))
-            elif v == "O": row.append(InlineKeyboardButton("⭕", callback_data="ttt:noop"))
-            else: row.append(InlineKeyboardButton("⬜", callback_data=f"ttt:m:{room['id']}:{i}"))
+            if v == "X": row.append(InlineKeyboardButton("🔴 ❌", callback_data="ttt:noop"))
+            elif v == "O": row.append(InlineKeyboardButton("🔴 ⭕", callback_data="ttt:noop"))
+            else: row.append(InlineKeyboardButton("🔴 ⬜", callback_data=f"ttt:m:{room['id']}:{i}"))
         rows.append(row)
     return InlineKeyboardMarkup(rows)
 
