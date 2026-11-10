@@ -219,7 +219,7 @@ def get_random_q():
     return {"q": q, "opts": [str(x) for x in opts], "ans": opts.index(ans)}
 
 def kb(room_id, opts):
-    return InlineKeyboardMarkup([[InlineKeyboardButton(f"🔴 {o}", callback_data=f"quiz:a:{room_id}:{i}")] for i, o in enumerate(opts)])
+    return InlineKeyboardMarkup([[InlineKeyboardButton(f"{o}", callback_data=f"quiz:a:{room_id}:{i}")] for i, o in enumerate(opts)])
 
 async def create_room(update, user, amount):
     rid = utils.new_room_id()
