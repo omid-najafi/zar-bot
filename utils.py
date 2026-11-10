@@ -17,21 +17,28 @@ TEHRAN = ZoneInfo("Asia/Tehran")
 PERSIAN_DIGITS = "۰۱۲۳۴۵۶۷۸۹"
 EN_DIGITS = "0123456789"
 
+# ═══════════ وضعیت‌های درون حافظه ═══════════
 rooms = {}
 pending_transfers = {}
 penalty_games = {}
 casino_pending = {}
 daily_lock = asyncio.Lock()
+hourly_lock = asyncio.Lock()
 
-menu_owners = TTLCache(maxsize=10000, ttl=3600)
+# ═══════════ کش‌ها ═══════════
+# مالکیت منو: (chat_id, message_id) -> set(user_id)
+# از set استفاده می‌کنیم تا بازی‌های دونفره هم پشتیبانی شوند
+menu_owners = TTLCache(maxsize=20000, ttl=7200)
 user_states = TTLCache(maxsize=10000, ttl=3600)
-user_cache = TTLCache(maxsize=1000, ttl=30)
+user_cache = TTLCache(maxsize=2000, ttl=30)
+# کش خلاصه دارایی‌ها (هر کاربر)
+assets_summary_cache = TTLCache(maxsize=2000, ttl=60)
 
-# ✅ کش بررسی عضویت — فقط برای نتایج مثبت
-_membership_cache = TTLCache(maxsize=1000, ttl=600)
+# کش بررسی عضویت — فقط برای نتایج مثبت
+_membership_cache = TTLCache(maxsize=2000, ttl=600)
 _logged_groups = set()
 
-# ═══════════ منوی اصلی — ایموجی‌های اصلی ═══════════
+# ═══════════ منوی اصلی ═══════════
 MAIN_MENU_KB = InlineKeyboardMarkup([
     [InlineKeyboardButton("🏦 بانک", callback_data="bank:menu"), InlineKeyboardButton("🏠 ملک‌ها", callback_data="prop:menu")],
     [InlineKeyboardButton("👷 کارگرها", callback_data="worker:menu"), InlineKeyboardButton("🎮 بازی‌ها", callback_data="game:menu")],
@@ -94,12 +101,44 @@ def find_user_room(user_id: int):
             return rid
     return None
 
-def remember_owner(message, user_id: int):
-    if message:
-        menu_owners[(message.chat_id, message.message_id)] = user_id
 
+# ═══════════ مالکیت منو ═══════════
+def remember_owner(message, user_id: int):
+    """ثبت مالکیت پیام برای یک کاربر"""
+    if message:
+        menu_owners[(message.chat_id, message.message_id)] = {user_id}
+
+def remember_owners(message, user_ids):
+    """ثبت مالکیت پیام برای چند کاربر (مثل بازی‌های دونفره)"""
+    if message:
+        menu_owners[(message.chat_id, message.message_id)] = set(user_ids)
+
+def add_owner(message, user_id: int):
+    """افزودن یک کاربر به مالکیت پیام موجود"""
+    if message:
+        key = (message.chat_id, message.message_id)
+        existing = menu_owners.get(key)
+        if existing is None:
+            menu_owners[key] = {user_id}
+        else:
+            existing.add(user_id)
+            menu_owners[key] = existing  # بازنویسی برای TTLCache
+
+def is_menu_owner(chat_id: int, message_id: int, user_id: int) -> bool:
+    """بررسی اینکه آیا کاربر مالک این پیام است"""
+    owner_set = menu_owners.get((chat_id, message_id))
+    if owner_set is None:
+        return True  # اگر مالکیتی ثبت نشده، اجازه بده (مثل پیام‌های قدیمی)
+    return user_id in owner_set
+
+
+# ═══════════ کش کاربر و دارایی ═══════════
 def invalidate_cache(user_id):
     user_cache.pop(user_id, None)
+
+def invalidate_assets_cache(user_id):
+    assets_summary_cache.pop(user_id, None)
+
 
 def apply_commission(full_prize: int, rate: float) -> tuple[int, int]:
     commission = int(full_prize * rate)
@@ -173,7 +212,7 @@ async def notify_mission(bot_or_context, chat_id: int, result: dict | None):
 
 
 # ═══════════════════════════════════════════
-# ═══════════ جوین اجباری (اصلاح‌شده) ═══════════
+# ═══════════ جوین اجباری ═══════════
 # ═══════════════════════════════════════════
 
 def get_join_keyboard():
@@ -203,13 +242,10 @@ def get_join_text(missing: list = None) -> str:
 
 
 async def check_membership_quiet(bot, user_id: int, force: bool = False) -> tuple[bool, list]:
-    """
-    ✅ اصلاح‌شده: فقط نتایج مثبت کش می‌شن.
-    کاربر بعد از عضویت فوراً شناسایی میشه.
-    """
+    """بررسی عضویت — فقط نتایج مثبت کش می‌شوند"""
     if not force and user_id in _membership_cache:
         cached = _membership_cache[user_id]
-        if cached[0]:  # فقط True کش میشه
+        if cached[0]:
             return cached
 
     missing = []
@@ -236,7 +272,6 @@ async def check_membership_quiet(bot, user_id: int, force: bool = False) -> tupl
 
     result = (len(missing) == 0, missing)
 
-    # ✅ فقط نتایج مثبت کش می‌شن
     if result[0]:
         _membership_cache[user_id] = result
     else:
