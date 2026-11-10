@@ -1,14 +1,27 @@
 import os
 
+# ═══════════ بارگذاری فایل .env (برای VPS) ═══════════
+# این فایل اگر وجود داشته باشد، متغیرهای محیطی رو از اون می‌خونه
+# روی Railway متغیرها مستقیم تنظیم می‌شن و فایل .env وجود نداره
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # python-dotenv نصب نبود — از متغیرهای محیطی استفاده کن
+
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 OWNER_ID = int(os.getenv("OWNER_ID", "0").strip() or "0")
 START_BALANCE = int(os.getenv("START_BALANCE", "0").strip() or "0")
 
-DB_HOST = os.getenv("MYSQLHOST", "localhost")
-DB_PORT = int(os.getenv("MYSQLPORT", "3306") or "3306")
-DB_USER = os.getenv("MYSQLUSER", "root")
-DB_PASSWORD = os.getenv("MYSQLPASSWORD", "")
-DB_NAME = os.getenv("MYSQLDATABASE", "railway")
+# ═══════════ تنظیمات دیتابیس ═══════════
+# پشتیبانی از هر دو سبک نام‌گذاری:
+#   - VPS:     DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
+#   - Railway: MYSQLHOST, MYSQLPORT, MYSQLUSER, MYSQLPASSWORD, MYSQLDATABASE
+DB_HOST = os.getenv("DB_HOST") or os.getenv("MYSQLHOST", "localhost")
+DB_PORT = int(os.getenv("DB_PORT") or os.getenv("MYSQLPORT", "3306") or "3306")
+DB_USER = os.getenv("DB_USER") or os.getenv("MYSQLUSER", "root")
+DB_PASSWORD = os.getenv("DB_PASSWORD") or os.getenv("MYSQLPASSWORD", "")
+DB_NAME = os.getenv("DB_NAME") or os.getenv("MYSQLDATABASE", "zarbot")
 
 BANK_RATE = 0.02  # سود روزانه ۲٪
 MAX_PER_KEY = 5
