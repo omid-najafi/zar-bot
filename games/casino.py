@@ -10,55 +10,55 @@ DICE_FACES = {1: "1️⃣", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣", 5: "5️�
 
 def casino_menu_kb():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔴 🎰 اسلات", callback_data="casino:slots"), InlineKeyboardButton("🔴 🎲 تاس", callback_data="casino:dice")],
-        [InlineKeyboardButton("🔴 🪙 شیر یا خط", callback_data="casino:coin"), InlineKeyboardButton("🔴 🃏 کارت شانس", callback_data="casino:card")],
-        [InlineKeyboardButton("🔴 🎡 رولت", callback_data="casino:roulette"), InlineKeyboardButton("🔴 💣 مین‌یاب", callback_data="casino:mines")],
-        [InlineKeyboardButton("🔴 🎯 چرخ شانس", callback_data="casino:wheel")],
-        [InlineKeyboardButton("🔴 🔙 بازگشت به بازی‌ها", callback_data="game:menu")],
+        [InlineKeyboardButton("🎰 اسلات", callback_data="casino:slots"), InlineKeyboardButton("🎲 تاس", callback_data="casino:dice")],
+        [InlineKeyboardButton("🪙 شیر یا خط", callback_data="casino:coin"), InlineKeyboardButton("🃏 کارت شانس", callback_data="casino:card")],
+        [InlineKeyboardButton("🎡 رولت", callback_data="casino:roulette"), InlineKeyboardButton("💣 مین‌یاب", callback_data="casino:mines")],
+        [InlineKeyboardButton("🎯 چرخ شانس", callback_data="casino:wheel")],
+        [InlineKeyboardButton("🔙 بازگشت به بازی‌ها", callback_data="game:menu")],
     ])
 
-def casino_back_kb(): return InlineKeyboardMarkup([[InlineKeyboardButton("🔴 🎰 بازگشت به کازینو", callback_data="game:casino")]])
+def casino_back_kb(): return InlineKeyboardMarkup([[InlineKeyboardButton("🎰 بازگشت به کازینو", callback_data="game:casino")]])
 
 def casino_dice_kb():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔴 دقیقاً 1 (3x)", callback_data="casino:play:dice:exact:1"), InlineKeyboardButton("🔴 دقیقاً 2 (3x)", callback_data="casino:play:dice:exact:2"), InlineKeyboardButton("🔴 دقیقاً 3 (3x)", callback_data="casino:play:dice:exact:3")],
-        [InlineKeyboardButton("🔴 دقیقاً 4 (3x)", callback_data="casino:play:dice:exact:4"), InlineKeyboardButton("🔴 دقیقاً 5 (3x)", callback_data="casino:play:dice:exact:5"), InlineKeyboardButton("🔴 دقیقاً 6 (3x)", callback_data="casino:play:dice:exact:6")],
-        [InlineKeyboardButton("🔴 زوج (1.5x)", callback_data="casino:play:dice:parity:even"), InlineKeyboardButton("🔴 فرد (1.5x)", callback_data="casino:play:dice:parity:odd")],
-        [InlineKeyboardButton("🔴 ❌ لغو و بازگشت پول", callback_data="casino:cancel")],
+        [InlineKeyboardButton("دقیقاً 1 (3x)", callback_data="casino:play:dice:exact:1"), InlineKeyboardButton("دقیقاً 2 (3x)", callback_data="casino:play:dice:exact:2"), InlineKeyboardButton("دقیقاً 3 (3x)", callback_data="casino:play:dice:exact:3")],
+        [InlineKeyboardButton("دقیقاً 4 (3x)", callback_data="casino:play:dice:exact:4"), InlineKeyboardButton("دقیقاً 5 (3x)", callback_data="casino:play:dice:exact:5"), InlineKeyboardButton("دقیقاً 6 (3x)", callback_data="casino:play:dice:exact:6")],
+        [InlineKeyboardButton("زوج (1.5x)", callback_data="casino:play:dice:parity:even"), InlineKeyboardButton("فرد (1.5x)", callback_data="casino:play:dice:parity:odd")],
+        [InlineKeyboardButton("❌ لغو و بازگشت پول", callback_data="casino:cancel")],
     ])
 
 def casino_coin_kb():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔴 🦁 شیر", callback_data="casino:play:coin:heads"), InlineKeyboardButton("🔴 ✖️ خط", callback_data="casino:play:coin:tails")],
-        [InlineKeyboardButton("🔴 ❌ لغو و بازگشت پول", callback_data="casino:cancel")],
+        [InlineKeyboardButton("🦁 شیر", callback_data="casino:play:coin:heads"), InlineKeyboardButton("✖️ خط", callback_data="casino:play:coin:tails")],
+        [InlineKeyboardButton("❌ لغو و بازگشت پول", callback_data="casino:cancel")],
     ])
 
 def casino_card_kb():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔴 ♥️ دل", callback_data="casino:play:card:hearts"), InlineKeyboardButton("🔴 ♦️ خشت", callback_data="casino:play:card:diamonds")],
-        [InlineKeyboardButton("🔴 ♠️ پیک", callback_data="casino:play:card:spades"), InlineKeyboardButton("🔴 ♣️ گشنیز", callback_data="casino:play:card:clubs")],
-        [InlineKeyboardButton("🔴 ❌ لغو و بازگشت پول", callback_data="casino:cancel")],
+        [InlineKeyboardButton("♥️ دل", callback_data="casino:play:card:hearts"), InlineKeyboardButton("♦️ خشت", callback_data="casino:play:card:diamonds")],
+        [InlineKeyboardButton("♠️ پیک", callback_data="casino:play:card:spades"), InlineKeyboardButton("♣️ گشنیز", callback_data="casino:play:card:clubs")],
+        [InlineKeyboardButton("❌ لغو و بازگشت پول", callback_data="casino:cancel")],
     ])
 
 def casino_roulette_kb():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔴 قرمز (2x)", callback_data="casino:play:roulette:red"), InlineKeyboardButton("🔴 مشکی (2x)", callback_data="casino:play:roulette:black")],
-        [InlineKeyboardButton("🔴 صفر (36x)", callback_data="casino:play:roulette:green")],
-        [InlineKeyboardButton("🔴 ❌ لغو و بازگشت پول", callback_data="casino:cancel")],
+        [InlineKeyboardButton("قرمز (2x)", callback_data="casino:play:roulette:red"), InlineKeyboardButton("مشکی (2x)", callback_data="casino:play:roulette:black")],
+        [InlineKeyboardButton("صفر (36x)", callback_data="casino:play:roulette:green")],
+        [InlineKeyboardButton("❌ لغو و بازگشت پول", callback_data="casino:cancel")],
     ])
 
 def casino_mines_kb():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔴 🚪 در ۱", callback_data="casino:play:mines:1"), InlineKeyboardButton("🔴 🚪 در ۲", callback_data="casino:play:mines:2"), InlineKeyboardButton("🔴 🚪 در ۳", callback_data="casino:play:mines:3")],
-        [InlineKeyboardButton("🔴 🚪 در ۴", callback_data="casino:play:mines:4"), InlineKeyboardButton("🔴 🚪 در ۵", callback_data="casino:play:mines:5")],
-        [InlineKeyboardButton("🔴 ❌ لغو و بازگشت پول", callback_data="casino:cancel")],
+        [InlineKeyboardButton("🚪 در ۱", callback_data="casino:play:mines:1"), InlineKeyboardButton("🚪 در ۲", callback_data="casino:play:mines:2"), InlineKeyboardButton("🚪 در ۳", callback_data="casino:play:mines:3")],
+        [InlineKeyboardButton("🚪 در ۴", callback_data="casino:play:mines:4"), InlineKeyboardButton("🚪 در ۵", callback_data="casino:play:mines:5")],
+        [InlineKeyboardButton("❌ لغو و بازگشت پول", callback_data="casino:cancel")],
     ])
 
 def casino_wheel_kb():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔴 1️⃣", callback_data="casino:play:wheel:1"), InlineKeyboardButton("🔴 2️⃣", callback_data="casino:play:wheel:2"), InlineKeyboardButton("🔴 3️⃣", callback_data="casino:play:wheel:3")],
-        [InlineKeyboardButton("🔴 4️⃣", callback_data="casino:play:wheel:4"), InlineKeyboardButton("🔴 5️⃣", callback_data="casino:play:wheel:5"), InlineKeyboardButton("🔴 6️⃣", callback_data="casino:play:wheel:6")],
-        [InlineKeyboardButton("🔴 ❌ لغو و بازگشت پول", callback_data="casino:cancel")],
+        [InlineKeyboardButton("1️⃣", callback_data="casino:play:wheel:1"), InlineKeyboardButton("2️⃣", callback_data="casino:play:wheel:2"), InlineKeyboardButton("3️⃣", callback_data="casino:play:wheel:3")],
+        [InlineKeyboardButton("4️⃣", callback_data="casino:play:wheel:4"), InlineKeyboardButton("5️⃣", callback_data="casino:play:wheel:5"), InlineKeyboardButton("6️⃣", callback_data="casino:play:wheel:6")],
+        [InlineKeyboardButton("❌ لغو و بازگشت پول", callback_data="casino:cancel")],
     ])
 
 async def _record_casino_missions(context, chat_id, user_id, is_win: bool):
