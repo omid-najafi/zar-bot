@@ -75,23 +75,23 @@ def _check_cooldown(user):
 def _menu_kb(is_unlocked: bool):
     if not is_unlocked:
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔴 🔓 باز کردن کاباره (25M)", callback_data="kabareh:unlock")],
-            [InlineKeyboardButton("🔴 🔙 بازگشت", callback_data="menu:main")]
+            [InlineKeyboardButton("🔓 باز کردن کاباره (25M)", callback_data="kabareh:unlock")],
+            [InlineKeyboardButton("🔙 بازگشت", callback_data="menu:main")]
         ])
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔴 🦊 روباه (2M)", callback_data="kabareh:select:fox")],
-        [InlineKeyboardButton("🔴 👱‍♀️ آنجلا (3M)", callback_data="kabareh:select:angela")],
-        [InlineKeyboardButton("🔴 👩 لانا (4M)", callback_data="kabareh:select:lana")],
-        [InlineKeyboardButton("🔴 👩‍🦰 الکسیس (5M)", callback_data="kabareh:select:alexis")],
-        [InlineKeyboardButton("🔴 👸 اِدِن (6M)", callback_data="kabareh:select:eden")],
-        [InlineKeyboardButton("🔴 🔙 بازگشت", callback_data="menu:main")]
+        [InlineKeyboardButton("🦊 روباه (2M)", callback_data="kabareh:select:fox")],
+        [InlineKeyboardButton("👱‍♀️ آنجلا (3M)", callback_data="kabareh:select:angela")],
+        [InlineKeyboardButton("👩 لانا (4M)", callback_data="kabareh:select:lana")],
+        [InlineKeyboardButton("👩‍🦰 الکسیس (5M)", callback_data="kabareh:select:alexis")],
+        [InlineKeyboardButton("👸 اِدِن (6M)", callback_data="kabareh:select:eden")],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="menu:main")]
     ])
 
 
 def _confirm_kb(girl_key: str):
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔴 ✅ بریم حال کنیم!", callback_data=f"kabareh:play:{girl_key}")],
-        [InlineKeyboardButton("🔴 ❌ انصراف", callback_data="kabareh:menu")]
+        [InlineKeyboardButton("✅ بریم حال کنیم!", callback_data=f"kabareh:play:{girl_key}")],
+        [InlineKeyboardButton("❌ انصراف", callback_data="kabareh:menu")]
     ])
 
 
