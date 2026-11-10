@@ -38,32 +38,44 @@ def casino_card_kb():
         [InlineKeyboardButton("❌ لغو و بازگشت پول", callback_data="casino:cancel")],
     ])
 
+async def _record_casino_missions(context, chat_id, user_id, is_win: bool):
+    """ثبت ماموریت‌های کازینو"""
+    r_p = await db.progress_mission(user_id, "play_casino", 1, base_xp=config.BASE_XP_PLAY_GAME)
+    await utils.notify_mission(context, chat_id, r_p)
+    r_any = await db.progress_mission(user_id, "play_any_game", 1, base_xp=0)
+    await utils.notify_mission(context, chat_id, r_any)
+    if is_win:
+        r_win = await db.progress_mission(user_id, "win_casino", 1, base_xp=config.BASE_XP_WIN_GAME)
+        await utils.notify_mission(context, chat_id, r_win)
+        r_any_win = await db.progress_mission(user_id, "win_any_game", 1, base_xp=0)
+        await utils.notify_mission(context, chat_id, r_any_win)
+
 async def play_slots(update, user_id, amount, context):
     reels = [random.choice(config.SLOT_SYMBOLS) for _ in range(3)]
     reels_str = " | ".join(reels)
+    is_win = False
     if reels[0] == reels[1] == reels[2]:
         mult = 15 if reels[0] == "7️⃣" else (8 if reels[0] == "⭐" else 4)
+        is_win = True
     elif reels[0] == reels[1] or reels[1] == reels[2] or reels[0] == reels[2]:
         mult = 1.7
-    else: mult = 0
+        is_win = True
+    else:
+        mult = 0
 
-    if mult > 0:
+    if is_win:
         full = int(amount * mult)
         prize, comm = utils.apply_commission(full, config.COMMISSION_RATE)
         await db.add_balance(user_id, prize)
         text = f"🎰 <b>اسلات</b>\n━━━━━━━━━━━━━━━━━━\n<b>{reels_str}</b>\n\n🎉 <b>بردی!</b>\n💰 جایزه: {utils.fmt(full)}\n💵 کارمزد 10%: {utils.fmt(comm)}\n✅ دریافتی: <b>{utils.fmt(prize)}</b> زرکوین"
     else:
         text = f"🎰 <b>اسلات</b>\n━━━━━━━━━━━━━━━━━━\n<b>{reels_str}</b>\n\n😢 باختی! {utils.fmt(amount)} زرکوین از دست رفت."
-    
+
     msg = await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=casino_back_kb())
     utils.remember_owner(msg, user_id)
-    
+
     # ✅ ثبت ماموریت‌ها
-    r_p = await db.progress_mission(user_id, "play_casino", 1, base_xp=config.BASE_XP_PLAY_GAME)
-    await utils.notify_mission(context, update.message.chat_id, r_p)
-    
-    r_any = await db.progress_mission(user_id, "play_any_game", 1, base_xp=0)
-    await utils.notify_mission(context, update.message.chat_id, r_any)
+    await _record_casino_missions(context, update.message.chat_id, user_id, is_win)
 
 async def handle_callback(query, context, data, user_id):
     if data == "casino:cancel":
@@ -72,7 +84,8 @@ async def handle_callback(query, context, data, user_id):
             await db.add_balance(user_id, pending["entry"])
             await utils.safe_edit(query, f"❌ بازی لغو شد و {utils.fmt(pending['entry'])} زرکوین برگشت.", casino_menu_kb())
         else:
-            await utils.safe_edit(query, "❌ بازی فعالی نداشتی.", casino_menu_kb())
+            await utils.safe_answer(query, "❌ بازی فعالی نداری", show_alert=True)
+            return
         await utils.safe_answer(query)
         return
 
@@ -82,7 +95,8 @@ async def handle_callback(query, context, data, user_id):
             g = config.CASINO_GAMES[cg]
             utils.user_states[user_id] = {"action": "casino_entry", "game": cg}
             msg = await utils.safe_edit(query, f"{g['emoji']} <b>{g['name']}</b>\n━━━━━━━━━━━━━━━━━━\n💰 حداقل ورودی: <b>{utils.fmt(g['min'])}</b> زرکوین\n💵 کارمزد: <b>10%</b> از جایزه\n\nمبلغ ورودی رو بفرست:", casino_back_kb())
-            utils.remember_owner(msg, user_id)
+            if msg:
+                utils.remember_owner(msg, user_id)
         await utils.safe_answer(query)
         return
 
@@ -95,7 +109,8 @@ async def handle_callback(query, context, data, user_id):
         utils.casino_pending.pop(user_id, None)
         entry = pending["entry"]
         chat_id = query.message.chat_id
-        
+        is_win = False
+
         if cg == "dice":
             try:
                 dice_msg = await context.bot.send_dice(
@@ -108,11 +123,11 @@ async def handle_callback(query, context, data, user_id):
                 await utils.safe_edit(query, "❌ خطا در ارتباط با تلگرام. پول شما برگشت داده شد.", casino_back_kb())
                 await utils.safe_answer(query)
                 return
-                
+
             await asyncio.sleep(4.5)
             res = dice_msg.dice.value
             face = DICE_FACES.get(res, "🎲")
-            
+
             if parts[3] == "exact":
                 choice_text = f"دقیقاً {parts[4]}"
                 is_win = (res == int(parts[4]))
@@ -125,9 +140,9 @@ async def handle_callback(query, context, data, user_id):
                     choice_text = "فرد"
                     is_win = (res % 2 != 0)
                 mult = 1.5
-            
+
             header = f"🎲 <b>تاس</b>\n━━━━━━━━━━━━━━━━━━\n🎯 نتیجه: {face} <b>{res}</b>\nانتخاب تو: {choice_text}\n\n"
-            
+
             if is_win:
                 full = int(entry * mult)
                 prize, comm = utils.apply_commission(full, config.COMMISSION_RATE)
@@ -135,14 +150,15 @@ async def handle_callback(query, context, data, user_id):
                 text = header + f"🎉 <b>بردی!</b>\n💰 جایزه: {utils.fmt(full)}\n💵 کارمزد 10%: {utils.fmt(comm)}\n✅ دریافتی: <b>{utils.fmt(prize)}</b> زرکوین"
             else:
                 text = header + f"😢 باختی! {utils.fmt(entry)} زرکوین از دست رفت."
-                
+
             await utils.safe_edit(query, text, casino_back_kb())
             await utils.safe_answer(query)
-            
+
         elif cg == "coin":
             res = random.choice(["heads", "tails"])
             header = f"🪙 <b>شیر یا خط</b>\n━━━━━━━━━━━━━━━━━━\n🎯 نتیجه: <b>{'شیر 🦁' if res == 'heads' else 'خط ✖️'}</b>\nانتخاب تو: {'شیر 🦁' if parts[3] == 'heads' else 'خط ✖️'}\n\n"
-            if res == parts[3]:
+            is_win = (res == parts[3])
+            if is_win:
                 full = entry * 2
                 prize, comm = utils.apply_commission(full, config.COMMISSION_RATE)
                 await db.add_balance(user_id, prize)
@@ -151,11 +167,12 @@ async def handle_callback(query, context, data, user_id):
                 text = header + f"😢 باختی! {utils.fmt(entry)} زرکوین از دست رفت."
             await utils.safe_edit(query, text, casino_back_kb())
             await utils.safe_answer(query)
-            
+
         elif cg == "card":
             res = random.choice(list(config.CARD_SUITS.keys()))
             header = f"🃏 <b>کارت شانس</b>\n━━━━━━━━━━━━━━━━━━\n🎯 کارت: <b>{config.CARD_SUITS[res]}</b> ({config.CARD_SUITS_FA[res]})\nانتخاب تو: {config.CARD_SUITS[parts[3]]} ({config.CARD_SUITS_FA[parts[3]]})\n\n"
-            if res == parts[3]:
+            is_win = (res == parts[3])
+            if is_win:
                 full = entry * 4
                 prize, comm = utils.apply_commission(full, config.COMMISSION_RATE)
                 await db.add_balance(user_id, prize)
@@ -164,10 +181,6 @@ async def handle_callback(query, context, data, user_id):
                 text = header + f"😢 باختی! {utils.fmt(entry)} زرکوین از دست رفت."
             await utils.safe_edit(query, text, casino_back_kb())
             await utils.safe_answer(query)
-            
+
         # ✅ ثبت ماموریت‌ها (برای تاس، شیر یا خط و کارت)
-        r_p = await db.progress_mission(user_id, "play_casino", 1, base_xp=config.BASE_XP_PLAY_GAME)
-        await utils.notify_mission(context, chat_id, r_p)
-        
-        r_any = await db.progress_mission(user_id, "play_any_game", 1, base_xp=0)
-        await utils.notify_mission(context, chat_id, r_any)
+        await _record_casino_missions(context, chat_id, user_id, is_win)
