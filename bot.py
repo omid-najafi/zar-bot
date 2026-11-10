@@ -19,7 +19,7 @@ logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s", level=loggin
 logger = logging.getLogger("zarcoin")
 
 
-# ═══════════ کیبوردهای پویا (کوتاه و امن) ═══════════
+# ═══════════ کیبوردهای پویا ═══════════
 async def properties_menu_kb(user_id: int):
     summary = await db.get_assets_summary(user_id)
     rows = []
@@ -31,6 +31,7 @@ async def properties_menu_kb(user_id: int):
         else:
             label = f"{prop['emoji']} {prop['name']} ({count}/{config.MAX_PER_KEY})"
         rows.append([InlineKeyboardButton(label, callback_data=f"prop:select:{key}")])
+    rows.append([InlineKeyboardButton("💸 برداشت درآمد انباشته", callback_data="prop:withdraw_income")])
     rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="menu:main")])
     return InlineKeyboardMarkup(rows)
 
@@ -46,6 +47,7 @@ async def workers_menu_kb(user_id: int):
         else:
             label = f"{w['emoji']} {w['name']} ({count}/{config.MAX_PER_KEY})"
         rows.append([InlineKeyboardButton(label, callback_data=f"worker:select:{key}")])
+    rows.append([InlineKeyboardButton("💸 برداشت درآمد انباشته", callback_data="worker:withdraw_income")])
     rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="menu:main")])
     return InlineKeyboardMarkup(rows)
 
@@ -91,7 +93,15 @@ async def build_assets_text(user_id, asset_type):
         grouped.setdefault(a["asset_key"], {"count": 0, "daily": 0})
         grouped[a["asset_key"]]["count"] += 1
         grouped[a["asset_key"]]["daily"] += int(a["daily_income"])
-    lines = [f"{emoji} <b>{title}</b>", "━━━━━━━━━━━━━━━━━━", f"📊 کل: <b>{len(owned)}</b>", f"💵 درآمد روزانه: <b>{utils.fmt(total_daily)}</b>\n"]
+    # درآمد انباشته قابل برداشت
+    asset_income, bank_interest, total_pending = await db.peek_income(user_id)
+    lines = [
+        f"{emoji} <b>{title}</b>",
+        "━━━━━━━━━━━━━━━━━━",
+        f"📊 کل: <b>{len(owned)}</b>",
+        f"💵 درآمد روزانه: <b>{utils.fmt(total_daily)}</b>",
+        f"💸 درآمد قابل برداشت: <b>{utils.fmt(total_pending)}</b>\n",
+    ]
     for key, data in grouped.items():
         info = store.get(key, {})
         lines.append(f"{info.get('emoji','•')} {info.get('name', key)}: {data['count']} ({utils.fmt(data['daily'])}/روز)")
@@ -191,6 +201,8 @@ async def cmd_zar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     min_c = level * 100
     max_c = level * 100 + 100
     reward = random.randint(min_c, max_c)
+    # واریز درآمد انباشته قبل از افزودن پول جدید
+    await db.accrue_income(user_id)
     await db.add_balance(user_id, reward)
     await db.set_last_zar(user_id, now.isoformat())
     result = await db.progress_mission(user_id, "zar_collect", 1, base_xp=config.BASE_XP_ZAR)
@@ -206,8 +218,30 @@ async def group_watcher(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ═══════════════════════════════════════════════════════════
-# ═══════════ CALLBACK HANDLER (بازنویسی‌شده) ═══════════
+# ═══════════ CALLBACK HANDLER (اصلاح‌شده با مالکیت منو) ═══════════
 # ═══════════════════════════════════════════════════════════
+
+# دکمه‌های عمومی: بررسی مالکیت انجام نمی‌شود
+#   - check_membership: دکمه عمومی عضویت
+#   - {game}:join: هر کسی می‌تواند وارد بازی شود
+#   - دکمه‌های درون بازی (rps:c, ttt:m, ttt:noop, quiz:a, pen:shoot, casino:play, casino:cancel): handler بازی بررسی می‌کند
+#   - room:cancel: handler بررسی می‌کند
+#   - tr:c / tr:x: handler بررسی user_id در دکمه می‌کند
+PUBLIC_BUTTONS = ("check_membership",)
+PUBLIC_PREFIXES = (
+    "rps:join:", "ttt:join:", "quiz:join:",
+    "rps:c:", "ttt:m:", "ttt:noop", "quiz:a:",
+    "pen:shoot", "casino:play:", "casino:cancel",
+    "room:cancel:", "tr:c:", "tr:x:",
+)
+
+
+def _is_public_button(data: str) -> bool:
+    if data in PUBLIC_BUTTONS:
+        return True
+    return any(data.startswith(p) for p in PUBLIC_PREFIXES)
+
+
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if not query:
@@ -218,10 +252,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prefix = data.split(":")[0]
 
     try:
-        # ─────── 1. چک عضویت (ممکن است خودش answer کند) ───────
-        if data in ("menu:main", "kabareh:menu", "game:menu", "mission:menu",
-                    "prop:menu", "worker:menu", "bank:menu"):
-            if not await utils.verify_membership(update, context):
+        # ─────── 1. بررسی مالکیت منو (برای دکمه‌های غیر عمومی) ───────
+        # این بررسی قبل از هر چیز دیگری انجام می‌شود تا هیچکس نتواند از منوی کاربر دیگر استفاده کند
+        if not _is_public_button(data) and query.message:
+            if not utils.is_menu_owner(query.message.chat_id, query.message.message_id, user_id):
+                await utils.safe_answer(query, "❌ این منو برای شما نیست!\nبرای استفاده از منوی خودتان دستور /menu را بفرستید.", show_alert=True)
                 return
 
         # ─────── 2. دکمه بررسی عضویت ───────
@@ -238,7 +273,13 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await utils.safe_answer(query, f"❌ هنوز عضو نشدی:\n{missing_txt}", show_alert=True)
             return
 
-        # ─────── 3. روت به کاباره و بازی‌ها (خودشان answer می‌کنند) ───────
+        # ─────── 3. چک عضویت برای دکمه‌های منو ───────
+        if data in ("menu:main", "kabareh:menu", "game:menu", "mission:menu",
+                    "prop:menu", "worker:menu", "bank:menu"):
+            if not await utils.verify_membership(update, context):
+                return
+
+        # ─────── 4. روت به کاباره و بازی‌ها ───────
         if prefix == "kabareh":
             await kabareh.handle_callback(query, context, data, user_id)
             return
@@ -258,14 +299,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await casino.handle_callback(query, context, data, user_id)
             return
 
-        # ─────── 4. چک مالکیت منو ───────
-        PERSONAL = ("menu", "bank", "prop", "worker", "transfer", "help", "game", "mission")
-        if prefix in PERSONAL and query.message:
-            owner = utils.menu_owners.get((query.message.chat_id, query.message.message_id))
-            if owner is not None and owner != user_id:
-                await utils.safe_answer(query, "❌ این منو برای شما نیست!", show_alert=True)
-                return
-
         # ─────── 5. لغو خودکار کازینو ───────
         pending = utils.casino_pending.get(user_id)
         if pending and prefix != "casino":
@@ -274,9 +307,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         utils.user_states.pop(user_id, None)
 
-        # ─────── 6. هر شاخه دقیقاً یک بار safe_answer صدا می‌زند ───────
-
-        # منوی اصلی
+        # ─────── 6. منوی اصلی ───────
         if data == "menu:main":
             await utils.safe_answer(query)
             await db.ensure_user(query.from_user)
@@ -285,7 +316,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 utils.remember_owner(msg, user_id)
             return
 
-        # ماموریت‌ها
+        # ─────── 7. ماموریت‌ها ───────
         if data == "mission:menu":
             await utils.safe_answer(query)
             await db.ensure_user(query.from_user)
@@ -294,10 +325,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 utils.remember_owner(msg, user_id)
             return
 
-        # بانک
+        # ─────── 8. بانک ───────
         if data == "bank:menu":
             await utils.safe_answer(query)
             await db.ensure_user(query.from_user)
+            # واریز درآمد انباشته قبل از نمایش
+            await db.accrue_income(user_id)
             msg = await utils.safe_edit(query, await build_bank_text(user_id), utils.BANK_MENU_KB)
             if msg:
                 utils.remember_owner(msg, user_id)
@@ -317,10 +350,28 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 utils.remember_owner(msg, user_id)
             return
 
-        # ملک‌ها
+        # ─────── 9. ملک‌ها ───────
         if data == "prop:menu":
             await utils.safe_answer(query)
             await db.ensure_user(query.from_user)
+            text = await build_assets_text(user_id, "property") + "\n\n👇 انتخاب:"
+            msg = await utils.safe_edit(query, text, await properties_menu_kb(user_id))
+            if msg:
+                utils.remember_owner(msg, user_id)
+            return
+
+        if data == "prop:withdraw_income":
+            # برداشت درآمد انباشته (ملک + سود بانکی)
+            asset_income, bank_interest, total = await db.accrue_income(user_id)
+            if total > 0:
+                await utils.safe_answer(
+                    query,
+                    f"✅ برداشت شد!\n🏠 درآمد ملک/کارگر: {utils.fmt(asset_income)}\n🏦 سود بانک: {utils.fmt(bank_interest)}\n💰 مجموع: {utils.fmt(total)}",
+                    show_alert=True)
+                result = await db.progress_mission(user_id, "withdraw_income", 1, base_xp=config.BASE_XP_WITHDRAW_INCOME)
+                await utils.notify_mission(context, query.message.chat_id, result)
+            else:
+                await utils.safe_answer(query, "❌ درآمد انباشته‌ای برای برداشت نیست! هر ساعت به‌طور خودکار واریز می‌شود.", show_alert=True)
             text = await build_assets_text(user_id, "property") + "\n\n👇 انتخاب:"
             msg = await utils.safe_edit(query, text, await properties_menu_kb(user_id))
             if msg:
@@ -360,6 +411,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not prop:
                 await utils.safe_answer(query)
                 return
+            # واریز درآمد انباشته قبل از خرید
+            await db.accrue_income(user_id)
             r = await db.buy_asset(user_id, "property", key, prop["price"], prop["income"])
             if r == "ok":
                 await utils.safe_answer(query, "✅ خریداری شد!", show_alert=True)
@@ -371,17 +424,33 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await utils.safe_answer(query, "❌ موجودی!", show_alert=True)
             else:
                 await utils.safe_answer(query, "❌ خطا", show_alert=True)
-            # ← همیشه صفحه رو رفرش کن
             text = await build_assets_text(user_id, "property") + "\n\n👇 انتخاب:"
             msg = await utils.safe_edit(query, text, await properties_menu_kb(user_id))
             if msg:
                 utils.remember_owner(msg, user_id)
             return
 
-        # کارگرها
+        # ─────── 10. کارگرها ───────
         if data == "worker:menu":
             await utils.safe_answer(query)
             await db.ensure_user(query.from_user)
+            text = await build_assets_text(user_id, "worker") + "\n\n👇 انتخاب:"
+            msg = await utils.safe_edit(query, text, await workers_menu_kb(user_id))
+            if msg:
+                utils.remember_owner(msg, user_id)
+            return
+
+        if data == "worker:withdraw_income":
+            asset_income, bank_interest, total = await db.accrue_income(user_id)
+            if total > 0:
+                await utils.safe_answer(
+                    query,
+                    f"✅ برداشت شد!\n🏠 درآمد ملک/کارگر: {utils.fmt(asset_income)}\n🏦 سود بانک: {utils.fmt(bank_interest)}\n💰 مجموع: {utils.fmt(total)}",
+                    show_alert=True)
+                result = await db.progress_mission(user_id, "withdraw_income", 1, base_xp=config.BASE_XP_WITHDRAW_INCOME)
+                await utils.notify_mission(context, query.message.chat_id, result)
+            else:
+                await utils.safe_answer(query, "❌ درآمد انباشته‌ای برای برداشت نیست! هر ساعت به‌طور خودکار واریز می‌شود.", show_alert=True)
             text = await build_assets_text(user_id, "worker") + "\n\n👇 انتخاب:"
             msg = await utils.safe_edit(query, text, await workers_menu_kb(user_id))
             if msg:
@@ -421,6 +490,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not w:
                 await utils.safe_answer(query)
                 return
+            await db.accrue_income(user_id)
             r = await db.buy_asset(user_id, "worker", key, w["price"], w["income"])
             if r == "ok":
                 await utils.safe_answer(query, "✅ استخدام شد!", show_alert=True)
@@ -438,7 +508,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 utils.remember_owner(msg, user_id)
             return
 
-        # بازی‌ها
+        # ─────── 11. بازی‌ها ───────
         if data == "game:menu":
             await utils.safe_answer(query)
             msg = await utils.safe_edit(query, "🎮 <b>بازی‌ها</b>\n💰 حداقل 1,000\n💵 کارمزد 10%", utils.GAMES_MENU_KB)
@@ -464,7 +534,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     utils.remember_owner(msg, user_id)
             return
 
-        # راهنما
+        # ─────── 12. راهنما ───────
         if data == "help:menu":
             await utils.safe_answer(query)
             msg = await utils.safe_edit(query, config.HELP_TEXT, utils.BACK_MAIN_KB)
@@ -472,7 +542,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 utils.remember_owner(msg, user_id)
             return
 
-        # انتقال
+        # ─────── 13. انتقال ───────
         if data == "transfer:start":
             await utils.safe_answer(query)
             utils.user_states[user_id] = {"action": "transfer_amount"}
@@ -534,6 +604,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ مبلغ نامعتبر")
             return
         await db.ensure_user(user)
+        # واریز درآمد انباشته قبل از عملیات بانک
+        await db.accrue_income(user_id)
         ok = await db.bank_deposit(user_id, amount) if action == "bank_deposit" else await db.bank_withdraw(user_id, amount)
         utils.user_states.pop(user_id, None)
         if ok:
@@ -560,6 +632,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"❌ حداقل {utils.fmt(g['min'])}")
             return
         await db.ensure_user(user)
+        # واریز درآمد انباشته قبل از کسر موجودی
+        await db.accrue_income(user_id)
         if not await db.deduct_balance(user_id, amount):
             await update.message.reply_text("❌ موجودی!")
             return
@@ -585,6 +659,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"❌ حداقل {utils.fmt(g['min'])}")
             return
         await db.ensure_user(user)
+        await db.accrue_income(user_id)
         if not await db.deduct_balance(user_id, amount):
             await update.message.reply_text("❌ موجودی!")
             return
@@ -610,6 +685,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ مبلغ نامعتبر")
             return
         fee = int(amount * config.TRANSFER_FEE_RATE) if amount > config.TRANSFER_FEE_MIN else 0
+        # واریز درآمد انباشته قبل از بررسی موجودی
+        await db.accrue_income(user_id)
         u = await db.get_user(user_id)
         if int(u["balance"]) < amount + fee:
             await update.message.reply_text(f"❌ نیاز: {utils.fmt(amount + fee)}")
@@ -701,6 +778,8 @@ async def confirm_transfer(query, owner_id: int):
     if not pending:
         await utils.safe_answer(query, "❌ منقضی", show_alert=True)
         return
+    # واریز درآمد انباشته قبل از انتقال
+    await db.accrue_income(owner_id)
     if not await db.transfer_coins(owner_id, pending["recipient_id"], pending["amount"], pending["fee"]):
         await utils.safe_answer(query, "❌ موجودی!", show_alert=True)
         await utils.safe_edit(query, "❌ انجام نشد.", utils.BACK_MAIN_KB)
@@ -761,14 +840,17 @@ async def post_init(app: Application):
     await db.init_db_pool()
     await db.init_db()
     logger.info("✅ DB ready")
+    # پرداخت اولیه درآمد هنگام شروع
     try:
-        await db.daily_payout()
+        await db.hourly_payout()
     except Exception as e:
-        logger.exception(f"payout: {e}")
-    app.job_queue.run_daily(
-        db.daily_payout,
-        time=time(hour=0, minute=0, tzinfo=utils.TEHRAN),
-        name="daily_payout"
+        logger.exception(f"hourly_payout: {e}")
+    # پرداخت خودکار هر ساعت
+    app.job_queue.run_repeating(
+        db.hourly_payout,
+        interval=config.HOURLY_PAYOUT_INTERVAL,
+        first=config.HOURLY_PAYOUT_INTERVAL,
+        name="hourly_payout"
     )
 
     if config.REQUIRED_GROUP and config.REQUIRED_GROUP.get("id"):
