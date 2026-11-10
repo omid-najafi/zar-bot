@@ -4,7 +4,7 @@ from telegram.constants import ParseMode
 import utils, db, config
 
 def kb():
-    return InlineKeyboardMarkup([[InlineKeyboardButton("🔴 ⚽ شوت!", callback_data="pen:shoot")]])
+    return InlineKeyboardMarkup([[InlineKeyboardButton("⚽ شوت!", callback_data="pen:shoot")]])
 
 async def start_game(update, amount, context):
     user_id = update.effective_user.id
