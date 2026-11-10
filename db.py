@@ -21,6 +21,7 @@ EXTRA_COLUMNS = [
     ("last_kabareh", "VARCHAR(32) DEFAULT NULL"),
     ("last_zar", "VARCHAR(32) DEFAULT NULL"),
     ("last_mission_date", "VARCHAR(10) DEFAULT NULL"),
+    ("last_payout", "VARCHAR(32) DEFAULT NULL"),  # زمان آخرین پرداخت درآمد
 ]
 
 
@@ -28,7 +29,7 @@ async def init_db_pool():
     global db_pool
     db_pool = await aiomysql.create_pool(
         host=config.DB_HOST, port=config.DB_PORT, user=config.DB_USER, password=config.DB_PASSWORD,
-        db=config.DB_NAME, autocommit=False, minsize=2, maxsize=30, charset="utf8mb4")
+        db=config.DB_NAME, autocommit=False, minsize=2, maxsize=20, charset="utf8mb4")
     logger.info("✅ Connection Pool به MySQL ساخته شد.")
 
 
@@ -53,15 +54,19 @@ async def init_db():
     logger.info("✅ دیتابیس آماده است.")
 
 
+# ═══════════ مدیریت کاربر ═══════════
 async def ensure_user(user) -> dict:
+    """ایجاد یا به‌روزرسانی کاربر. با ON DUPLICATE KEY UPDATE بهینه‌شده."""
     if user.id in utils.user_cache:
         return utils.user_cache[user.id]
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
             await cur.execute(
-                "INSERT IGNORE INTO users (user_id, username, first_name, balance, bank_balance, card_number, created_at) VALUES (%s, %s, %s, %s, 0, %s, %s)",
-                (user.id, user.username, user.first_name, config.START_BALANCE, utils.card_number_for(user.id), utils.now_iso()))
-            await cur.execute("UPDATE users SET username=%s, first_name=%s WHERE user_id=%s", (user.username, user.first_name, user.id))
+                "INSERT INTO users (user_id, username, first_name, balance, bank_balance, card_number, created_at) "
+                "VALUES (%s, %s, %s, %s, 0, %s, %s) "
+                "ON DUPLICATE KEY UPDATE username=VALUES(username), first_name=VALUES(first_name)",
+                (user.id, user.username, user.first_name, config.START_BALANCE,
+                 utils.card_number_for(user.id), utils.now_iso()))
             await cur.execute("SELECT * FROM users WHERE user_id=%s", (user.id,))
             row = await cur.fetchone()
             await conn.commit()
@@ -149,12 +154,21 @@ async def transfer_coins(sender_id: int, recipient_id: int, amount: int, fee: in
             await conn.rollback(); return False
 
 
+# ═══════════ دارایی‌ها ═══════════
 async def get_assets_summary(user_id: int) -> dict:
+    """خلاصه دارایی‌ها با کش ۶۰ ثانیه‌ای"""
+    cached = utils.assets_summary_cache.get(user_id)
+    if cached is not None:
+        return cached
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
-            await cur.execute("SELECT asset_key, COUNT(*) as count, SUM(daily_income) as total_income FROM assets WHERE user_id=%s GROUP BY asset_key", (user_id,))
+            await cur.execute(
+                "SELECT asset_key, COUNT(*) as count, SUM(daily_income) as total_income "
+                "FROM assets WHERE user_id=%s GROUP BY asset_key", (user_id,))
             rows = await cur.fetchall()
-            return {r["asset_key"]: {"count": int(r["count"]), "total_income": int(r["total_income"])} for r in rows}
+            result = {r["asset_key"]: {"count": int(r["count"]), "total_income": int(r["total_income"])} for r in rows}
+            utils.assets_summary_cache[user_id] = result
+            return result
 
 
 async def get_assets(user_id: int, asset_type: str) -> list[dict]:
@@ -166,6 +180,7 @@ async def get_assets(user_id: int, asset_type: str) -> list[dict]:
 
 async def buy_asset(user_id: int, asset_type: str, asset_key: str, price: int, income: int) -> str:
     utils.invalidate_cache(user_id)
+    utils.invalidate_assets_cache(user_id)
     async with db_pool.acquire() as conn:
         try:
             await conn.begin()
@@ -193,36 +208,144 @@ async def find_user_by_card(card: str):
             return dict(row) if row else None
 
 
-async def daily_payout(context=None):
-    async with utils.daily_lock:
-        today = datetime.now(utils.TEHRAN).date()
-        today_iso = today.isoformat()
+# ═══════════ درآمد ساعتی (جایگزین daily_payout) ═══════════
+def _calc_income(bank_balance: int, daily_asset: int, seconds: float) -> tuple[int, int]:
+    """محاسبه درآمد دارایی و سود بانکی برای مدت زمان مشخص"""
+    if seconds <= 0:
+        return 0, 0
+    # درآمد دارایی: daily_income * (seconds / 86400)
+    asset_income = int(daily_asset * seconds / 86400)
+    # سود بانکی: bank_balance * RATE * (seconds / 86400) - به bank_balance اضافه می‌شود (سود مرکب)
+    bank_interest = int(bank_balance * config.BANK_RATE * seconds / 86400)
+    return asset_income, bank_interest
+
+
+async def accrue_income(user_id: int) -> tuple[int, int, int]:
+    """
+    محاسبه و واریز درآمد انباشته‌شده برای یک کاربر (برداشت دستی).
+    درآمد دارایی به balance اضافه می‌شود.
+    سود بانکی به bank_balance اضافه می‌شود (سود مرکب).
+    خروجی: (asset_income, bank_interest, total)
+    """
+    async with db_pool.acquire() as conn:
+        try:
+            await conn.begin()
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                await cur.execute("SELECT bank_balance, last_payout FROM users WHERE user_id=%s FOR UPDATE", (user_id,))
+                row = await cur.fetchone()
+                if not row:
+                    await conn.rollback(); return 0, 0, 0
+                now = datetime.now(utils.TEHRAN)
+                last = row.get("last_payout")
+                if last:
+                    try:
+                        last_dt = datetime.fromisoformat(last)
+                        seconds = (now - last_dt).total_seconds()
+                    except Exception:
+                        seconds = 0
+                else:
+                    seconds = 0
+                if seconds < 1:
+                    await conn.rollback(); return 0, 0, 0
+                # درآمد دارایی‌ها
+                await cur.execute("SELECT COALESCE(SUM(daily_income), 0) as total FROM assets WHERE user_id=%s", (user_id,))
+                arow = await cur.fetchone()
+                daily_asset = int(arow["total"] or 0)
+                bank_balance = int(row["bank_balance"] or 0)
+                asset_income, bank_interest = _calc_income(bank_balance, daily_asset, seconds)
+                now_iso = now.isoformat()
+                if asset_income > 0 or bank_interest > 0:
+                    await cur.execute(
+                        "UPDATE users SET balance = balance + %s, bank_balance = bank_balance + %s, last_payout = %s WHERE user_id=%s",
+                        (asset_income, bank_interest, now_iso, user_id))
+                else:
+                    await cur.execute("UPDATE users SET last_payout = %s WHERE user_id=%s", (now_iso, user_id))
+            await conn.commit()
+            if asset_income > 0 or bank_interest > 0:
+                utils.invalidate_cache(user_id)
+            return asset_income, bank_interest, asset_income + bank_interest
+        except Exception:
+            await conn.rollback()
+            logger.exception("accrue_income failed")
+            return 0, 0, 0
+
+
+async def peek_income(user_id: int) -> tuple[int, int, int]:
+    """محاسبه درآمد انباشته بدون واریز (برای نمایش). خروجی: (asset_income, bank_interest, total)"""
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute("SELECT bank_balance, last_payout FROM users WHERE user_id=%s", (user_id,))
+            row = await cur.fetchone()
+            if not row:
+                return 0, 0, 0
+            now = datetime.now(utils.TEHRAN)
+            last = row.get("last_payout")
+            if last:
+                try:
+                    last_dt = datetime.fromisoformat(last)
+                    seconds = (now - last_dt).total_seconds()
+                except Exception:
+                    seconds = 0
+            else:
+                seconds = 0
+            if seconds < 1:
+                return 0, 0, 0
+            await cur.execute("SELECT COALESCE(SUM(daily_income), 0) as total FROM assets WHERE user_id=%s", (user_id,))
+            arow = await cur.fetchone()
+            daily_asset = int(arow["total"] or 0)
+            bank_balance = int(row["bank_balance"] or 0)
+            asset_income, bank_interest = _calc_income(bank_balance, daily_asset, seconds)
+            return asset_income, bank_interest, asset_income + bank_interest
+
+
+async def hourly_payout(context=None):
+    """
+    پرداخت خودکار ساعتی برای همه کاربران.
+    حداکثر HOURLY_PAYOUT_MAX_CATCHUP ثانیه درآمد پرداخت می‌کند (برای جلوگیری از پرداخت زیاد هنگام ری‌استارت).
+    """
+    async with utils.hourly_lock:
+        now = datetime.now(utils.TEHRAN)
+        now_iso = now.isoformat()
         async with db_pool.acquire() as conn:
             async with conn.cursor(aiomysql.DictCursor) as cur:
-                await cur.execute("SELECT user_id, SUM(daily_income) as total FROM assets GROUP BY user_id")
-                incomes = {r["user_id"]: int(r["total"] or 0) for r in await cur.fetchall()}
-                await cur.execute("SELECT user_id, bank_balance, last_daily FROM users")
-                updates = []
-                for row in await cur.fetchall():
+                await cur.execute("SELECT user_id, bank_balance, last_payout FROM users")
+                users = await cur.fetchall()
+                await cur.execute("SELECT user_id, COALESCE(SUM(daily_income), 0) as total FROM assets GROUP BY user_id")
+                asset_incomes = {r["user_id"]: int(r["total"] or 0) for r in await cur.fetchall()}
+
+                income_updates = []  # کاربرانی که درآمد > 0
+                for row in users:
                     user_id = row["user_id"]
-                    last_daily = row["last_daily"]
-                    if last_daily == today_iso: continue
-                    days = 1
-                    if last_daily:
-                        try: days = max(1, min((today - datetime.fromisoformat(last_daily).date()).days, 7))
-                        except Exception: pass
-                    interest, current = 0, int(row["bank_balance"] or 0)
-                    for _ in range(days):
-                        d = int(current * config.BANK_RATE)
-                        interest += d; current += d
-                    asset_income = incomes.get(user_id, 0) * days
-                    if interest > 0 or asset_income > 0: utils.invalidate_cache(user_id)
-                    updates.append((interest, asset_income, today_iso, user_id))
-                if updates:
-                    await cur.executemany("UPDATE users SET bank_balance = bank_balance + %s, balance = balance + %s, last_daily = %s WHERE user_id=%s", updates)
+                    last = row.get("last_payout")
+                    if last:
+                        try:
+                            last_dt = datetime.fromisoformat(last)
+                            seconds = (now - last_dt).total_seconds()
+                        except Exception:
+                            seconds = config.HOURLY_PAYOUT_INTERVAL
+                    else:
+                        seconds = config.HOURLY_PAYOUT_INTERVAL
+                    # محدود کردن زمان برای جلوگیری از پرداخت زیاد
+                    seconds = max(0, min(seconds, config.HOURLY_PAYOUT_MAX_CATCHUP))
+                    if seconds < 1:
+                        continue
+                    daily_asset = asset_incomes.get(user_id, 0)
+                    bank_balance = int(row["bank_balance"] or 0)
+                    asset_income, bank_interest = _calc_income(bank_balance, daily_asset, seconds)
+                    if asset_income > 0 or bank_interest > 0:
+                        income_updates.append((asset_income, bank_interest, now_iso, user_id))
+                        utils.invalidate_cache(user_id)
+                if income_updates:
+                    await cur.executemany(
+                        "UPDATE users SET balance = balance + %s, bank_balance = bank_balance + %s, last_payout = %s WHERE user_id=%s",
+                        income_updates)
+                # آپدیت last_payout برای همه کاربران (حتی بدون درآمد) تا ثانیه‌ها انباشته نشوند
+                await cur.execute("UPDATE users SET last_payout = %s WHERE last_payout IS NULL OR last_payout != %s", (now_iso, now_iso))
                 await conn.commit()
+    logger.info(f"✅ پرداخت ساعتی انجام شد. {len(income_updates)} کاربر درآمد دریافت کردند.")
 
 
+# ═══════════ XP و لول ═══════════
 async def add_xp(user_id: int, amount: int) -> tuple[int, int, bool]:
     if amount <= 0: return 0, 1, False
     utils.invalidate_cache(user_id)
@@ -274,6 +397,44 @@ async def set_last_kabareh(user_id: int, when: str):
             await conn.commit()
 
 
+# ═══════════ ماموریت‌های روزانه ═══════════
+async def _get_eligible_missions(user_id: int, cur) -> list[str]:
+    """
+    فیلتر ماموریت‌ها بر اساس وضعیت کاربر:
+    - اگر تمام ملک‌ها را خریده → buy_property فیلتر می‌شود
+    - اگر تمام کارگرها را خریده → buy_worker فیلتر می‌شود
+    - اگر کاباره را باز نکرده → kabareh فیلتر می‌شود
+    - اگر کاربر نتواند target خرید را تکمیل کند → فیلتر می‌شود
+    """
+    await cur.execute("SELECT kabareh_unlocked FROM users WHERE user_id=%s", (user_id,))
+    urow = await cur.fetchone()
+    kabareh_unlocked = bool(urow and int(urow["kabareh_unlocked"] or 0))
+
+    await cur.execute("SELECT asset_type, COUNT(*) as cnt FROM assets WHERE user_id=%s GROUP BY asset_type", (user_id,))
+    asset_counts = {r["asset_type"]: int(r["cnt"]) for r in await cur.fetchall()}
+    prop_count = asset_counts.get("property", 0)
+    worker_count = asset_counts.get("worker", 0)
+    max_props = len(config.PROPERTIES) * config.MAX_PER_KEY
+    max_workers = len(config.WORKERS) * config.MAX_PER_KEY
+
+    eligible = []
+    for key, t in config.MISSION_TEMPLATES.items():
+        mtype = t["type"]
+        target = t["target"]
+        if mtype == "buy_property":
+            # اگر کاربر + target > حداکثر، ماموریت غیرممکن است
+            if prop_count + target > max_props:
+                continue
+        elif mtype == "buy_worker":
+            if worker_count + target > max_workers:
+                continue
+        elif mtype == "kabareh":
+            if not kabareh_unlocked:
+                continue
+        eligible.append(key)
+    return eligible
+
+
 async def ensure_daily_missions(user_id: int):
     today = utils.today_str()
     async with db_pool.acquire() as conn:
@@ -282,16 +443,22 @@ async def ensure_daily_missions(user_id: int):
             row = await cur.fetchone()
             if row and row["last_mission_date"] == today:
                 return
-            await cur.execute("UPDATE users SET last_mission_date=%s WHERE user_id=%s AND (last_mission_date IS NULL OR last_mission_date != %s)", (today, user_id, today))
+            await cur.execute(
+                "UPDATE users SET last_mission_date=%s WHERE user_id=%s AND (last_mission_date IS NULL OR last_mission_date != %s)",
+                (today, user_id, today))
             if cur.rowcount == 0:
                 await conn.commit(); return
             await cur.execute("DELETE FROM user_missions WHERE user_id=%s", (user_id,))
-            keys = list(config.MISSION_TEMPLATES.keys())
-            n = min(config.DAILY_MISSION_COUNT, len(keys))
-            chosen = random.sample(keys, n)
+            eligible = await _get_eligible_missions(user_id, cur)
+            n = min(config.DAILY_MISSION_COUNT, len(eligible))
+            if n <= 0:
+                await conn.commit(); return
+            chosen = random.sample(eligible, n)
             for key in chosen:
                 t = config.MISSION_TEMPLATES[key]
-                await cur.execute("INSERT INTO user_missions (user_id, mission_key, mission_date, progress, target, xp_reward) VALUES (%s, %s, %s, 0, %s, %s)", (user_id, key, today, t["target"], t["xp"]))
+                await cur.execute(
+                    "INSERT INTO user_missions (user_id, mission_key, mission_date, progress, target, xp_reward) VALUES (%s, %s, %s, 0, %s, %s)",
+                    (user_id, key, today, t["target"], t["xp"]))
             await conn.commit()
 
 
@@ -308,7 +475,9 @@ async def progress_mission(user_id: int, mission_type: str, amount: int = 1, bas
     today = utils.today_str()
     async with db_pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
-            await cur.execute("SELECT id, mission_key, progress, target, xp_reward FROM user_missions WHERE user_id=%s AND mission_date=%s AND completed=0", (user_id, today))
+            await cur.execute(
+                "SELECT id, mission_key, progress, target, xp_reward FROM user_missions WHERE user_id=%s AND mission_date=%s AND completed=0",
+                (user_id, today))
             missions = await cur.fetchall()
             completed_missions = []
             for m in missions:
