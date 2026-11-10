@@ -26,10 +26,13 @@ async def properties_menu_kb(user_id: int):
     for key, prop in sorted(config.PROPERTIES.items(), key=lambda x: x[1]["price"]):
         data = summary.get(key, {"count": 0})
         count = data["count"]
-        if count >= config.MAX_PER_KEY:
-            label = f"✅ {prop['emoji']} {prop['name']} ({count}/{config.MAX_PER_KEY})\n💰 {utils.fmt(prop['price'])} | 📈 {utils.fmt(prop['income'])}/روز"
-        else:
-            label = f"{prop['emoji']} {prop['name']} ({count}/{config.MAX_PER_KEY})\n💰 {utils.fmt(prop['price'])} | 📈 {utils.fmt(prop['income'])}/روز"
+        # سه سطر: نام | قیمت | درآمد — دکمه بزرگ‌تر و خوانا‌تر
+        prefix = "✅ " if count >= config.MAX_PER_KEY else ""
+        label = (
+            f"{prefix}{prop['emoji']} {prop['name']} ({count}/{config.MAX_PER_KEY})\n"
+            f"💰 قیمت: {utils.fmt(prop['price'])}\n"
+            f"📈 سود: {utils.fmt(prop['income'])} /روز"
+        )
         rows.append([InlineKeyboardButton(label, callback_data=f"prop:select:{key}")])
     rows.append([InlineKeyboardButton("💸 برداشت درآمد انباشته", callback_data="prop:withdraw_income")])
     rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="menu:main")])
@@ -42,10 +45,12 @@ async def workers_menu_kb(user_id: int):
     for key, w in sorted(config.WORKERS.items(), key=lambda x: x[1]["price"]):
         data = summary.get(key, {"count": 0})
         count = data["count"]
-        if count >= config.MAX_PER_KEY:
-            label = f"✅ {w['emoji']} {w['name']} ({count}/{config.MAX_PER_KEY})\n💰 {utils.fmt(w['price'])} | 📈 {utils.fmt(w['income'])}/روز"
-        else:
-            label = f"{w['emoji']} {w['name']} ({count}/{config.MAX_PER_KEY})\n💰 {utils.fmt(w['price'])} | 📈 {utils.fmt(w['income'])}/روز"
+        prefix = "✅ " if count >= config.MAX_PER_KEY else ""
+        label = (
+            f"{prefix}{w['emoji']} {w['name']} ({count}/{config.MAX_PER_KEY})\n"
+            f"💰 قیمت: {utils.fmt(w['price'])}\n"
+            f"📈 سود: {utils.fmt(w['income'])} /روز"
+        )
         rows.append([InlineKeyboardButton(label, callback_data=f"worker:select:{key}")])
     rows.append([InlineKeyboardButton("💸 برداشت درآمد انباشته", callback_data="worker:withdraw_income")])
     rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="menu:main")])
