@@ -27,12 +27,12 @@ async def properties_menu_kb(user_id: int):
         data = summary.get(key, {"count": 0})
         count = data["count"]
         if count >= config.MAX_PER_KEY:
-            label = f"🔴 ✅ {prop['emoji']} {prop['name']} ({count}/{config.MAX_PER_KEY})"
+            label = f"✅ {prop['emoji']} {prop['name']} ({count}/{config.MAX_PER_KEY})\n💰 {utils.fmt(prop['price'])} | 📈 {utils.fmt(prop['income'])}/روز"
         else:
-            label = f"🔴 {prop['emoji']} {prop['name']} ({count}/{config.MAX_PER_KEY})"
+            label = f"{prop['emoji']} {prop['name']} ({count}/{config.MAX_PER_KEY})\n💰 {utils.fmt(prop['price'])} | 📈 {utils.fmt(prop['income'])}/روز"
         rows.append([InlineKeyboardButton(label, callback_data=f"prop:select:{key}")])
-    rows.append([InlineKeyboardButton("🔴 💸 برداشت درآمد انباشته", callback_data="prop:withdraw_income")])
-    rows.append([InlineKeyboardButton("🔴 🔙 بازگشت", callback_data="menu:main")])
+    rows.append([InlineKeyboardButton("💸 برداشت درآمد انباشته", callback_data="prop:withdraw_income")])
+    rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="menu:main")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -43,12 +43,12 @@ async def workers_menu_kb(user_id: int):
         data = summary.get(key, {"count": 0})
         count = data["count"]
         if count >= config.MAX_PER_KEY:
-            label = f"🔴 ✅ {w['emoji']} {w['name']} ({count}/{config.MAX_PER_KEY})"
+            label = f"✅ {w['emoji']} {w['name']} ({count}/{config.MAX_PER_KEY})\n💰 {utils.fmt(w['price'])} | 📈 {utils.fmt(w['income'])}/روز"
         else:
-            label = f"🔴 {w['emoji']} {w['name']} ({count}/{config.MAX_PER_KEY})"
+            label = f"{w['emoji']} {w['name']} ({count}/{config.MAX_PER_KEY})\n💰 {utils.fmt(w['price'])} | 📈 {utils.fmt(w['income'])}/روز"
         rows.append([InlineKeyboardButton(label, callback_data=f"worker:select:{key}")])
-    rows.append([InlineKeyboardButton("🔴 💸 برداشت درآمد انباشته", callback_data="worker:withdraw_income")])
-    rows.append([InlineKeyboardButton("🔴 🔙 بازگشت", callback_data="menu:main")])
+    rows.append([InlineKeyboardButton("💸 برداشت درآمد انباشته", callback_data="worker:withdraw_income")])
+    rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="menu:main")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -397,8 +397,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             new_total = (count + 1) * prop['income']
             text = f"🏠 <b>{prop['name']}</b>\n💰 {utils.fmt(prop['price'])}\n📈 سود بعد: {utils.fmt(new_total)}\n\nمطمئنی؟"
             kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔴 ✅ بخر", callback_data=f"prop:confirm:{key}")],
-                [InlineKeyboardButton("🔴 ❌ انصراف", callback_data="prop:menu")]
+                [InlineKeyboardButton("✅ بخر", callback_data=f"prop:confirm:{key}")],
+                [InlineKeyboardButton("❌ انصراف", callback_data="prop:menu")]
             ])
             msg = await utils.safe_edit(query, text, kb)
             if msg:
@@ -476,8 +476,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             new_total = (count + 1) * w['income']
             text = f"👷 <b>{w['name']}</b>\n💰 {utils.fmt(w['price'])}\n📈 سود بعد: {utils.fmt(new_total)}\n\nمطمئنی؟"
             kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔴 ✅ استخدام", callback_data=f"worker:confirm:{key}")],
-                [InlineKeyboardButton("🔴 ❌ انصراف", callback_data="worker:menu")]
+                [InlineKeyboardButton("✅ استخدام", callback_data=f"worker:confirm:{key}")],
+                [InlineKeyboardButton("❌ انصراف", callback_data="worker:menu")]
             ])
             msg = await utils.safe_edit(query, text, kb)
             if msg:
