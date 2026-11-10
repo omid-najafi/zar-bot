@@ -38,26 +38,26 @@ assets_summary_cache = TTLCache(maxsize=2000, ttl=60)
 _membership_cache = TTLCache(maxsize=2000, ttl=600)
 _logged_groups = set()
 
-# ═══════════ منوی اصلی — همه دکمه‌ها با 🔴 (قرمز) ═══════════
+# ═══════════ منوی اصلی ═══════════
 MAIN_MENU_KB = InlineKeyboardMarkup([
-    [InlineKeyboardButton("🔴 🏦 بانک", callback_data="bank:menu"), InlineKeyboardButton("🔴 🏠 ملک‌ها", callback_data="prop:menu")],
-    [InlineKeyboardButton("🔴 👷 کارگرها", callback_data="worker:menu"), InlineKeyboardButton("🔴 🎮 بازی‌ها", callback_data="game:menu")],
-    [InlineKeyboardButton("🔴 🎯 ماموریت‌ها", callback_data="mission:menu"), InlineKeyboardButton("🔴 💸 انتقال", callback_data="transfer:start")],
-    [InlineKeyboardButton("🔴 🎭 کاباره زر", callback_data="kabareh:menu")],
-    [InlineKeyboardButton("🔴 📚 راهنما", callback_data="help:menu")],
+    [InlineKeyboardButton("🏦 بانک", callback_data="bank:menu"), InlineKeyboardButton("🏠 ملک‌ها", callback_data="prop:menu")],
+    [InlineKeyboardButton("👷 کارگرها", callback_data="worker:menu"), InlineKeyboardButton("🎮 بازی‌ها", callback_data="game:menu")],
+    [InlineKeyboardButton("🎯 ماموریت‌ها", callback_data="mission:menu"), InlineKeyboardButton("💸 انتقال", callback_data="transfer:start")],
+    [InlineKeyboardButton("🎭 کاباره زر", callback_data="kabareh:menu")],
+    [InlineKeyboardButton("📚 راهنما", callback_data="help:menu")],
 ])
 
-BACK_MAIN_KB = InlineKeyboardMarkup([[InlineKeyboardButton("🔴 🔙 بازگشت", callback_data="menu:main")]])
-BACK_GAMES_KB = InlineKeyboardMarkup([[InlineKeyboardButton("🔴 🔙 بازگشت به بازی‌ها", callback_data="game:menu")]])
+BACK_MAIN_KB = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="menu:main")]])
+BACK_GAMES_KB = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت به بازی‌ها", callback_data="game:menu")]])
 BANK_MENU_KB = InlineKeyboardMarkup([
-    [InlineKeyboardButton("🔴 💰 واریز", callback_data="bank:deposit"), InlineKeyboardButton("🔴 🏧 برداشت", callback_data="bank:withdraw")],
-    [InlineKeyboardButton("🔴 🔙 بازگشت", callback_data="menu:main")],
+    [InlineKeyboardButton("💰 واریز", callback_data="bank:deposit"), InlineKeyboardButton("🏧 برداشت", callback_data="bank:withdraw")],
+    [InlineKeyboardButton("🔙 بازگشت", callback_data="menu:main")],
 ])
 GAMES_MENU_KB = InlineKeyboardMarkup([
-    [InlineKeyboardButton("🔴 ✊ سنگ کاغذ قیچی", callback_data="game:rps"), InlineKeyboardButton("🔴 ❌ دوز", callback_data="game:ttt")],
-    [InlineKeyboardButton("🔴 🧠 کوییز", callback_data="game:quiz"), InlineKeyboardButton("🔴 ⚽ پنالتی", callback_data="game:penalty")],
-    [InlineKeyboardButton("🔴 🎰 کازینو", callback_data="game:casino")],
-    [InlineKeyboardButton("🔴 🔙 بازگشت", callback_data="menu:main")],
+    [InlineKeyboardButton("✊ سنگ کاغذ قیچی", callback_data="game:rps"), InlineKeyboardButton("❌ دوز", callback_data="game:ttt")],
+    [InlineKeyboardButton("🧠 کوییز", callback_data="game:quiz"), InlineKeyboardButton("⚽ پنالتی", callback_data="game:penalty")],
+    [InlineKeyboardButton("🎰 کازینو", callback_data="game:casino")],
+    [InlineKeyboardButton("🔙 بازگشت", callback_data="menu:main")],
 ])
 
 
@@ -166,14 +166,14 @@ async def safe_edit(query, text: str, reply_markup=None):
 
 def join_room_kb(room_id: str, game_key: str):
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔴 🎮 ورود به بازی", callback_data=f"{game_key}:join:{room_id}")],
-        [InlineKeyboardButton("🔴 ❌ لغو", callback_data=f"room:cancel:{room_id}")],
+        [InlineKeyboardButton("🎮 ورود به بازی", callback_data=f"{game_key}:join:{room_id}")],
+        [InlineKeyboardButton("❌ لغو", callback_data=f"room:cancel:{room_id}")],
     ])
 
 def transfer_confirm_kb(user_id: int):
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton("🔴 ✅ تأیید", callback_data=f"tr:c:{user_id}"),
-        InlineKeyboardButton("🔴 ❌ انصراف", callback_data=f"tr:x:{user_id}"),
+        InlineKeyboardButton("✅ تأیید", callback_data=f"tr:c:{user_id}"),
+        InlineKeyboardButton("❌ انصراف", callback_data=f"tr:x:{user_id}"),
     ]])
 
 def calc_level(total_xp: int) -> tuple[int, int, int]:
@@ -218,10 +218,10 @@ async def notify_mission(bot_or_context, chat_id: int, result: dict | None):
 def get_join_keyboard():
     buttons = []
     for ch in config.REQUIRED_CHANNELS:
-        buttons.append([InlineKeyboardButton(f"🔴 📢 {ch['name']}", url=ch["url"])])
+        buttons.append([InlineKeyboardButton(f"📢 {ch['name']}", url=ch["url"])])
     if config.REQUIRED_GROUP and config.REQUIRED_GROUP.get("url"):
-        buttons.append([InlineKeyboardButton(f"🔴 💬 {config.REQUIRED_GROUP['name']}", url=config.REQUIRED_GROUP["url"])])
-    buttons.append([InlineKeyboardButton("🔴 ✅ عضو شدم، بررسی کن!", callback_data="check_membership")])
+        buttons.append([InlineKeyboardButton(f"💬 {config.REQUIRED_GROUP['name']}", url=config.REQUIRED_GROUP["url"])])
+    buttons.append([InlineKeyboardButton("✅ عضو شدم، بررسی کن!", callback_data="check_membership")])
     return InlineKeyboardMarkup(buttons)
 
 
