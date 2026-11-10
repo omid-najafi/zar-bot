@@ -30,7 +30,8 @@ async def render(query, room):
             f"👤 {utils.escape(room['user_names'][p2])} ⭕\n\n"
             f"🎯 نوبت: <b>{utils.escape(room['user_names'][turn])}</b>")
     msg = await utils.safe_edit(query, text, kb(room))
-    utils.remember_owner(msg, p1)
+    # هر دو بازیکن می‌توانند کلیک کنند
+    utils.remember_owners(msg, room["players"])
 
 async def create_room(update, user, amount):
     rid = utils.new_room_id()
@@ -47,10 +48,10 @@ async def create_room(update, user, amount):
 async def handle_callback(query, context, data, user_id):
     parts = data.split(":")
     action = parts[1]
-    
+
     if action == "noop":
         await utils.safe_answer(query); return
-        
+
     room_id = parts[2]
     if action == "join":
         room = utils.rooms.get(room_id)
@@ -58,11 +59,12 @@ async def handle_callback(query, context, data, user_id):
             await utils.safe_answer(query, "❌ نمی‌تونی وارد بشی", show_alert=True); return
         if utils.find_user_room(user_id):
             await utils.safe_answer(query, "⚠️ در بازی دیگر فعالی", show_alert=True); return
-            
+
         await db.ensure_user(query.from_user)
+        await db.accrue_income(user_id)
         if not await db.deduct_balance(user_id, room["entry"]):
             await utils.safe_answer(query, "❌ موجودی کافی نیست", show_alert=True); return
-            
+
         room["players"].append(user_id)
         room["user_names"][user_id] = query.from_user.first_name or str(user_id)
         room["status"] = "playing"
@@ -71,7 +73,7 @@ async def handle_callback(query, context, data, user_id):
         room["symbols"] = {room["players"][0]: "X", room["players"][1]: "O"}
         await render(query, room)
         await utils.safe_answer(query)
-        
+
     elif action == "m":
         idx = int(parts[3])
         room = utils.rooms.get(room_id)
@@ -81,11 +83,11 @@ async def handle_callback(query, context, data, user_id):
             await utils.safe_answer(query, "⏳ نوبت تو نیست", show_alert=True); return
         if room["board"][idx]:
             await utils.safe_answer(query, "❌ خانه پر است", show_alert=True); return
-            
+
         p1, p2 = room["players"]
         room["board"][idx] = room["symbols"][user_id]
         winner = ttt_check_win(room["board"])
-        
+
         if winner:
             if winner == "draw":
                 await db.add_balance(p1, room["entry"]); await db.add_balance(p2, room["entry"])
@@ -99,24 +101,26 @@ async def handle_callback(query, context, data, user_id):
             room["status"] = "finished"; utils.rooms.pop(room_id, None)
             await utils.safe_edit(query, text, utils.BACK_GAMES_KB)
             await utils.safe_answer(query)
-            
+
             # ✅ ثبت ماموریت‌ها
             r_p1 = await db.progress_mission(p1, "play_ttt", 1, base_xp=config.BASE_XP_PLAY_GAME)
             r_p2 = await db.progress_mission(p2, "play_ttt", 1, base_xp=config.BASE_XP_PLAY_GAME)
             await utils.notify_mission(context, room["chat_id"], r_p1)
             await utils.notify_mission(context, room["chat_id"], r_p2)
-            
+
             r_any_p1 = await db.progress_mission(p1, "play_any_game", 1, base_xp=0)
             r_any_p2 = await db.progress_mission(p2, "play_any_game", 1, base_xp=0)
             await utils.notify_mission(context, room["chat_id"], r_any_p1)
             await utils.notify_mission(context, room["chat_id"], r_any_p2)
-            
+
             if winner in ("X", "O"):
                 w_id = p1 if winner == "X" else p2
                 r_win = await db.progress_mission(w_id, "win_ttt", 1, base_xp=config.BASE_XP_WIN_GAME)
                 await utils.notify_mission(context, room["chat_id"], r_win)
+                r_any_win = await db.progress_mission(w_id, "win_any_game", 1, base_xp=0)
+                await utils.notify_mission(context, room["chat_id"], r_any_win)
             return
-            
+
         room["turn"] = p2 if room["turn"] == p1 else p1
         await render(query, room)
         await utils.safe_answer(query)
