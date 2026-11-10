@@ -246,19 +246,21 @@ async def handle_callback(query, context, data, user_id):
             await utils.safe_answer(query, "⚠️ در بازی دیگر فعالی", show_alert=True); return
             
         await db.ensure_user(query.from_user)
+        await db.accrue_income(user_id)
         if not await db.deduct_balance(user_id, room["entry"]):
             await utils.safe_answer(query, "❌ موجودی کافی نیست", show_alert=True); return
-            
+
         room["players"].append(user_id)
         room["user_names"][user_id] = query.from_user.first_name or str(user_id)
         room["status"] = "playing"
         q = get_random_q()
         room["question"] = q
         room["answered"] = False
-        
+
         text = f"🧠 <b>کوییز</b>\n💰 ورودی: {utils.fmt(room['entry'])}\n\n❓ <b>{utils.escape(q['q'])}</b>\n\nاولین کسی که درست جواب بده برنده‌ست:"
         msg = await utils.safe_edit(query, text, kb(room_id, q["opts"]))
-        utils.remember_owner(msg, room["players"][0])
+        # هر دو بازیکن می‌توانند کلیک کنند
+        utils.remember_owners(msg, room["players"])
         await utils.safe_answer(query)
         
     elif action == "a":
@@ -288,5 +290,8 @@ async def handle_callback(query, context, data, user_id):
             
             r_win = await db.progress_mission(user_id, "win_quiz", 1, base_xp=config.BASE_XP_WIN_GAME)
             await utils.notify_mission(context, room["chat_id"], r_win)
+
+            r_any_win = await db.progress_mission(user_id, "win_any_game", 1, base_xp=0)
+            await utils.notify_mission(context, room["chat_id"], r_any_win)
         else:
             await utils.safe_answer(query, "❌ اشتباه! دوباره تلاش کن", show_alert=True)
