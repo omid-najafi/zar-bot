@@ -10,11 +10,17 @@ DB_USER = os.getenv("MYSQLUSER", "root")
 DB_PASSWORD = os.getenv("MYSQLPASSWORD", "")
 DB_NAME = os.getenv("MYSQLDATABASE", "railway")
 
-BANK_RATE = 0.02
+BANK_RATE = 0.02  # سود روزانه ۲٪
 MAX_PER_KEY = 5
 TRANSFER_FEE_RATE = 0.01
 TRANSFER_FEE_MIN = 1_000_000
 COMMISSION_RATE = 0.10
+
+# ═══════════ پرداخت درآمد ═══════════
+# پرداخت خودکار هر ۱ ساعت
+HOURLY_PAYOUT_INTERVAL = 3600  # ثانیه
+# حداکثر زمان انباشته‌شده در پرداخت خودکار (ثانیه) - برای جلوگیری از پرداخت زیاد هنگام ری‌استارت
+HOURLY_PAYOUT_MAX_CATCHUP = 86400  # نهایتاً ۱ روز
 
 # ═══════════ کاباره زر ═══════════
 KABAREH_UNLOCK_COST = 25_000_000
@@ -51,30 +57,70 @@ BASE_XP_BUY_ASSET = 40
 BASE_XP_DEPOSIT_10K = 10
 BASE_XP_TRANSFER = 20
 BASE_XP_ZAR = 10
+BASE_XP_KABAREH = 20
+BASE_XP_WITHDRAW_INCOME = 15
 
+# ═══════════ قالب‌های ماموریت ═══════════
+# نوع ماموریت‌ها برای فیلتر هوشمند:
+#   buy_property → اگر کاربر تمام ملک‌ها را خریده، فیلتر می‌شود
+#   buy_worker   → اگر کاربر تمام کارگرها را خریده، فیلتر می‌شود
+#   kabareh      → اگر کاربر کاباره را باز نکرده، فیلتر می‌شود
 MISSION_TEMPLATES = {
-    "play_rps_1":     {"desc": "1 بازی سنگ کاغذ قیچی انجام بده", "type": "play_rps", "target": 1, "xp": 100},
-    "play_rps_3":     {"desc": "3 بازی سنگ کاغذ قیچی انجام بده", "type": "play_rps", "target": 3, "xp": 300},
-    "win_rps_1":      {"desc": "1 بازی سنگ کاغذ قیچی ببر", "type": "win_rps", "target": 1, "xp": 200},
-    "play_ttt_1":     {"desc": "1 بازی دوز انجام بده", "type": "play_ttt", "target": 1, "xp": 100},
-    "play_ttt_3":     {"desc": "3 بازی دوز انجام بده", "type": "play_ttt", "target": 3, "xp": 300},
-    "win_ttt_1":      {"desc": "1 بازی دوز ببر", "type": "win_ttt", "target": 1, "xp": 250},
-    "play_quiz_1":    {"desc": "1 کوییز بازی کن", "type": "play_quiz", "target": 1, "xp": 100},
-    "win_quiz_1":     {"desc": "1 کوییز ببر", "type": "win_quiz", "target": 1, "xp": 300},
-    "play_penalty_1": {"desc": "1 پنالتی بزن", "type": "play_penalty", "target": 1, "xp": 100},
-    "win_penalty_1":  {"desc": "1 پنالتی گل کن", "type": "win_penalty", "target": 1, "xp": 200},
-    "play_casino_1":  {"desc": "1 بازی کازینو انجام بده", "type": "play_casino", "target": 1, "xp": 100},
-    "play_casino_3":  {"desc": "3 بازی کازینو انجام بده", "type": "play_casino", "target": 3, "xp": 300},
-    "play_casino_5":  {"desc": "5 بازی کازینو انجام بده", "type": "play_casino", "target": 5, "xp": 450},
-    "buy_property_1": {"desc": "1 ملک بخر", "type": "buy_property", "target": 1, "xp": 250},
-    "buy_worker_1":   {"desc": "1 کارگر استخدام کن", "type": "buy_worker", "target": 1, "xp": 250},
-    "deposit_100k":   {"desc": "100,000 زرکوین به بانک واریز کن", "type": "deposit_bank", "target": 100000, "xp": 150},
-    "deposit_500k":   {"desc": "500,000 زرکوین به بانک واریز کن", "type": "deposit_bank", "target": 500000, "xp": 400},
-    "transfer_1":     {"desc": "1 انتقال زرکوین انجام بده", "type": "transfer", "target": 1, "xp": 200},
-    "zar_collect_3":  {"desc": "3 بار کلمه زر رو بفرست", "type": "zar_collect", "target": 3, "xp": 250},
-    "zar_collect_5":  {"desc": "5 بار کلمه زر رو بفرست", "type": "zar_collect", "target": 5, "xp": 400},
-    "play_games_5":   {"desc": "5 بازی (هر نوعی) انجام بده", "type": "play_any_game", "target": 5, "xp": 400},
-    "play_games_10":  {"desc": "10 بازی (هر نوعی) انجام بده", "type": "play_any_game", "target": 10, "xp": 500},
+    # ─── سنگ کاغذ قیچی ───
+    "play_rps_1":     {"desc": "۱ بازی سنگ کاغذ قیچی انجام بده", "type": "play_rps", "target": 1, "xp": 100},
+    "play_rps_3":     {"desc": "۳ بازی سنگ کاغذ قیچی انجام بده", "type": "play_rps", "target": 3, "xp": 300},
+    "play_rps_5":     {"desc": "۵ بازی سنگ کاغذ قیچی انجام بده", "type": "play_rps", "target": 5, "xp": 450},
+    "win_rps_1":      {"desc": "۱ بازی سنگ کاغذ قیچی ببر", "type": "win_rps", "target": 1, "xp": 200},
+    "win_rps_3":      {"desc": "۳ بازی سنگ کاغذ قیچی ببر", "type": "win_rps", "target": 3, "xp": 500},
+    # ─── دوز ───
+    "play_ttt_1":     {"desc": "۱ بازی دوز انجام بده", "type": "play_ttt", "target": 1, "xp": 100},
+    "play_ttt_3":     {"desc": "۳ بازی دوز انجام بده", "type": "play_ttt", "target": 3, "xp": 300},
+    "play_ttt_5":     {"desc": "۵ بازی دوز انجام بده", "type": "play_ttt", "target": 5, "xp": 450},
+    "win_ttt_1":      {"desc": "۱ بازی دوز ببر", "type": "win_ttt", "target": 1, "xp": 250},
+    "win_ttt_3":      {"desc": "۳ بازی دوز ببر", "type": "win_ttt", "target": 3, "xp": 600},
+    # ─── کوییز ───
+    "play_quiz_1":    {"desc": "۱ کوییز بازی کن", "type": "play_quiz", "target": 1, "xp": 100},
+    "play_quiz_3":    {"desc": "۳ کوییز بازی کن", "type": "play_quiz", "target": 3, "xp": 300},
+    "win_quiz_1":     {"desc": "۱ کوییز ببر", "type": "win_quiz", "target": 1, "xp": 300},
+    "win_quiz_3":     {"desc": "۳ کوییز ببر", "type": "win_quiz", "target": 3, "xp": 700},
+    # ─── پنالتی ───
+    "play_penalty_1": {"desc": "۱ پنالتی بزن", "type": "play_penalty", "target": 1, "xp": 100},
+    "play_penalty_3": {"desc": "۳ پنالتی بزن", "type": "play_penalty", "target": 3, "xp": 300},
+    "win_penalty_1":  {"desc": "۱ پنالتی گل کن", "type": "win_penalty", "target": 1, "xp": 200},
+    "win_penalty_3":  {"desc": "۳ پنالتی گل کن", "type": "win_penalty", "target": 3, "xp": 500},
+    # ─── کازینو ───
+    "play_casino_1":  {"desc": "۱ بازی کازینو انجام بده", "type": "play_casino", "target": 1, "xp": 100},
+    "play_casino_3":  {"desc": "۳ بازی کازینو انجام بده", "type": "play_casino", "target": 3, "xp": 300},
+    "play_casino_5":  {"desc": "۵ بازی کازینو انجام بده", "type": "play_casino", "target": 5, "xp": 450},
+    "play_casino_10": {"desc": "۱۰ بازی کازینو انجام بده", "type": "play_casino", "target": 10, "xp": 600},
+    "win_casino_3":   {"desc": "۳ بازی کازینو ببر", "type": "win_casino", "target": 3, "xp": 500},
+    # ─── بازی‌های عمومی ───
+    "play_games_5":   {"desc": "۵ بازی (هر نوعی) انجام بده", "type": "play_any_game", "target": 5, "xp": 400},
+    "play_games_10":  {"desc": "۱۰ بازی (هر نوعی) انجام بده", "type": "play_any_game", "target": 10, "xp": 500},
+    "play_games_15":  {"desc": "۱۵ بازی (هر نوعی) انجام بده", "type": "play_any_game", "target": 15, "xp": 700},
+    "win_games_3":    {"desc": "۳ بازی (هر نوعی) ببر", "type": "win_any_game", "target": 3, "xp": 500},
+    "win_games_5":    {"desc": "۵ بازی (هر نوعی) ببر", "type": "win_any_game", "target": 5, "xp": 800},
+    # ─── خرید دارایی ───
+    "buy_property_1": {"desc": "۱ ملک بخر", "type": "buy_property", "target": 1, "xp": 250},
+    "buy_property_3": {"desc": "۳ ملک بخر", "type": "buy_property", "target": 3, "xp": 500},
+    "buy_worker_1":   {"desc": "۱ کارگر استخدام کن", "type": "buy_worker", "target": 1, "xp": 250},
+    "buy_worker_3":   {"desc": "۳ کارگر استخدام کن", "type": "buy_worker", "target": 3, "xp": 500},
+    # ─── بانک ───
+    "deposit_100k":   {"desc": "۱۰۰٬۰۰۰ زرکوین به بانک واریز کن", "type": "deposit_bank", "target": 100000, "xp": 150},
+    "deposit_500k":   {"desc": "۵۰۰٬۰۰۰ زرکوین به بانک واریز کن", "type": "deposit_bank", "target": 500000, "xp": 400},
+    "deposit_1m":     {"desc": "۱٬۰۰۰٬۰۰۰ زرکوین به بانک واریز کن", "type": "deposit_bank", "target": 1000000, "xp": 600},
+    # ─── انتقال ───
+    "transfer_1":     {"desc": "۱ انتقال زرکوین انجام بده", "type": "transfer", "target": 1, "xp": 200},
+    "transfer_3":     {"desc": "۳ انتقال زرکوین انجام بده", "type": "transfer", "target": 3, "xp": 400},
+    # ─── زر ───
+    "zar_collect_3":  {"desc": "۳ بار کلمه زر رو بفرست", "type": "zar_collect", "target": 3, "xp": 250},
+    "zar_collect_5":  {"desc": "۵ بار کلمه زر رو بفرست", "type": "zar_collect", "target": 5, "xp": 400},
+    "zar_collect_10": {"desc": "۱۰ بار کلمه زر رو بفرست", "type": "zar_collect", "target": 10, "xp": 600},
+    # ─── کاباره ───
+    "kabareh_1":      {"desc": "۱ بار به کاباره برو", "type": "kabareh", "target": 1, "xp": 300},
+    # ─── برداشت درآمد ───
+    "withdraw_income_1": {"desc": "۱ بار درآمد ملک/کارگر رو برداشت کن", "type": "withdraw_income", "target": 1, "xp": 200},
+    "withdraw_income_3": {"desc": "۳ بار درآمد ملک/کارگر رو برداشت کن", "type": "withdraw_income", "target": 3, "xp": 400},
 }
 
 PROPERTIES = {
@@ -121,13 +167,15 @@ HELP_TEXT = (
     "📚 <b>راهنما</b>\n"
     "━━━━━━━━━━━━━━━━━━\n"
     "⭐ <b>لول</b>: هر لول نیاز به 2^level × 1000 XP\n"
-    "🎯 <b>ماموریت‌ها</b>: هر روز 6 ماموریت جدید\n"
-    "💰 <b>زر</b>: هر 5 دقیقه زرکوین رایگان بر اساس لول\n"
-    "🎭 <b>کاباره</b>: با 25M بازش کن | روزی یکبار\n"
-    "🏦 <b>بانک</b>: سود روزانه 2% ساعت 00:00\n"
-    "🏠 <b>ملک‌ها</b>: حداکثر 5 از هر نوع (سود 25%)\n"
-    "👷 <b>کارگرها</b>: حداکثر 5 از هر نوع (سود 25%)\n"
-    "🎮 <b>بازی‌ها</b>: حداقل 1,000 | کارمزد 10%\n"
-    "🎰 <b>کازینو</b>: حداقل 10,000\n"
-    "💸 <b>انتقال</b>: بالای 1M کارمزد 1%"
+    "🎯 <b>ماموریت‌ها</b>: هر روز ۶ ماموریت جدید\n"
+    "💰 <b>زر</b>: هر ۵ دقیقه زرکوین رایگان بر اساس لول\n"
+    "🎭 <b>کاباره</b>: با ۲۵M بازش کن | روزی یکبار\n"
+    "🏦 <b>بانک</b>: سود روزانه ۲٪ (هر ساعت واریز می‌شود)\n"
+    "🏠 <b>ملک‌ها</b>: حداکثر ۵ از هر نوع (سود ۲۵٪)\n"
+    "👷 <b>کارگرها</b>: حداکثر ۵ از هر نوع (سود ۲۵٪)\n"
+    "💸 <b>برداشت درآمد</b>: در بخش ملک/کارگر، درآمد انباشته‌شده رو手动 برداشت کن\n"
+    "🎮 <b>بازی‌ها</b>: حداقل ۱٬۰۰۰ | کارمزد ۱۰٪\n"
+    "🎰 <b>کازینو</b>: حداقل ۱۰٬۰۰۰\n"
+    "💸 <b>انتقال</b>: بالای ۱M کارمزد ۱٪\n"
+    "🔒 <b>منو</b>: هر کاربر فقط می‌تونه از منوی خودش استفاده کنه"
 )
