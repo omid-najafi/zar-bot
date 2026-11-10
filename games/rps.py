@@ -4,9 +4,9 @@ import utils, db, config
 
 def kb(room_id):
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton("✊ سنگ", callback_data=f"rps:c:{room_id}:rock"),
-        InlineKeyboardButton("✋ کاغذ", callback_data=f"rps:c:{room_id}:paper"),
-        InlineKeyboardButton("✌️ قیچی", callback_data=f"rps:c:{room_id}:scissors"),
+        InlineKeyboardButton("🔴 ✊ سنگ", callback_data=f"rps:c:{room_id}:rock"),
+        InlineKeyboardButton("🔴 ✋ کاغذ", callback_data=f"rps:c:{room_id}:paper"),
+        InlineKeyboardButton("🔴 ✌️ قیچی", callback_data=f"rps:c:{room_id}:scissors"),
     ]])
 
 async def create_room(update, user, amount):
