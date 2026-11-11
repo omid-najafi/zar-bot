@@ -303,46 +303,106 @@ async def hourly_payout(context=None):
     پرداخت خودکار ساعتی برای همه کاربران.
     حداکثر HOURLY_PAYOUT_MAX_CATCHUP ثانیه درآمد پرداخت می‌کند (برای جلوگیری از پرداخت زیاد هنگام ری‌استارت).
     """
-    async with utils.hourly_lock:
-        now = datetime.now(utils.TEHRAN)
-        now_iso = now.isoformat()
-        async with db_pool.acquire() as conn:
-            async with conn.cursor(aiomysql.DictCursor) as cur:
-                await cur.execute("SELECT user_id, bank_balance, last_payout FROM users")
-                users = await cur.fetchall()
-                await cur.execute("SELECT user_id, COALESCE(SUM(daily_income), 0) as total FROM assets GROUP BY user_id")
-                asset_incomes = {r["user_id"]: int(r["total"] or 0) for r in await cur.fetchall()}
+    if db_pool is None:
+        logger.warning("⚠️ hourly_payout: db_pool هنوز مقداردهی نشده")
+        return
+    try:
+        async with utils.hourly_lock:
+            now = datetime.now(utils.TEHRAN)
+            now_iso = now.isoformat()
+            async with db_pool.acquire() as conn:
+                async with conn.cursor(aiomysql.DictCursor) as cur:
+                    await cur.execute("SELECT user_id, bank_balance, last_payout FROM users")
+                    users = await cur.fetchall()
+                    await cur.execute("SELECT user_id, COALESCE(SUM(daily_income), 0) as total FROM assets GROUP BY user_id")
+                    asset_incomes = {r["user_id"]: int(r["total"] or 0) for r in await cur.fetchall()}
 
-                income_updates = []  # کاربرانی که درآمد > 0
-                for row in users:
-                    user_id = row["user_id"]
-                    last = row.get("last_payout")
-                    if last:
-                        try:
-                            last_dt = datetime.fromisoformat(last)
-                            seconds = (now - last_dt).total_seconds()
-                        except Exception:
+                    income_updates = []  # کاربرانی که درآمد > 0
+                    for row in users:
+                        user_id = row["user_id"]
+                        last = row.get("last_payout")
+                        if last:
+                            try:
+                                last_dt = datetime.fromisoformat(last)
+                                seconds = (now - last_dt).total_seconds()
+                            except Exception:
+                                seconds = config.HOURLY_PAYOUT_INTERVAL
+                        else:
                             seconds = config.HOURLY_PAYOUT_INTERVAL
-                    else:
-                        seconds = config.HOURLY_PAYOUT_INTERVAL
-                    # محدود کردن زمان برای جلوگیری از پرداخت زیاد
-                    seconds = max(0, min(seconds, config.HOURLY_PAYOUT_MAX_CATCHUP))
-                    if seconds < 1:
-                        continue
-                    daily_asset = asset_incomes.get(user_id, 0)
-                    bank_balance = int(row["bank_balance"] or 0)
-                    asset_income, bank_interest = _calc_income(bank_balance, daily_asset, seconds)
-                    if asset_income > 0 or bank_interest > 0:
-                        income_updates.append((asset_income, bank_interest, now_iso, user_id))
-                        utils.invalidate_cache(user_id)
-                if income_updates:
-                    await cur.executemany(
-                        "UPDATE users SET balance = balance + %s, bank_balance = bank_balance + %s, last_payout = %s WHERE user_id=%s",
-                        income_updates)
-                # آپدیت last_payout برای همه کاربران (حتی بدون درآمد) تا ثانیه‌ها انباشته نشوند
-                await cur.execute("UPDATE users SET last_payout = %s WHERE last_payout IS NULL OR last_payout != %s", (now_iso, now_iso))
-                await conn.commit()
-    logger.info(f"✅ پرداخت ساعتی انجام شد. {len(income_updates)} کاربر درآمد دریافت کردند.")
+                        # محدود کردن زمان برای جلوگیری از پرداخت زیاد
+                        seconds = max(0, min(seconds, config.HOURLY_PAYOUT_MAX_CATCHUP))
+                        if seconds < 1:
+                            continue
+                        daily_asset = asset_incomes.get(user_id, 0)
+                        bank_balance = int(row["bank_balance"] or 0)
+                        asset_income, bank_interest = _calc_income(bank_balance, daily_asset, seconds)
+                        if asset_income > 0 or bank_interest > 0:
+                            income_updates.append((asset_income, bank_interest, now_iso, user_id))
+                            utils.invalidate_cache(user_id)
+                    if income_updates:
+                        await cur.executemany(
+                            "UPDATE users SET balance = balance + %s, bank_balance = bank_balance + %s, last_payout = %s WHERE user_id=%s",
+                            income_updates)
+                    # آپدیت last_payout برای همه کاربران (حتی بدون درآمد) تا ثانیه‌ها انباشته نشوند
+                    await cur.execute("UPDATE users SET last_payout = %s WHERE last_payout IS NULL OR last_payout != %s", (now_iso, now_iso))
+                    await conn.commit()
+        logger.info(f"✅ پرداخت ساعتی انجام شد. {len(income_updates)} کاربر درآمد دریافت کردند.")
+    except Exception as e:
+        logger.exception(f"❌ hourly_payout error: {e}")
+
+
+async def daily_payout(context=None):
+    """
+    پرداخت روزانه کامل درآمد برای همه کاربران (ساعت 00:00).
+    این تابع مطمئن می‌شه همه درآمدهای انباشته‌شده روزانه واریز شده.
+    هر کاربر درآمد دارایی‌ها رو به‌صورت کامل (۲۴ ساعت) دریافت می‌کنه.
+    """
+    if db_pool is None:
+        logger.warning("⚠️ daily_payout: db_pool هنوز مقداردهی نشده")
+        return
+    try:
+        async with utils.hourly_lock:
+            now = datetime.now(utils.TEHRAN)
+            now_iso = now.isoformat()
+            async with db_pool.acquire() as conn:
+                async with conn.cursor(aiomysql.DictCursor) as cur:
+                    # همه کاربران و آخرین پرداخت‌شون
+                    await cur.execute("SELECT user_id, bank_balance, last_payout FROM users")
+                    users = await cur.fetchall()
+                    # درآمد روزانه هر کاربر از دارایی‌ها
+                    await cur.execute("SELECT user_id, COALESCE(SUM(daily_income), 0) as total FROM assets GROUP BY user_id")
+                    asset_incomes = {r["user_id"]: int(r["total"] or 0) for r in await cur.fetchall()}
+
+                    daily_updates = []  # کاربرانی که درآمد روزانه دارن
+                    for row in users:
+                        user_id = row["user_id"]
+                        last = row.get("last_payout")
+                        if last:
+                            try:
+                                last_dt = datetime.fromisoformat(last)
+                                seconds = (now - last_dt).total_seconds()
+                            except Exception:
+                                seconds = 86400  # ۲۴ ساعت
+                        else:
+                            seconds = 86400  # ۲۴ ساعت
+                        # برای daily_payout حداقل ۱ ساعت درآمد واریز کن
+                        seconds = max(3600, min(seconds, config.HOURLY_PAYOUT_MAX_CATCHUP))
+                        daily_asset = asset_incomes.get(user_id, 0)
+                        bank_balance = int(row["bank_balance"] or 0)
+                        asset_income, bank_interest = _calc_income(bank_balance, daily_asset, seconds)
+                        if asset_income > 0 or bank_interest > 0:
+                            daily_updates.append((asset_income, bank_interest, now_iso, user_id))
+                            utils.invalidate_cache(user_id)
+                    if daily_updates:
+                        await cur.executemany(
+                            "UPDATE users SET balance = balance + %s, bank_balance = bank_balance + %s, last_payout = %s WHERE user_id=%s",
+                            daily_updates)
+                    # آپدیت last_payout برای همه کاربران
+                    await cur.execute("UPDATE users SET last_payout = %s WHERE last_payout IS NULL OR last_payout != %s", (now_iso, now_iso))
+                    await conn.commit()
+        logger.info(f"✅ پرداخت روزانه (00:00) انجام شد. {len(daily_updates)} کاربر درآمد دریافت کردند.")
+    except Exception as e:
+        logger.exception(f"❌ daily_payout error: {e}")
 
 
 # ═══════════ XP و لول ═══════════
