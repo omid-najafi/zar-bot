@@ -192,6 +192,11 @@ CASINO_GAMES = {
 # ═══════════ شرط ورود به کاباره ═══════════
 KABAREH_MIN_LEVEL = 4  # کاربر باید حداقل لول ۴ باشه تا بتونه وارد کاباره بشه
 
+# ═══════════ شرط لول برای لانچرهای پیشرفته ═══════════
+# این ۴ لانچر نیاز به لول ۲۰ دارند
+LAUNCHER_MIN_LEVEL = 20
+LAUNCHER_LEVEL_LOCKED = {"missile_launcher", "b2_bomber", "mc130_transport", "drone_launcher", "f35_fighter"}
+
 # ═══════════ بازار سیاه ═══════════
 # آیتم‌های بازار سیاه با ایموجی‌های اختصاصی
 # type: "launcher" (وسیله شلیک) | "projectile" (مهمات) | "defense" (دفاعی)
