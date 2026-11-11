@@ -36,15 +36,22 @@ def _page_items(page: int) -> list[tuple[str, dict]]:
     return all_items[start:end]
 
 
-def _item_kb(item_key: str, item: dict, count: int = 0) -> InlineKeyboardMarkup:
+def _item_kb(item_key: str, item: dict, count: int = 0, user_level: int = 0) -> InlineKeyboardMarkup:
     """کیبورد تأیید خرید یک آیتم"""
+    # اگر آیتم قفل لول داره و کاربر هنوز به لول لازم نرسیده، دکمه خرید نشون نده
+    locked = item_key in config.LAUNCHER_LEVEL_LOCKED and user_level < config.LAUNCHER_MIN_LEVEL
+    if locked:
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton(f"🔒 نیاز به لول {config.LAUNCHER_MIN_LEVEL}", callback_data="bm:noop")],
+            [InlineKeyboardButton("🔙 بازگشت", callback_data=f"bm:menu:0")],
+        ])
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ بخر", callback_data=f"bm:buy:{item_key}")],
         [InlineKeyboardButton("🔙 بازگشت", callback_data=f"bm:menu:0")],
     ])
 
 
-def _menu_kb(page: int, counts: dict) -> InlineKeyboardMarkup:
+def _menu_kb(page: int, counts: dict, user_level: int = 0) -> InlineKeyboardMarkup:
     """کیبورد صفحه منو با صفحه‌بندی"""
     items = _page_items(page)
     rows = []
@@ -52,7 +59,10 @@ def _menu_kb(page: int, counts: dict) -> InlineKeyboardMarkup:
         count = counts.get(item_key, 0)
         # نمایش تعداد دارایی در صورت وجود
         count_str = f" ×{count}" if count > 0 else ""
-        label = f"{item['emoji']} {item['name']}\n💰 {utils.fmt(item['price'])}{count_str}"
+        # نشونه قفل برای لانچرهای قفل‌شده
+        locked = item_key in config.LAUNCHER_LEVEL_LOCKED and user_level < config.LAUNCHER_MIN_LEVEL
+        lock_str = f" 🔴 لول {config.LAUNCHER_MIN_LEVEL}+" if locked else ""
+        label = f"{item['emoji']} {item['name']}\n💰 {utils.fmt(item['price'])}{count_str}{lock_str}"
         rows.append([InlineKeyboardButton(label, callback_data=f"bm:select:{item_key}")])
 
     # دکمه‌های صفحه‌بندی
@@ -82,14 +92,22 @@ def _item_type_text(item_type: str) -> str:
     return ""
 
 
-async def _build_item_text(item_key: str, item: dict, count: int = 0) -> str:
+async def _build_item_text(item_key: str, item: dict, count: int = 0, user_level: int = 0) -> str:
     """ساخت متن جزئیات آیتم"""
+    # بررسی قفل لول
+    locked = item_key in config.LAUNCHER_LEVEL_LOCKED and user_level < config.LAUNCHER_MIN_LEVEL
+
     text = (
         f"{item['emoji']} <b>{item['name']}</b>\n"
         f"━━━━━━━━━━━━━━━━━━\n"
-        f"💰 قیمت: <b>{utils.fmt(item['price'])}</b> زرکوین\n"
-        f"📋 نوع: {_item_type_text(item['type'])}\n"
     )
+    if locked:
+        text += f"🔒 <b>قفل شده!</b> نیاز به لول {config.LAUNCHER_MIN_LEVEL}\n"
+        text += f"⭐ لول فعلی شما: {user_level}\n\n"
+
+    text += f"💰 قیمت: <b>{utils.fmt(item['price'])}</b> زرکوین\n"
+    text += f"📋 نوع: {_item_type_text(item['type'])}\n"
+
     if count > 0:
         text += f"🎒 تعداد دارایی: <b>{count}</b>\n"
 
@@ -111,7 +129,10 @@ async def _build_item_text(item_key: str, item: dict, count: int = 0) -> str:
     elif item["type"] == "defense":
         text += f"🛡️ احتمال دفاع: <b>{int(item['defense_chance'] * 100)}%</b>\n"
 
-    text += "\nمطمئنی؟"
+    if not locked:
+        text += "\nمطمئنی؟"
+    else:
+        text += f"\n⚠️ برای خرید و استفاده، باید به لول {config.LAUNCHER_MIN_LEVEL} برسی!"
     return text
 
 
@@ -153,6 +174,10 @@ async def handle_callback(query, context, data, user_id):
             page = max(0, min(page, _total_pages() - 1))
             await db.ensure_user(query.from_user)
             counts = await db.get_inventory_counts(user_id)
+            # گرفتن لول کاربر برای نمایش قفل‌ها
+            user_data = await db.get_user(user_id)
+            total_xp = int(user_data.get("total_xp", 0)) if user_data else 0
+            user_level, _, _ = utils.calc_level(total_xp)
             text = (
                 "💀 <b>بازار سیاه</b>\n"
                 "━━━━━━━━━━━━━━━━━━\n"
@@ -161,7 +186,7 @@ async def handle_callback(query, context, data, user_id):
                 "📦 تعداد کل آیتم‌ها: " + str(len(config.BLACKMARKET_ITEMS)) + "\n"
                 "📄 صفحه " + str(page + 1) + " از " + str(_total_pages())
             )
-            msg = await utils.safe_edit(query, text, _menu_kb(page, counts))
+            msg = await utils.safe_edit(query, text, _menu_kb(page, counts, user_level))
             if msg:
                 utils.remember_owner(msg, user_id)
             await utils.safe_answer(query)
@@ -186,8 +211,12 @@ async def handle_callback(query, context, data, user_id):
                 return
             counts = await db.get_inventory_counts(user_id)
             count = counts.get(item_key, 0)
-            text = await _build_item_text(item_key, item, count)
-            msg = await utils.safe_edit(query, text, _item_kb(item_key, item, count))
+            # گرفتن لول کاربر
+            user_data = await db.get_user(user_id)
+            total_xp = int(user_data.get("total_xp", 0)) if user_data else 0
+            user_level, _, _ = utils.calc_level(total_xp)
+            text = await _build_item_text(item_key, item, count, user_level)
+            msg = await utils.safe_edit(query, text, _item_kb(item_key, item, count, user_level))
             if msg:
                 utils.remember_owner(msg, user_id)
             await utils.safe_answer(query)
@@ -200,6 +229,17 @@ async def handle_callback(query, context, data, user_id):
             if not item:
                 await utils.safe_answer(query, "❌ آیتم نامعتبر", show_alert=True)
                 return
+            # بررسی شرط لول برای لانچرهای قفل‌شده
+            user_data = await db.get_user(user_id)
+            total_xp = int(user_data.get("total_xp", 0)) if user_data else 0
+            user_level, _, _ = utils.calc_level(total_xp)
+            if item_key in config.LAUNCHER_LEVEL_LOCKED and user_level < config.LAUNCHER_MIN_LEVEL:
+                await utils.safe_answer(
+                    query,
+                    f"🔒 برای خرید {item['name']} باید به لول {config.LAUNCHER_MIN_LEVEL} برسی!\n"
+                    f"لول فعلی شما: {user_level}",
+                    show_alert=True)
+                return
             r = await db.buy_inventory_item(user_id, item_key)
             if r == "ok":
                 await utils.safe_answer(query, f"✅ {item['name']} خریداری شد!", show_alert=True)
@@ -210,7 +250,7 @@ async def handle_callback(query, context, data, user_id):
             # برگشت به صفحه جزئیات آیتم
             counts = await db.get_inventory_counts(user_id)
             count = counts.get(item_key, 0)
-            text = await _build_item_text(item_key, item, count)
+            text = await _build_item_text(item_key, item, count, user_level)
             # اگر خرید موفق بود و هنوز می‌تونه بخره، دکمه خرید دوباره نشون بده
             user = await db.get_user(user_id)
             can_buy_more = user and int(user["balance"]) >= item["price"]
