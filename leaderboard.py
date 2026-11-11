@@ -12,11 +12,7 @@ MEDALS = ["🥇", "🥈", "🥉"]
 
 async def build_leaderboard_text(user_id: int) -> str:
     """ساخت متن لیدربورد + رتبه کاربر"""
-    try:
-        top_users, user_rank = await db.get_leaderboard(limit=15, around_user_id=user_id)
-    except Exception as e:
-        logger.exception(f"get_leaderboard error: {e}")
-        return "🏆 <b>لیدربورد زرکوین</b>\n━━━━━━━━━━━━━━━━━━\n\n❌ خطا در بارگذاری لیدربورد. دوباره تلاش کنید."
+    top_users, user_rank = await db.get_leaderboard(limit=15, around_user_id=user_id)
 
     lines = ["🏆 <b>لیدربورد زرکوین</b>", "━━━━━━━━━━━━━━━━━━", ""]
 
@@ -25,18 +21,22 @@ async def build_leaderboard_text(user_id: int) -> str:
         return "\n".join(lines)
 
     for i, u in enumerate(top_users, 1):
-        medal = MEDALS[i - 1] if i <= 3 else f"{i}."
-        name = utils.escape(u.get("first_name") or "بی‌نام")
-        total = int(u.get("total_wealth") or 0)
-        lines.append(f"{medal} {name}")
-        lines.append(f"    💰 {utils.fmt(total)} زرکوین")
-        lines.append("")
+        try:
+            medal = MEDALS[i - 1] if i <= 3 else f"{i}."
+            name = utils.escape(u.get("first_name") or "بی‌نام")
+            total = int(u.get("total_wealth") or 0)
+            lines.append(f"{medal} {name}")
+            lines.append(f"    💰 {utils.fmt(total)} زرکوین")
+            lines.append("")
+        except Exception as e:
+            logger.warning(f"⚠️ خطا در پردازش ردیف {i}: {e}")
+            continue
 
     # رتبه کاربر
     try:
         user = await db.get_user(user_id)
     except Exception as e:
-        logger.exception(f"get_user error in leaderboard: {e}")
+        logger.warning(f"⚠️ get_user در لیدربورد: {e}")
         user = None
 
     if user:
