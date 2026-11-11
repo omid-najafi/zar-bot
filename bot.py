@@ -26,13 +26,9 @@ async def properties_menu_kb(user_id: int):
     for key, prop in sorted(config.PROPERTIES.items(), key=lambda x: x[1]["price"]):
         data = summary.get(key, {"count": 0})
         count = data["count"]
-        # سه سطر: نام | قیمت | درآمد — دکمه بزرگ‌تر و خوانا‌تر
+        # فقط نام + قیمت (سود در صفحه تأیید خرید نشون داده می‌شه)
         prefix = "✅ " if count >= config.MAX_PER_KEY else ""
-        label = (
-            f"{prefix}{prop['emoji']} {prop['name']} ({count}/{config.MAX_PER_KEY})\n"
-            f"💰 قیمت: {utils.fmt(prop['price'])}\n"
-            f"📈 سود: {utils.fmt(prop['income'])} /روز"
-        )
+        label = f"{prefix}{prop['emoji']} {prop['name']} ({count}/{config.MAX_PER_KEY})\n💰 {utils.fmt(prop['price'])}"
         rows.append([InlineKeyboardButton(label, callback_data=f"prop:select:{key}")])
     rows.append([InlineKeyboardButton("💸 برداشت درآمد انباشته", callback_data="prop:withdraw_income")])
     rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="menu:main")])
@@ -46,11 +42,7 @@ async def workers_menu_kb(user_id: int):
         data = summary.get(key, {"count": 0})
         count = data["count"]
         prefix = "✅ " if count >= config.MAX_PER_KEY else ""
-        label = (
-            f"{prefix}{w['emoji']} {w['name']} ({count}/{config.MAX_PER_KEY})\n"
-            f"💰 قیمت: {utils.fmt(w['price'])}\n"
-            f"📈 سود: {utils.fmt(w['income'])} /روز"
-        )
+        label = f"{prefix}{w['emoji']} {w['name']} ({count}/{config.MAX_PER_KEY})\n💰 {utils.fmt(w['price'])}"
         rows.append([InlineKeyboardButton(label, callback_data=f"worker:select:{key}")])
     rows.append([InlineKeyboardButton("💸 برداشت درآمد انباشته", callback_data="worker:withdraw_income")])
     rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="menu:main")])
@@ -226,27 +218,6 @@ async def group_watcher(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ═══════════ CALLBACK HANDLER (اصلاح‌شده با مالکیت منو) ═══════════
 # ═══════════════════════════════════════════════════════════
 
-# دکمه‌های عمومی: بررسی مالکیت انجام نمی‌شود
-#   - check_membership: دکمه عمومی عضویت
-#   - {game}:join: هر کسی می‌تواند وارد بازی شود
-#   - دکمه‌های درون بازی (rps:c, ttt:m, ttt:noop, quiz:a, pen:shoot, casino:play, casino:cancel): handler بازی بررسی می‌کند
-#   - room:cancel: handler بررسی می‌کند
-#   - tr:c / tr:x: handler بررسی user_id در دکمه می‌کند
-PUBLIC_BUTTONS = ("check_membership",)
-PUBLIC_PREFIXES = (
-    "rps:join:", "ttt:join:", "quiz:join:",
-    "rps:c:", "ttt:m:", "ttt:noop", "quiz:a:",
-    "pen:shoot", "casino:play:", "casino:cancel",
-    "room:cancel:", "tr:c:", "tr:x:",
-)
-
-
-def _is_public_button(data: str) -> bool:
-    if data in PUBLIC_BUTTONS:
-        return True
-    return any(data.startswith(p) for p in PUBLIC_PREFIXES)
-
-
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if not query:
@@ -257,34 +228,63 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prefix = data.split(":")[0]
 
     try:
-        # ─────── 1. بررسی مالکیت منو (برای دکمه‌های غیر عمومی) ───────
-        # این بررسی قبل از هر چیز دیگری انجام می‌شود تا هیچکس نتواند از منوی کاربر دیگر استفاده کند
-        if not _is_public_button(data) and query.message:
-            if not utils.is_menu_owner(query.message.chat_id, query.message.message_id, user_id):
-                await utils.safe_answer(query, "❌ این منو برای شما نیست!\nبرای استفاده از منوی خودتان دستور /menu را بفرستید.", show_alert=True)
-                return
-
-        # ─────── 2. دکمه بررسی عضویت ───────
+        # ─────── 1. دکمه بررسی عضویت (عمومی اما امن) ───────
+        # این دکمه عمومی است (هر کسی می‌تواند کلیک کند) اما هرگز پیام کاربر دیگر را ویرایش نمی‌کند
+        # اگر مالک پیام نباشد، یک پیام جدید برایش ارسال می‌شود
         if data == "check_membership":
             is_joined, missing = await utils.check_membership_force(context.bot, user_id)
             if is_joined:
-                await utils.safe_answer(query, "✅ عضویت تأیید شد!", show_alert=True)
                 await db.ensure_user(query.from_user)
-                msg = await utils.safe_edit(query, await build_main_menu_text(user_id), utils.MAIN_MENU_KB)
-                if msg:
-                    utils.remember_owner(msg, user_id)
+                # بررسی مالکیت: اگر مالک پیام نیست، پیام جدید بفرست (نه ویرایش پیام کاربر دیگر)
+                is_owner = (not query.message) or utils.is_menu_owner(query.message.chat_id, query.message.message_id, user_id)
+                if is_owner:
+                    await utils.safe_answer(query, "✅ عضویت تأیید شد!", show_alert=True)
+                    msg = await utils.safe_edit(query, await build_main_menu_text(user_id), utils.MAIN_MENU_KB)
+                    if msg:
+                        utils.remember_owner(msg, user_id)
+                else:
+                    # مالک نیست — پیام جدید بفرست
+                    await utils.safe_answer(query, "✅ عضویت تأیید شد! منوی شما ارسال شد.", show_alert=True)
+                    try:
+                        msg = await query.from_user.send_message(
+                            await build_main_menu_text(user_id),
+                            parse_mode=ParseMode.HTML,
+                            reply_markup=utils.MAIN_MENU_KB
+                        )
+                        utils.remember_owner(msg, user_id)
+                    except Exception:
+                        pass
             else:
                 missing_txt = "\n".join(f"• {m}" for m in missing) if missing else "نامشخص"
                 await utils.safe_answer(query, f"❌ هنوز عضو نشدی:\n{missing_txt}", show_alert=True)
             return
 
-        # ─────── 3. چک عضویت برای دکمه‌های منو ───────
+        # ─────── 2. دکمه‌های ورود به بازی‌های دونفره (عمومی) ───────
+        # این دکمه‌ها عمومی‌اند چون بازیکن دوم هنوز مالک پیام نیست
+        # اما handler بازی خودش بررسی می‌کند که کاربر واقعاً می‌تواند وارد شود
+        if data.startswith(("rps:join:", "ttt:join:", "quiz:join:")):
+            if prefix == "rps":
+                await rps.handle_callback(query, context, data, user_id)
+            elif prefix == "ttt":
+                await ttt.handle_callback(query, context, data, user_id)
+            elif prefix == "quiz":
+                await quiz.handle_callback(query, context, data, user_id)
+            return
+
+        # ─────── 3. بررسی مالکیت منو (برای همه دکمه‌های دیگر) ───────
+        # این بررسی قبل از هر چیز دیگری انجام می‌شود تا هیچکس نتواند از منوی کاربر دیگر استفاده کند
+        if query.message:
+            if not utils.is_menu_owner(query.message.chat_id, query.message.message_id, user_id):
+                await utils.safe_answer(query, "❌ این منو برای شما نیست!\nبرای استفاده از منوی خودتان دستور /menu را بفرستید.", show_alert=True)
+                return
+
+        # ─────── 4. چک عضویت برای دکمه‌های منو ───────
         if data in ("menu:main", "kabareh:menu", "game:menu", "mission:menu",
                     "prop:menu", "worker:menu", "bank:menu"):
             if not await utils.verify_membership(update, context):
                 return
 
-        # ─────── 4. روت به کاباره و بازی‌ها ───────
+        # ─────── 5. روت به کاباره و بازی‌ها ───────
         if prefix == "kabareh":
             await kabareh.handle_callback(query, context, data, user_id)
             return
@@ -399,11 +399,20 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await utils.safe_answer(query, "❌ موجودی کافی نیست!", show_alert=True)
                 return
             await utils.safe_answer(query)
+            # سود در صفحه تأیید نشون داده می‌شه (هر واحد + کل فعلی)
             new_total = (count + 1) * prop['income']
-            text = f"🏠 <b>{prop['name']}</b>\n💰 {utils.fmt(prop['price'])}\n📈 سود بعد: {utils.fmt(new_total)}\n\nمطمئنی؟"
+            text = (
+                f"🏠 <b>{prop['name']}</b>\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"💰 قیمت: <b>{utils.fmt(prop['price'])}</b>\n"
+                f"📈 سود هر واحد: <b>{utils.fmt(prop['income'])}</b> /روز\n"
+                f"📊 تعداد فعلی: {count}/{config.MAX_PER_KEY}\n"
+                f"📈 سود بعد از خرید: <b>{utils.fmt(new_total)}</b> /روز\n\n"
+                f"مطمئنی؟"
+            )
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("✅ بخر", callback_data=f"prop:confirm:{key}")],
-                [InlineKeyboardButton("❌ انصراف", callback_data="prop:menu")]
+                [InlineKeyboardButton("🔙 بازگشت", callback_data="prop:menu")]
             ])
             msg = await utils.safe_edit(query, text, kb)
             if msg:
@@ -419,18 +428,79 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # واریز درآمد انباشته قبل از خرید
             await db.accrue_income(user_id)
             r = await db.buy_asset(user_id, "property", key, prop["price"], prop["income"])
+            # بعد از خرید، همون صفحه تأیید بمونه (به لیست برنگردیم)
+            summary = await db.get_assets_summary(user_id)
+            count = summary.get(key, {}).get("count", 0)
             if r == "ok":
                 await utils.safe_answer(query, "✅ خریداری شد!", show_alert=True)
                 result = await db.progress_mission(user_id, "buy_property", 1, base_xp=config.BASE_XP_BUY_ASSET)
                 await utils.notify_mission(context, query.message.chat_id, result)
+                # چک کن آیا هنوز می‌تونه بخره یا به محدودیت رسید
+                user = await db.get_user(user_id)
+                can_buy_more = count < config.MAX_PER_KEY and int(user["balance"]) >= prop["price"]
+                if can_buy_more:
+                    # هنوز می‌تونه بخره — دکمه «خرید دوباره» + «بازگشت»
+                    new_total = (count + 1) * prop['income']
+                    text = (
+                        f"✅ خرید موفق بود!\n"
+                        f"━━━━━━━━━━━━━━━━━━\n"
+                        f"🏠 <b>{prop['name']}</b>\n"
+                        f"📊 تعداد فعلی: {count}/{config.MAX_PER_KEY}\n"
+                        f"📈 سود کل فعلی: <b>{utils.fmt(count * prop['income'])}</b> /روز\n"
+                        f"💰 موجودی شما: <b>{utils.fmt(int(user['balance']))}</b>\n\n"
+                        f"برای خرید دوباره، دکمه زیر رو بزن:"
+                    )
+                    kb = InlineKeyboardMarkup([
+                        [InlineKeyboardButton("✅ خرید دوباره", callback_data=f"prop:confirm:{key}")],
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data="prop:menu")]
+                    ])
+                else:
+                    # یا محدودیت رسیده یا موجودی کافی نیست
+                    reason = "حداکثر تعداد مجاز" if count >= config.MAX_PER_KEY else "موجودی کافی نیست"
+                    text = (
+                        f"✅ خرید موفق بود!\n"
+                        f"━━━━━━━━━━━━━━━━━━\n"
+                        f"🏠 <b>{prop['name']}</b>\n"
+                        f"📊 تعداد فعلی: {count}/{config.MAX_PER_KEY}\n"
+                        f"💰 موجودی شما: <b>{utils.fmt(int(user['balance']))}</b>\n\n"
+                        f"⚠️ {reason} — نمی‌تونی بیشتر بخرید"
+                    )
+                    kb = InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data="prop:menu")]
+                    ])
             elif r == "limit":
                 await utils.safe_answer(query, "❌ محدودیت!", show_alert=True)
+                text = (
+                    f"❌ به محدودیت رسیدی\n"
+                    f"━━━━━━━━━━━━━━━━━━\n"
+                    f"🏠 <b>{prop['name']}</b>\n"
+                    f"📊 تعداد فعلی: {count}/{config.MAX_PER_KEY}\n\n"
+                    f"نمی‌تونی بیشتر از {config.MAX_PER_KEY} تا بخرید"
+                )
+                kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 بازگشت", callback_data="prop:menu")]
+                ])
             elif r == "balance":
-                await utils.safe_answer(query, "❌ موجودی!", show_alert=True)
+                user = await db.get_user(user_id)
+                await utils.safe_answer(query, "❌ موجودی کافی نیست!", show_alert=True)
+                text = (
+                    f"❌ موجودی کافی نیست\n"
+                    f"━━━━━━━━━━━━━━━━━━\n"
+                    f"🏠 <b>{prop['name']}</b>\n"
+                    f"💰 قیمت: <b>{utils.fmt(prop['price'])}</b>\n"
+                    f"💵 موجودی شما: <b>{utils.fmt(int(user['balance']) if user else 0)}</b>\n\n"
+                    f"نیاز به <b>{utils.fmt(prop['price'] - int(user['balance']) if user else prop['price'])}</b> بیشتر داری"
+                )
+                kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 بازگشت", callback_data="prop:menu")]
+                ])
             else:
                 await utils.safe_answer(query, "❌ خطا", show_alert=True)
-            text = await build_assets_text(user_id, "property") + "\n\n👇 انتخاب:"
-            msg = await utils.safe_edit(query, text, await properties_menu_kb(user_id))
+                text = "❌ خطایی رخ داد. دوباره تلاش کن."
+                kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 بازگشت", callback_data="prop:menu")]
+                ])
+            msg = await utils.safe_edit(query, text, kb)
             if msg:
                 utils.remember_owner(msg, user_id)
             return
@@ -479,10 +549,18 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             await utils.safe_answer(query)
             new_total = (count + 1) * w['income']
-            text = f"👷 <b>{w['name']}</b>\n💰 {utils.fmt(w['price'])}\n📈 سود بعد: {utils.fmt(new_total)}\n\nمطمئنی؟"
+            text = (
+                f"👷 <b>{w['name']}</b>\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"💰 قیمت: <b>{utils.fmt(w['price'])}</b>\n"
+                f"📈 سود هر واحد: <b>{utils.fmt(w['income'])}</b> /روز\n"
+                f"📊 تعداد فعلی: {count}/{config.MAX_PER_KEY}\n"
+                f"📈 سود بعد از خرید: <b>{utils.fmt(new_total)}</b> /روز\n\n"
+                f"مطمئنی؟"
+            )
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("✅ استخدام", callback_data=f"worker:confirm:{key}")],
-                [InlineKeyboardButton("❌ انصراف", callback_data="worker:menu")]
+                [InlineKeyboardButton("🔙 بازگشت", callback_data="worker:menu")]
             ])
             msg = await utils.safe_edit(query, text, kb)
             if msg:
@@ -497,18 +575,75 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             await db.accrue_income(user_id)
             r = await db.buy_asset(user_id, "worker", key, w["price"], w["income"])
+            # بعد از خرید، همون صفحه تأیید بمونه
+            summary = await db.get_assets_summary(user_id)
+            count = summary.get(key, {}).get("count", 0)
             if r == "ok":
                 await utils.safe_answer(query, "✅ استخدام شد!", show_alert=True)
                 result = await db.progress_mission(user_id, "buy_worker", 1, base_xp=config.BASE_XP_BUY_ASSET)
                 await utils.notify_mission(context, query.message.chat_id, result)
+                user = await db.get_user(user_id)
+                can_buy_more = count < config.MAX_PER_KEY and int(user["balance"]) >= w["price"]
+                if can_buy_more:
+                    text = (
+                        f"✅ استخدام موفق بود!\n"
+                        f"━━━━━━━━━━━━━━━━━━\n"
+                        f"👷 <b>{w['name']}</b>\n"
+                        f"📊 تعداد فعلی: {count}/{config.MAX_PER_KEY}\n"
+                        f"📈 سود کل فعلی: <b>{utils.fmt(count * w['income'])}</b> /روز\n"
+                        f"💰 موجودی شما: <b>{utils.fmt(int(user['balance']))}</b>\n\n"
+                        f"برای استخدام دوباره، دکمه زیر رو بزن:"
+                    )
+                    kb = InlineKeyboardMarkup([
+                        [InlineKeyboardButton("✅ استخدام دوباره", callback_data=f"worker:confirm:{key}")],
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data="worker:menu")]
+                    ])
+                else:
+                    reason = "حداکثر تعداد مجاز" if count >= config.MAX_PER_KEY else "موجودی کافی نیست"
+                    text = (
+                        f"✅ استخدام موفق بود!\n"
+                        f"━━━━━━━━━━━━━━━━━━\n"
+                        f"👷 <b>{w['name']}</b>\n"
+                        f"📊 تعداد فعلی: {count}/{config.MAX_PER_KEY}\n"
+                        f"💰 موجودی شما: <b>{utils.fmt(int(user['balance']))}</b>\n\n"
+                        f"⚠️ {reason} — نمی‌تونی بیشتر استخدام کنی"
+                    )
+                    kb = InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data="worker:menu")]
+                    ])
             elif r == "limit":
                 await utils.safe_answer(query, "❌ محدودیت!", show_alert=True)
+                text = (
+                    f"❌ به محدودیت رسیدی\n"
+                    f"━━━━━━━━━━━━━━━━━━\n"
+                    f"👷 <b>{w['name']}</b>\n"
+                    f"📊 تعداد فعلی: {count}/{config.MAX_PER_KEY}\n\n"
+                    f"نمی‌تونی بیشتر از {config.MAX_PER_KEY} تا استخدام کنی"
+                )
+                kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 بازگشت", callback_data="worker:menu")]
+                ])
             elif r == "balance":
-                await utils.safe_answer(query, "❌ موجودی!", show_alert=True)
+                user = await db.get_user(user_id)
+                await utils.safe_answer(query, "❌ موجودی کافی نیست!", show_alert=True)
+                text = (
+                    f"❌ موجودی کافی نیست\n"
+                    f"━━━━━━━━━━━━━━━━━━\n"
+                    f"👷 <b>{w['name']}</b>\n"
+                    f"💰 قیمت: <b>{utils.fmt(w['price'])}</b>\n"
+                    f"💵 موجودی شما: <b>{utils.fmt(int(user['balance']) if user else 0)}</b>\n\n"
+                    f"نیاز به <b>{utils.fmt(w['price'] - int(user['balance']) if user else w['price'])}</b> بیشتر داری"
+                )
+                kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 بازگشت", callback_data="worker:menu")]
+                ])
             else:
                 await utils.safe_answer(query, "❌ خطا", show_alert=True)
-            text = await build_assets_text(user_id, "worker") + "\n\n👇 انتخاب:"
-            msg = await utils.safe_edit(query, text, await workers_menu_kb(user_id))
+                text = "❌ خطایی رخ داد. دوباره تلاش کن."
+                kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 بازگشت", callback_data="worker:menu")]
+                ])
+            msg = await utils.safe_edit(query, text, kb)
             if msg:
                 utils.remember_owner(msg, user_id)
             return
@@ -588,152 +723,159 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     user, user_id, text = update.effective_user, update.effective_user.id, update.message.text.strip()
 
-    if text == "لغو" and update.message.reply_to_message:
-        await handle_cancel(user_id, update.message)
-        return
-
-    if user_id in utils.casino_pending:
-        pending = utils.casino_pending.pop(user_id)
-        await db.add_balance(user_id, pending["entry"])
-        await update.message.reply_text(f"⚠️ بازی لغو شد. {utils.fmt(pending['entry'])} برگشت.")
-        return
-
-    state = utils.user_states.get(user_id)
-    if not state:
-        return
-    action = state["action"]
-
-    if action in ("bank_deposit", "bank_withdraw"):
-        amount = utils.parse_amount(text)
-        if not amount:
-            await update.message.reply_text("❌ مبلغ نامعتبر")
+    try:
+        if text == "لغو" and update.message.reply_to_message:
+            await handle_cancel(user_id, update.message)
             return
-        await db.ensure_user(user)
-        # واریز درآمد انباشته قبل از عملیات بانک
-        await db.accrue_income(user_id)
-        ok = await db.bank_deposit(user_id, amount) if action == "bank_deposit" else await db.bank_withdraw(user_id, amount)
-        utils.user_states.pop(user_id, None)
-        if ok:
-            await update.message.reply_text(
-                f"✅ {utils.fmt(amount)} {'واریز' if action == 'bank_deposit' else 'برداشت'} شد.",
-                reply_markup=utils.MAIN_MENU_KB
+
+        if user_id in utils.casino_pending:
+            pending = utils.casino_pending.pop(user_id)
+            await db.add_balance(user_id, pending["entry"])
+            await update.message.reply_text(f"⚠️ بازی لغو شد. {utils.fmt(pending['entry'])} برگشت.")
+            return
+
+        state = utils.user_states.get(user_id)
+        if not state:
+            return
+        action = state["action"]
+
+        if action in ("bank_deposit", "bank_withdraw"):
+            amount = utils.parse_amount(text)
+            if not amount:
+                await update.message.reply_text("❌ مبلغ نامعتبر")
+                return
+            await db.ensure_user(user)
+            # واریز درآمد انباشته قبل از عملیات بانک
+            await db.accrue_income(user_id)
+            ok = await db.bank_deposit(user_id, amount) if action == "bank_deposit" else await db.bank_withdraw(user_id, amount)
+            utils.user_states.pop(user_id, None)
+            if ok:
+                await update.message.reply_text(
+                    f"✅ {utils.fmt(amount)} {'واریز' if action == 'bank_deposit' else 'برداشت'} شد.",
+                    reply_markup=utils.MAIN_MENU_KB
+                )
+                if action == "bank_deposit":
+                    base = (amount // 10000) * config.BASE_XP_DEPOSIT_10K
+                    result = await db.progress_mission(user_id, "deposit_bank", amount, base_xp=min(base, 500))
+                    await utils.notify_mission(context, update.message.chat_id, result)
+            else:
+                await update.message.reply_text("❌ موجودی کافی نیست", reply_markup=utils.MAIN_MENU_KB)
+            return
+
+        if action == "game_entry":
+            gk = state["game"]
+            g = config.GAMES.get(gk)
+            amount = utils.parse_amount(text)
+            if not amount:
+                await update.message.reply_text("❌ مبلغ نامعتبر")
+                return
+            if amount < g["min"]:
+                await update.message.reply_text(f"❌ حداقل {utils.fmt(g['min'])}")
+                return
+            await db.ensure_user(user)
+            # واریز درآمد انباشته قبل از کسر موجودی
+            await db.accrue_income(user_id)
+            if not await db.deduct_balance(user_id, amount):
+                await update.message.reply_text("❌ موجودی!")
+                return
+            utils.user_states.pop(user_id, None)
+            if gk == "penalty":
+                await penalty.start_game(update, amount, context)
+            elif gk == "rps":
+                await rps.create_room(update, user, amount)
+            elif gk == "ttt":
+                await ttt.create_room(update, user, amount)
+            elif gk == "quiz":
+                await quiz.create_room(update, user, amount)
+            return
+
+        if action == "casino_entry":
+            cg = state["game"]
+            g = config.CASINO_GAMES.get(cg)
+            amount = utils.parse_amount(text)
+            if not amount:
+                await update.message.reply_text("❌ مبلغ نامعتبر")
+                return
+            if amount < g["min"]:
+                await update.message.reply_text(f"❌ حداقل {utils.fmt(g['min'])}")
+                return
+            await db.ensure_user(user)
+            await db.accrue_income(user_id)
+            if not await db.deduct_balance(user_id, amount):
+                await update.message.reply_text("❌ موجودی!")
+                return
+            utils.user_states.pop(user_id, None)
+            if cg == "slots":
+                await casino.play_slots(update, user_id, amount, context)
+            else:
+                utils.casino_pending[user_id] = {"entry": amount, "game": cg, "chat_id": update.effective_chat.id}
+                if cg == "dice":
+                    msg = await update.message.reply_text(f"🎲 تاس\n💰 {utils.fmt(amount)}\n\nانتخاب:", reply_markup=casino.casino_dice_kb())
+                    utils.remember_owner(msg, user_id)
+                elif cg == "coin":
+                    msg = await update.message.reply_text(f"🪙 شیر یا خط\n💰 {utils.fmt(amount)}", reply_markup=casino.casino_coin_kb())
+                    utils.remember_owner(msg, user_id)
+                elif cg == "card":
+                    msg = await update.message.reply_text(f"🃏 کارت\n💰 {utils.fmt(amount)}", reply_markup=casino.casino_card_kb())
+                    utils.remember_owner(msg, user_id)
+                elif cg == "roulette":
+                    msg = await update.message.reply_text(f"🎡 رولت\n💰 {utils.fmt(amount)}\n\nانتخاب رنگ:", reply_markup=casino.casino_roulette_kb())
+                    utils.remember_owner(msg, user_id)
+                elif cg == "mines":
+                    msg = await update.message.reply_text(f"💣 مین‌یاب\n💰 {utils.fmt(amount)}\n\nیک در رو انتخاب کن (۳ جواهر، ۲ مین):", reply_markup=casino.casino_mines_kb())
+                    utils.remember_owner(msg, user_id)
+                elif cg == "wheel":
+                    msg = await update.message.reply_text(f"🎯 چرخ شانس\n💰 {utils.fmt(amount)}\n\nیک عدد ۱-۶ انتخاب کن:", reply_markup=casino.casino_wheel_kb())
+                    utils.remember_owner(msg, user_id)
+            return
+
+        if action == "transfer_amount":
+            amount = utils.parse_amount(text)
+            if not amount:
+                await update.message.reply_text("❌ مبلغ نامعتبر")
+                return
+            fee = int(amount * config.TRANSFER_FEE_RATE) if amount > config.TRANSFER_FEE_MIN else 0
+            # واریز درآمد انباشته قبل از بررسی موجودی
+            await db.accrue_income(user_id)
+            u = await db.get_user(user_id)
+            if int(u["balance"]) < amount + fee:
+                await update.message.reply_text(f"❌ نیاز: {utils.fmt(amount + fee)}")
+                return
+            utils.user_states[user_id] = {"action": "transfer_card", "amount": amount, "fee": fee}
+            msg = await update.message.reply_text(
+                f"💸 {utils.fmt(amount)}\n💵 کارمزد: {utils.fmt(fee)}\n\nکارت مقصد:",
+                reply_markup=utils.BACK_MAIN_KB
             )
-            if action == "bank_deposit":
-                base = (amount // 10000) * config.BASE_XP_DEPOSIT_10K
-                result = await db.progress_mission(user_id, "deposit_bank", amount, base_xp=min(base, 500))
-                await utils.notify_mission(context, update.message.chat_id, result)
-        else:
-            await update.message.reply_text("❌ موجودی کافی نیست", reply_markup=utils.MAIN_MENU_KB)
-        return
+            utils.remember_owner(msg, user_id)
+            return
 
-    if action == "game_entry":
-        gk = state["game"]
-        g = config.GAMES.get(gk)
-        amount = utils.parse_amount(text)
-        if not amount:
-            await update.message.reply_text("❌ مبلغ نامعتبر")
+        if action == "transfer_card":
+            recipient = await db.find_user_by_card(text)
+            if not recipient:
+                await update.message.reply_text("❌ پیدا نشد")
+                return
+            if recipient["user_id"] == user_id:
+                await update.message.reply_text("❌ به خودت!")
+                return
+            amount, fee = state["amount"], state["fee"]
+            utils.pending_transfers[user_id] = {
+                "recipient_id": recipient["user_id"],
+                "recipient_name": recipient["first_name"] or "",
+                "amount": amount, "fee": fee
+            }
+            utils.user_states.pop(user_id, None)
+            msg = await update.message.reply_text(
+                f"💸 تایید:\n👤 {utils.escape(recipient['first_name'])}\n💰 {utils.fmt(amount)}",
+                reply_markup=utils.transfer_confirm_kb(user_id)
+            )
+            utils.remember_owner(msg, user_id)
             return
-        if amount < g["min"]:
-            await update.message.reply_text(f"❌ حداقل {utils.fmt(g['min'])}")
-            return
-        await db.ensure_user(user)
-        # واریز درآمد انباشته قبل از کسر موجودی
-        await db.accrue_income(user_id)
-        if not await db.deduct_balance(user_id, amount):
-            await update.message.reply_text("❌ موجودی!")
-            return
-        utils.user_states.pop(user_id, None)
-        if gk == "penalty":
-            await penalty.start_game(update, amount, context)
-        elif gk == "rps":
-            await rps.create_room(update, user, amount)
-        elif gk == "ttt":
-            await ttt.create_room(update, user, amount)
-        elif gk == "quiz":
-            await quiz.create_room(update, user, amount)
-        return
-
-    if action == "casino_entry":
-        cg = state["game"]
-        g = config.CASINO_GAMES.get(cg)
-        amount = utils.parse_amount(text)
-        if not amount:
-            await update.message.reply_text("❌ مبلغ نامعتبر")
-            return
-        if amount < g["min"]:
-            await update.message.reply_text(f"❌ حداقل {utils.fmt(g['min'])}")
-            return
-        await db.ensure_user(user)
-        await db.accrue_income(user_id)
-        if not await db.deduct_balance(user_id, amount):
-            await update.message.reply_text("❌ موجودی!")
-            return
-        utils.user_states.pop(user_id, None)
-        if cg == "slots":
-            await casino.play_slots(update, user_id, amount, context)
-        else:
-            utils.casino_pending[user_id] = {"entry": amount, "game": cg, "chat_id": update.effective_chat.id}
-            if cg == "dice":
-                msg = await update.message.reply_text(f"🎲 تاس\n💰 {utils.fmt(amount)}\n\nانتخاب:", reply_markup=casino.casino_dice_kb())
-                utils.remember_owner(msg, user_id)
-            elif cg == "coin":
-                msg = await update.message.reply_text(f"🪙 شیر یا خط\n💰 {utils.fmt(amount)}", reply_markup=casino.casino_coin_kb())
-                utils.remember_owner(msg, user_id)
-            elif cg == "card":
-                msg = await update.message.reply_text(f"🃏 کارت\n💰 {utils.fmt(amount)}", reply_markup=casino.casino_card_kb())
-                utils.remember_owner(msg, user_id)
-            elif cg == "roulette":
-                msg = await update.message.reply_text(f"🎡 رولت\n💰 {utils.fmt(amount)}\n\nانتخاب رنگ:", reply_markup=casino.casino_roulette_kb())
-                utils.remember_owner(msg, user_id)
-            elif cg == "mines":
-                msg = await update.message.reply_text(f"💣 مین‌یاب\n💰 {utils.fmt(amount)}\n\nیک در رو انتخاب کن (۳ جواهر، ۲ مین):", reply_markup=casino.casino_mines_kb())
-                utils.remember_owner(msg, user_id)
-            elif cg == "wheel":
-                msg = await update.message.reply_text(f"🎯 چرخ شانس\n💰 {utils.fmt(amount)}\n\nیک عدد ۱-۶ انتخاب کن:", reply_markup=casino.casino_wheel_kb())
-                utils.remember_owner(msg, user_id)
-        return
-
-    if action == "transfer_amount":
-        amount = utils.parse_amount(text)
-        if not amount:
-            await update.message.reply_text("❌ مبلغ نامعتبر")
-            return
-        fee = int(amount * config.TRANSFER_FEE_RATE) if amount > config.TRANSFER_FEE_MIN else 0
-        # واریز درآمد انباشته قبل از بررسی موجودی
-        await db.accrue_income(user_id)
-        u = await db.get_user(user_id)
-        if int(u["balance"]) < amount + fee:
-            await update.message.reply_text(f"❌ نیاز: {utils.fmt(amount + fee)}")
-            return
-        utils.user_states[user_id] = {"action": "transfer_card", "amount": amount, "fee": fee}
-        msg = await update.message.reply_text(
-            f"💸 {utils.fmt(amount)}\n💵 کارمزد: {utils.fmt(fee)}\n\nکارت مقصد:",
-            reply_markup=utils.BACK_MAIN_KB
-        )
-        utils.remember_owner(msg, user_id)
-        return
-
-    if action == "transfer_card":
-        recipient = await db.find_user_by_card(text)
-        if not recipient:
-            await update.message.reply_text("❌ پیدا نشد")
-            return
-        if recipient["user_id"] == user_id:
-            await update.message.reply_text("❌ به خودت!")
-            return
-        amount, fee = state["amount"], state["fee"]
-        utils.pending_transfers[user_id] = {
-            "recipient_id": recipient["user_id"],
-            "recipient_name": recipient["first_name"] or "",
-            "amount": amount, "fee": fee
-        }
-        utils.user_states.pop(user_id, None)
-        msg = await update.message.reply_text(
-            f"💸 تایید:\n👤 {utils.escape(recipient['first_name'])}\n💰 {utils.fmt(amount)}",
-            reply_markup=utils.transfer_confirm_kb(user_id)
-        )
-        utils.remember_owner(msg, user_id)
-        return
+    except Exception as e:
+        logger.exception(f"❌ text_handler error: {e}")
+        try:
+            await update.message.reply_text("❌ خطایی رخ داد. دوباره تلاش کنید.")
+        except Exception:
+            pass
 
 
 # ═══════════ Helpers ═══════════
@@ -851,21 +993,47 @@ async def chat_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def post_init(app: Application):
     logger.info("🚀 Starting...")
-    await db.init_db_pool()
-    await db.init_db()
-    logger.info("✅ DB ready")
-    # پرداخت اولیه درآمد هنگام شروع
+    # ─── اتصال به دیتابیس (با retry) ───
+    max_retries = 5
+    for attempt in range(1, max_retries + 1):
+        try:
+            await db.init_db_pool()
+            await db.init_db()
+            logger.info("✅ DB ready")
+            break
+        except Exception as e:
+            logger.warning(f"⚠️ تلاش {attempt}/{max_retries} برای اتصال به DB ناموفق: {e}")
+            if attempt == max_retries:
+                logger.exception("❌ اتصال به دیتابیس ناموفق بود!")
+                raise
+            import asyncio as _asyncio
+            await _asyncio.sleep(3)
+
+    # ─── پرداخت اولیه درآمد ───
     try:
         await db.hourly_payout()
     except Exception as e:
         logger.exception(f"hourly_payout: {e}")
-    # پرداخت خودکار هر ساعت
-    app.job_queue.run_repeating(
-        db.hourly_payout,
-        interval=config.HOURLY_PAYOUT_INTERVAL,
-        first=config.HOURLY_PAYOUT_INTERVAL,
-        name="hourly_payout"
-    )
+
+    # ─── پرداخت خودکار هر ساعت ───
+    if app.job_queue is not None:
+        app.job_queue.run_repeating(
+            db.hourly_payout,
+            interval=config.HOURLY_PAYOUT_INTERVAL,
+            first=config.HOURLY_PAYOUT_INTERVAL,
+            name="hourly_payout"
+        )
+        logger.info("✅ پرداخت ساعتی فعال شد")
+
+        # ─── پرداخت روزانه ساعت 00:00 ───
+        app.job_queue.run_daily(
+            db.daily_payout,
+            time=time(hour=0, minute=0, tzinfo=utils.TEHRAN),
+            name="daily_payout"
+        )
+        logger.info("✅ پرداخت روزانه (00:00) فعال شد")
+    else:
+        logger.warning("⚠️ job_queue در دسترس نیست — پرداخت ساعتی/روزانه غیرفعال است")
 
     if config.REQUIRED_GROUP and config.REQUIRED_GROUP.get("id"):
         logger.info(f"✅ جوین گروه فعال: {config.REQUIRED_GROUP['name']}")
@@ -878,6 +1046,18 @@ async def post_shutdown(app: Application):
 
 
 def main():
+    if not config.BOT_TOKEN:
+        logger.error("❌ BOT_TOKEN تنظیم نشده! لطفاً متغیر محیطی BOT_TOKEN را تنظیم کنید.")
+        logger.error("   روی VPS: فایل .env را ویرایش کنید")
+        logger.error("   روی Railway: متغیرها را در پنل Railway اضافه کنید")
+        return
+    if not config.OWNER_ID:
+        logger.error("❌ OWNER_ID تنظیم نشده! لطفاً متغیر محیطی OWNER_ID را تنظیم کنید.")
+        return
+
+    logger.info(f"🤖 ربات در حال شروع... (OWNER_ID={config.OWNER_ID})")
+    logger.info(f"📊 دیتابیس: {config.DB_HOST}:{config.DB_PORT}/{config.DB_NAME}")
+
     app = Application.builder().token(config.BOT_TOKEN).post_init(post_init).post_shutdown(post_shutdown).build()
 
     # گروه‌وانچر
