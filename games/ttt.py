@@ -61,7 +61,6 @@ async def handle_callback(query, context, data, user_id):
             await utils.safe_answer(query, "⚠️ در بازی دیگر فعالی", show_alert=True); return
 
         await db.ensure_user(query.from_user)
-        await db.accrue_income(user_id)
         if not await db.deduct_balance(user_id, room["entry"]):
             await utils.safe_answer(query, "❌ موجودی کافی نیست", show_alert=True); return
 
