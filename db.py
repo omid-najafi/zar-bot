@@ -12,6 +12,7 @@ SCHEMA_STATEMENTS = [
     "CREATE TABLE IF NOT EXISTS users (user_id BIGINT PRIMARY KEY, username VARCHAR(255), first_name VARCHAR(255), balance BIGINT NOT NULL DEFAULT 0, bank_balance BIGINT NOT NULL DEFAULT 0, card_number VARCHAR(16) UNIQUE, last_daily VARCHAR(10), created_at VARCHAR(32) NOT NULL, INDEX idx_card (card_number)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;",
     "CREATE TABLE IF NOT EXISTS assets (id INT PRIMARY KEY AUTO_INCREMENT, user_id BIGINT NOT NULL, asset_type VARCHAR(32) NOT NULL, asset_key VARCHAR(64) NOT NULL, purchase_price BIGINT NOT NULL, daily_income BIGINT NOT NULL, purchased_at VARCHAR(32) NOT NULL, INDEX idx_user_asset (user_id, asset_type), INDEX idx_user_key (user_id, asset_key)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;",
     "CREATE TABLE IF NOT EXISTS user_missions (id INT PRIMARY KEY AUTO_INCREMENT, user_id BIGINT NOT NULL, mission_key VARCHAR(64) NOT NULL, mission_date VARCHAR(10) NOT NULL, progress INT DEFAULT 0, target INT NOT NULL, xp_reward INT NOT NULL, completed TINYINT DEFAULT 0, INDEX idx_user_date (user_id, mission_date)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;",
+    "CREATE TABLE IF NOT EXISTS inventory (id INT PRIMARY KEY AUTO_INCREMENT, user_id BIGINT NOT NULL, item_key VARCHAR(64) NOT NULL, purchased_at VARCHAR(32) NOT NULL, INDEX idx_user_item (user_id, item_key)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;",
 ]
 
 EXTRA_COLUMNS = [
@@ -571,3 +572,136 @@ async def set_last_zar(user_id: int, when: str):
         async with conn.cursor() as cur:
             await cur.execute("UPDATE users SET last_zar=%s WHERE user_id=%s", (when, user_id))
             await conn.commit()
+
+
+# ═══════════ لیدربورد ═══════════
+async def get_leaderboard(limit: int = 10, around_user_id: int = None) -> tuple[list[dict], int | None]:
+    """
+    گرفتن لیدربورد بر اساس ثروت (balance + bank_balance).
+    خروجی: (لیست کاربران، رتبه کاربر درخواست‌کننده یا None)
+    """
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                "SELECT user_id, first_name, username, balance, bank_balance, "
+                "(balance + bank_balance) as total_wealth "
+                "FROM users ORDER BY total_wealth DESC LIMIT %s",
+                (limit,))
+            top_users = [dict(r) for r in await cur.fetchall()]
+            user_rank = None
+            if around_user_id:
+                await cur.execute(
+                    "SELECT COUNT(*) + 1 as rank FROM users "
+                    "WHERE (balance + bank_balance) > "
+                    "(SELECT (balance + bank_balance) FROM users WHERE user_id=%s)",
+                    (around_user_id,))
+                row = await cur.fetchone()
+                if row and row["rank"]:
+                    user_rank = int(row["rank"])
+            return top_users, user_rank
+
+
+# ═══════════ اینونتوری (بازار سیاه) ═══════════
+async def buy_inventory_item(user_id: int, item_key: str) -> str:
+    """خرید آیتم بازار سیاه"""
+    utils.invalidate_cache(user_id)
+    item = config.BLACKMARKET_ITEMS.get(item_key)
+    if not item:
+        return "invalid"
+    async with db_pool.acquire() as conn:
+        try:
+            await conn.begin()
+            async with conn.cursor() as cur:
+                await cur.execute("UPDATE users SET balance = balance - %s WHERE user_id=%s AND balance >= %s",
+                                  (item["price"], user_id, item["price"]))
+                if cur.rowcount != 1:
+                    await conn.rollback(); return "balance"
+                await cur.execute("INSERT INTO inventory (user_id, item_key, purchased_at) VALUES (%s, %s, %s)",
+                                  (user_id, item_key, utils.now_iso()))
+            await conn.commit(); return "ok"
+        except Exception:
+            await conn.rollback(); return "error"
+
+
+async def get_inventory_counts(user_id: int) -> dict:
+    """تعداد هر آیتم در اینونتوری کاربر"""
+    async with db_pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                "SELECT item_key, COUNT(*) as cnt FROM inventory WHERE user_id=%s GROUP BY item_key",
+                (user_id,))
+            return {r["item_key"]: int(r["cnt"]) for r in await cur.fetchall()}
+
+
+async def has_item(user_id: int, item_key: str) -> bool:
+    """بررسی اینکه آیا کاربر آیتم رو داره"""
+    async with db_pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT 1 FROM inventory WHERE user_id=%s AND item_key=%s LIMIT 1",
+                              (user_id, item_key))
+            return cur.rowcount > 0
+
+
+async def consume_item(user_id: int, item_key: str) -> bool:
+    """مصرف یک آیتم (مثلاً بعد از شلیک موشک)"""
+    async with db_pool.acquire() as conn:
+        try:
+            await conn.begin()
+            async with conn.cursor() as cur:
+                await cur.execute("DELETE FROM inventory WHERE user_id=%s AND item_key=%s LIMIT 1",
+                                  (user_id, item_key))
+                if cur.rowcount != 1:
+                    await conn.rollback(); return False
+            await conn.commit(); return True
+        except Exception:
+            await conn.rollback(); return False
+
+
+# ═══════════ آسیب (شلیک سلاح) ═══════════
+async def apply_damage(target_id: int, damage_percent: float) -> int:
+    """
+    اعمال آسیب به کاربر هدف.
+    درصد از (balance + bank_balance) کم می‌شه.
+    ابتدا از balance کم می‌شه، اگر کافی نبود از bank_balance.
+    خروجی: مقدار کل آسیب وارد شده
+    """
+    utils.invalidate_cache(target_id)
+    async with db_pool.acquire() as conn:
+        try:
+            await conn.begin()
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                await cur.execute("SELECT balance, bank_balance FROM users WHERE user_id=%s FOR UPDATE", (target_id,))
+                row = await cur.fetchone()
+                if not row:
+                    await conn.rollback(); return 0
+                balance = int(row["balance"] or 0)
+                bank = int(row["bank_balance"] or 0)
+                total = balance + bank
+                damage = int(total * damage_percent)
+                if damage <= 0:
+                    await conn.rollback(); return 0
+                # اول از balance کم کن
+                if balance >= damage:
+                    await cur.execute("UPDATE users SET balance = balance - %s WHERE user_id=%s", (damage, target_id))
+                else:
+                    # تمام balance رو صفر کن، بقیه از bank
+                    remaining = damage - balance
+                    await cur.execute("UPDATE users SET balance = 0, bank_balance = bank_balance - %s WHERE user_id=%s",
+                                      (remaining, target_id))
+            await conn.commit(); return damage
+        except Exception:
+            await conn.rollback()
+            logger.exception("apply_damage failed")
+            return 0
+
+
+async def get_user_total_wealth(user_id: int) -> int:
+    """مجموع ثروت کاربر (balance + bank_balance)"""
+    user = await get_user(user_id)
+    if not user: return 0
+    return int(user.get("balance", 0)) + int(user.get("bank_balance", 0))
+
+
+async def get_user_by_id(user_id: int):
+    """گرفتن کاربر با آیدی"""
+    return await get_user(user_id)
