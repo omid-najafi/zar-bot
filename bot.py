@@ -13,6 +13,8 @@ import config
 import utils
 import db
 import kabareh
+import leaderboard
+import blackmarket
 from games import rps, ttt, quiz, penalty, casino
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s", level=logging.INFO)
@@ -198,8 +200,6 @@ async def cmd_zar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     min_c = level * 100
     max_c = level * 100 + 100
     reward = random.randint(min_c, max_c)
-    # واریز درآمد انباشته قبل از افزودن پول جدید
-    await db.accrue_income(user_id)
     await db.add_balance(user_id, reward)
     await db.set_last_zar(user_id, now.isoformat())
     result = await db.progress_mission(user_id, "zar_collect", 1, base_xp=config.BASE_XP_ZAR)
@@ -280,12 +280,25 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # ─────── 4. چک عضویت برای دکمه‌های منو ───────
         if data in ("menu:main", "kabareh:menu", "game:menu", "mission:menu",
-                    "prop:menu", "worker:menu", "bank:menu"):
+                    "prop:menu", "worker:menu", "bank:menu") or prefix in ("lb", "bm"):
             if not await utils.verify_membership(update, context):
                 return
 
         # ─────── 5. روت به کاباره و بازی‌ها ───────
         if prefix == "kabareh":
+            # شرط لول برای کاباره
+            user_data = await db.get_user(user_id)
+            if user_data:
+                total_xp = int(user_data.get("total_xp", 0))
+                level, _, _ = utils.calc_level(total_xp)
+                if level < config.KABAREH_MIN_LEVEL:
+                    await utils.safe_answer(
+                        query,
+                        f"🎭 برای ورود به کاباره باید به لول {config.KABAREH_MIN_LEVEL} برسی!\n"
+                        f"لول فعلی شما: {level}\n"
+                        f"با انجام ماموریت‌ها و بازی‌ها XP کسب کن تا لول آپ بشی.",
+                        show_alert=True)
+                    return
             await kabareh.handle_callback(query, context, data, user_id)
             return
         if prefix == "rps":
@@ -302,6 +315,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         if prefix == "casino":
             await casino.handle_callback(query, context, data, user_id)
+            return
+        if prefix == "lb":
+            await leaderboard.handle_callback(query, context, data, user_id)
+            return
+        if prefix == "bm":
+            await blackmarket.handle_callback(query, context, data, user_id)
             return
 
         # ─────── 5. لغو خودکار کازینو ───────
@@ -334,8 +353,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if data == "bank:menu":
             await utils.safe_answer(query)
             await db.ensure_user(query.from_user)
-            # واریز درآمد انباشته قبل از نمایش
-            await db.accrue_income(user_id)
             msg = await utils.safe_edit(query, await build_bank_text(user_id), utils.BANK_MENU_KB)
             if msg:
                 utils.remember_owner(msg, user_id)
@@ -425,8 +442,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not prop:
                 await utils.safe_answer(query)
                 return
-            # واریز درآمد انباشته قبل از خرید
-            await db.accrue_income(user_id)
             r = await db.buy_asset(user_id, "property", key, prop["price"], prop["income"])
             # بعد از خرید، همون صفحه تأیید بمونه (به لیست برنگردیم)
             summary = await db.get_assets_summary(user_id)
@@ -573,7 +588,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not w:
                 await utils.safe_answer(query)
                 return
-            await db.accrue_income(user_id)
             r = await db.buy_asset(user_id, "worker", key, w["price"], w["income"])
             # بعد از خرید، همون صفحه تأیید بمونه
             summary = await db.get_assets_summary(user_id)
@@ -745,8 +759,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("❌ مبلغ نامعتبر")
                 return
             await db.ensure_user(user)
-            # واریز درآمد انباشته قبل از عملیات بانک
-            await db.accrue_income(user_id)
             ok = await db.bank_deposit(user_id, amount) if action == "bank_deposit" else await db.bank_withdraw(user_id, amount)
             utils.user_states.pop(user_id, None)
             if ok:
@@ -773,8 +785,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"❌ حداقل {utils.fmt(g['min'])}")
                 return
             await db.ensure_user(user)
-            # واریز درآمد انباشته قبل از کسر موجودی
-            await db.accrue_income(user_id)
             if not await db.deduct_balance(user_id, amount):
                 await update.message.reply_text("❌ موجودی!")
                 return
@@ -800,7 +810,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"❌ حداقل {utils.fmt(g['min'])}")
                 return
             await db.ensure_user(user)
-            await db.accrue_income(user_id)
             if not await db.deduct_balance(user_id, amount):
                 await update.message.reply_text("❌ موجودی!")
                 return
@@ -835,8 +844,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("❌ مبلغ نامعتبر")
                 return
             fee = int(amount * config.TRANSFER_FEE_RATE) if amount > config.TRANSFER_FEE_MIN else 0
-            # واریز درآمد انباشته قبل از بررسی موجودی
-            await db.accrue_income(user_id)
             u = await db.get_user(user_id)
             if int(u["balance"]) < amount + fee:
                 await update.message.reply_text(f"❌ نیاز: {utils.fmt(amount + fee)}")
@@ -934,8 +941,6 @@ async def confirm_transfer(query, owner_id: int):
     if not pending:
         await utils.safe_answer(query, "❌ منقضی", show_alert=True)
         return
-    # واریز درآمد انباشته قبل از انتقال
-    await db.accrue_income(owner_id)
     if not await db.transfer_coins(owner_id, pending["recipient_id"], pending["amount"], pending["fee"]):
         await utils.safe_answer(query, "❌ موجودی!", show_alert=True)
         await utils.safe_edit(query, "❌ انجام نشد.", utils.BACK_MAIN_KB)
@@ -1045,6 +1050,161 @@ async def post_shutdown(app: Application):
     await db.close_db_pool()
 
 
+# ═══════════ سیستم شلیک سلاح (بازار سیاه) ═══════════
+# نگاشت دستور شلیک به آیتم مهمات
+ATTACK_COMMANDS = {
+    item["command"]: item_key
+    for item_key, item in config.BLACKMARKET_ITEMS.items()
+    if item.get("type") == "projectile" and item.get("command")
+}
+
+
+async def handle_attack(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """هندلر دستورات شلیک سلاح"""
+    if not update.message or not update.message.text:
+        return
+    if not update.message.reply_to_message or not update.message.reply_to_message.from_user:
+        await update.message.reply_text("❌ برای شلیک، روی پیام فرد هدف ریپلای کن!")
+        return
+
+    text = update.message.text.strip()
+    attacker = update.effective_user
+    attacker_id = attacker.id
+    target = update.message.reply_to_message.from_user
+    target_id = target.id
+
+    if target.is_bot:
+        await update.message.reply_text("❌ نمی‌تونی به ربات شلیک کنی!")
+        return
+    if target_id == attacker_id:
+        await update.message.reply_text("❌ نمی‌تونی به خودت شلیک کنی!")
+        return
+
+    # پیدا کردن آیتم مهمات
+    item_key = ATTACK_COMMANDS.get(text)
+    if not item_key:
+        return  # دستور شلیک نیست
+
+    item = config.BLACKMARKET_ITEMS.get(item_key)
+    if not item or item["type"] != "projectile":
+        await update.message.reply_text("❌ سلاح نامعتبر!")
+        return
+
+    # بررسی عضویت
+    if not await utils.verify_membership(update, context):
+        return
+
+    await db.ensure_user(attacker)
+    await db.ensure_user(target)
+
+    # چک کن آیا مهاجم وسیله شلیک مناسب رو داره
+    launcher_key = None
+    for lk, launcher in config.BLACKMARKET_ITEMS.items():
+        if launcher.get("type") == "launcher" and item_key in launcher.get("launches", []):
+            # چک کن آیا مهاجم این لانچر رو داره
+            if await db.has_item(attacker_id, lk):
+                launcher_key = lk
+                break
+
+    if not launcher_key:
+        await update.message.reply_text(
+            f"❌ برای شلیک {item['name']} باید اول وسیله شلیک مناسب رو بخر!\n"
+            f"💀 به بازار سیاه برو و یکی از لانچرها رو بخر."
+        )
+        return
+
+    # چک کن آیا مهاجم خود مهمات رو داره
+    if not await db.has_item(attacker_id, item_key):
+        await update.message.reply_text(
+            f"❌ شما {item['name']} نداری!\n"
+            f"💀 به بازار سیاه برو و {item['name']} رو بخر."
+        )
+        return
+
+    # چک کن آیا هدف سیستم دفاعی مناسب داره
+    defense_type = item.get("defense_type")
+    defended = False
+    if defense_type:
+        # پیدا کردن آیتم دفاعی مناسب
+        for dk, defense in config.BLACKMARKET_ITEMS.items():
+            if defense.get("type") == "defense" and defense.get("defends_against") == defense_type:
+                if await db.has_item(target_id, dk):
+                    # چک احتمال دفاع
+                    import random as _random
+                    if _random.random() < defense.get("defense_chance", 0):
+                        defended = True
+                        defense_name = defense["name"]
+                    break
+
+    # مصرف مهمات مهاجم
+    await db.consume_item(attacker_id, item_key)
+
+    if defended:
+        # دفاع موفق
+        text_msg = (
+            f"🛡️ <b>دفاع موفق!</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"🎯 مهاجم: {utils.escape(attacker.first_name)}\n"
+            f"🎯 هدف: {utils.escape(target.first_name)}\n"
+            f"🚀 سلاح: {item['emoji']} {item['name']}\n"
+            f"🛡️ دفاع: {defense_name}\n\n"
+            f"✅ {utils.escape(target.first_name)} با موفقیت دفاع کرد!\n"
+            f"موشک توسط سیستم پدافند رهگیری و منهدم شد."
+        )
+        await update.message.reply_text(text_msg, parse_mode=ParseMode.HTML)
+        return
+
+    # اعمال آسیب
+    damage_percent = item.get("damage", 0)
+    damage_amount = await db.apply_damage(target_id, damage_percent)
+
+    if damage_amount <= 0:
+        text_msg = (
+            f"⚠️ <b>حمله بدون آسیب!</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"🎯 مهاجم: {utils.escape(attacker.first_name)}\n"
+            f"🎯 هدف: {utils.escape(target.first_name)}\n"
+            f"🚀 سلاح: {item['emoji']} {item['name']}\n\n"
+            f"هدف هیچ ثروتی نداشت که تخریب بشه!"
+        )
+        await update.message.reply_text(text_msg, parse_mode=ParseMode.HTML)
+        return
+
+    attacker_emoji = "🚀" if "missile" in item_key else ("💣" if "bomb" in item_key else "🛸")
+
+    text_msg = (
+        f"{attacker_emoji} <b>حمله موفق!</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🎯 مهاجم: {utils.escape(attacker.first_name)}\n"
+        f"🎯 هدف: {utils.escape(target.first_name)}\n"
+        f"🚀 سلاح: {item['emoji']} {item['name']}\n"
+        f"💥 درصد تخریب: {int(damage_percent * 100)}%\n"
+        f"💰 خسارت وارد شده: <b>{utils.fmt(damage_amount)}</b> زرکوین\n\n"
+    )
+
+    # وضعیت ثروت هدف بعد از حمله
+    target_wealth = await db.get_user_total_wealth(target_id)
+    text_msg += f"📊 ثروت باقی‌مانده {utils.escape(target.first_name)}: <b>{utils.fmt(target_wealth)}</b> زرکوین"
+
+    await update.message.reply_text(text_msg, parse_mode=ParseMode.HTML)
+
+    # اطلاع به هدف
+    try:
+        await context.bot.send_message(
+            target_id,
+            f"{attacker_emoji} <b>شما مورد حمله قرار گرفتید!</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"🎯 مهاجم: {utils.escape(attacker.first_name)}\n"
+            f"🚀 سلاح: {item['emoji']} {item['name']}\n"
+            f"💥 خسارت: <b>{utils.fmt(damage_amount)}</b> زرکوین\n"
+            f"📊 ثروت باقی‌مانده شما: <b>{utils.fmt(target_wealth)}</b>",
+            parse_mode=ParseMode.HTML
+        )
+    except Exception:
+        pass
+
+
+
 def main():
     if not config.BOT_TOKEN:
         logger.error("❌ BOT_TOKEN تنظیم نشده! لطفاً متغیر محیطی BOT_TOKEN را تنظیم کنید.")
@@ -1073,6 +1233,8 @@ def main():
     # سایر
     app.add_handler(ChatMemberHandler(chat_member_handler, ChatMemberHandler.MY_CHAT_MEMBER))
     app.add_handler(MessageHandler(filters.Regex(r"^انتقال زرکوین\s+[\d۰-۹,،]+"), owner_give))
+    # دستورات شلیک سلاح (بازار سیاه)
+    app.add_handler(MessageHandler(filters.Regex(r"^(شلیک موشک کروز|شلیک موشک بالستیک|شلیک موشک هایپرسونیک|مادر همه بمب ها|بمب هسته ای|کمی بکنش|پهباد شاهد|شلیک پهباد MQ)$"), handle_attack))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
