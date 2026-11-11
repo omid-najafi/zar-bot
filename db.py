@@ -590,14 +590,19 @@ async def get_leaderboard(limit: int = 10, around_user_id: int = None) -> tuple[
             top_users = [dict(r) for r in await cur.fetchall()]
             user_rank = None
             if around_user_id:
+                # بررسی وجود کاربر
                 await cur.execute(
-                    "SELECT COUNT(*) + 1 as rank FROM users "
-                    "WHERE (balance + bank_balance) > "
-                    "(SELECT (balance + bank_balance) FROM users WHERE user_id=%s)",
+                    "SELECT (balance + bank_balance) as wealth FROM users WHERE user_id=%s",
                     (around_user_id,))
-                row = await cur.fetchone()
-                if row and row["rank"]:
-                    user_rank = int(row["rank"])
+                urow = await cur.fetchone()
+                if urow and urow.get("wealth") is not None:
+                    await cur.execute(
+                        "SELECT COUNT(*) + 1 as rank FROM users "
+                        "WHERE (balance + bank_balance) > %s",
+                        (urow["wealth"],))
+                    rrow = await cur.fetchone()
+                    if rrow and rrow.get("rank") is not None:
+                        user_rank = int(rrow["rank"])
             return top_users, user_rank
 
 
