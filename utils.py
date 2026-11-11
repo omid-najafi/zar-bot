@@ -43,7 +43,8 @@ MAIN_MENU_KB = InlineKeyboardMarkup([
     [InlineKeyboardButton("🏦 بانک", callback_data="bank:menu"), InlineKeyboardButton("🏠 ملک‌ها", callback_data="prop:menu")],
     [InlineKeyboardButton("👷 کارگرها", callback_data="worker:menu"), InlineKeyboardButton("🎮 بازی‌ها", callback_data="game:menu")],
     [InlineKeyboardButton("🎯 ماموریت‌ها", callback_data="mission:menu"), InlineKeyboardButton("💸 انتقال", callback_data="transfer:start")],
-    [InlineKeyboardButton("🎭 کاباره زر", callback_data="kabareh:menu")],
+    [InlineKeyboardButton("🎭 کاباره زر", callback_data="kabareh:menu"), InlineKeyboardButton("🏆 لیدربورد", callback_data="lb:menu")],
+    [InlineKeyboardButton("💀 بازار سیاه", callback_data="bm:menu:0")],
     [InlineKeyboardButton("📚 راهنما", callback_data="help:menu")],
 ])
 
