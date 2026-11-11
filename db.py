@@ -580,30 +580,52 @@ async def get_leaderboard(limit: int = 10, around_user_id: int = None) -> tuple[
     گرفتن لیدربورد بر اساس ثروت (balance + bank_balance).
     خروجی: (لیست کاربران، رتبه کاربر درخواست‌کننده یا None)
     """
-    async with db_pool.acquire() as conn:
-        async with conn.cursor(aiomysql.DictCursor) as cur:
-            await cur.execute(
-                "SELECT user_id, first_name, username, balance, bank_balance, "
-                "(balance + bank_balance) as total_wealth "
-                "FROM users ORDER BY total_wealth DESC LIMIT %s",
-                (limit,))
-            top_users = [dict(r) for r in await cur.fetchall()]
-            user_rank = None
-            if around_user_id:
-                # بررسی وجود کاربر
+    if db_pool is None:
+        logger.warning("⚠️ get_leaderboard: db_pool هنوز مقداردهی نشده")
+        return [], None
+    try:
+        async with db_pool.acquire() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                # ─── دریافت ۱۵ کاربر برتر ───
                 await cur.execute(
-                    "SELECT (balance + bank_balance) as wealth FROM users WHERE user_id=%s",
-                    (around_user_id,))
-                urow = await cur.fetchone()
-                if urow and urow.get("wealth") is not None:
+                    "SELECT user_id, first_name, username, balance, bank_balance "
+                    "FROM users ORDER BY (balance + bank_balance) DESC LIMIT %s",
+                    (limit,))
+                top_users = []
+                for r in await cur.fetchall():
+                    try:
+                        row_dict = dict(r)
+                        # تبدیل Decimal به int (MySQL ممکنه Decimal برگردونه)
+                        row_dict["balance"] = int(row_dict.get("balance") or 0)
+                        row_dict["bank_balance"] = int(row_dict.get("bank_balance") or 0)
+                        row_dict["total_wealth"] = row_dict["balance"] + row_dict["bank_balance"]
+                        top_users.append(row_dict)
+                    except Exception as e:
+                        logger.warning(f"⚠️ خطا در پردازش ردیف لیدربورد: {e}")
+                        continue
+
+                # ─── محاسبه رتبه کاربر ───
+                user_rank = None
+                if around_user_id:
+                    # اول بررسی کن کاربر وجود داره
                     await cur.execute(
-                        "SELECT COUNT(*) + 1 as rank FROM users "
-                        "WHERE (balance + bank_balance) > %s",
-                        (urow["wealth"],))
-                    rrow = await cur.fetchone()
-                    if rrow and rrow.get("rank") is not None:
-                        user_rank = int(rrow["rank"])
+                        "SELECT balance, bank_balance FROM users WHERE user_id=%s",
+                        (around_user_id,))
+                    urow = await cur.fetchone()
+                    if urow:
+                        user_wealth = int(urow.get("balance") or 0) + int(urow.get("bank_balance") or 0)
+                        # تعداد کاربرانی که ثروتشون بیشتره + 1
+                        await cur.execute(
+                            "SELECT COUNT(*) as cnt FROM users "
+                            "WHERE (balance + bank_balance) > %s",
+                            (user_wealth,))
+                        rrow = await cur.fetchone()
+                        if rrow and rrow.get("cnt") is not None:
+                            user_rank = int(rrow["cnt"]) + 1
             return top_users, user_rank
+    except Exception as e:
+        logger.exception(f"❌ get_leaderboard error: {e}")
+        return [], None
 
 
 # ═══════════ اینونتوری (بازار سیاه) ═══════════
