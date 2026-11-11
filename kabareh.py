@@ -212,7 +212,6 @@ async def handle_callback(query, context, data, user_id):
                 await utils.safe_answer(query, f"❌ نیاز: {utils.fmt(price)}\nموجودی: {utils.fmt(int(user['balance']))}", show_alert=True); return
 
             # واریز درآمد انباشته قبل از کسر
-            await db.accrue_income(user_id)
             if not await db.deduct_balance(user_id, price):
                 await utils.safe_answer(query, "❌ موجودی!", show_alert=True); return
 
