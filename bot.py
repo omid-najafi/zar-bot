@@ -141,7 +141,7 @@ async def _show_main_menu(update, context):
     msg = await update.message.reply_text(
         await build_main_menu_text(user_id),
         parse_mode=ParseMode.HTML,
-        reply_markup=utils.MAIN_MENU_KB
+        reply_markup=utils.build_main_menu_kb()
     )
     utils.remember_owner(msg, user_id)
 
@@ -239,7 +239,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 is_owner = (not query.message) or utils.is_menu_owner(query.message.chat_id, query.message.message_id, user_id)
                 if is_owner:
                     await utils.safe_answer(query, "✅ عضویت تأیید شد!", show_alert=True)
-                    msg = await utils.safe_edit(query, await build_main_menu_text(user_id), utils.MAIN_MENU_KB)
+                    msg = await utils.safe_edit(query, await build_main_menu_text(user_id), utils.build_main_menu_kb())
                     if msg:
                         utils.remember_owner(msg, user_id)
                 else:
@@ -249,7 +249,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         msg = await query.from_user.send_message(
                             await build_main_menu_text(user_id),
                             parse_mode=ParseMode.HTML,
-                            reply_markup=utils.MAIN_MENU_KB
+                            reply_markup=utils.build_main_menu_kb()
                         )
                         utils.remember_owner(msg, user_id)
                     except Exception:
@@ -335,7 +335,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if data == "menu:main":
             await utils.safe_answer(query)
             await db.ensure_user(query.from_user)
-            msg = await utils.safe_edit(query, await build_main_menu_text(user_id), utils.MAIN_MENU_KB)
+            msg = await utils.safe_edit(query, await build_main_menu_text(user_id), utils.build_main_menu_kb())
             if msg:
                 utils.remember_owner(msg, user_id)
             return
@@ -452,7 +452,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await utils.notify_mission(context, query.message.chat_id, result)
                 # چک کن آیا هنوز می‌تونه بخره یا به محدودیت رسید
                 user = await db.get_user(user_id)
-                can_buy_more = count < config.MAX_PER_KEY and int(user["balance"]) >= prop["price"]
+                # 🔧 None-guard: اگر get_user None برگرداند (DB hiccup)، crash نکن
+                can_buy_more = count < config.MAX_PER_KEY and user and int(user["balance"]) >= prop["price"]
                 if can_buy_more:
                     # هنوز می‌تونه بخره — دکمه «خرید دوباره» + «بازگشت»
                     new_total = (count + 1) * prop['income']
@@ -597,7 +598,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 result = await db.progress_mission(user_id, "buy_worker", 1, base_xp=config.BASE_XP_BUY_ASSET)
                 await utils.notify_mission(context, query.message.chat_id, result)
                 user = await db.get_user(user_id)
-                can_buy_more = count < config.MAX_PER_KEY and int(user["balance"]) >= w["price"]
+                # 🔧 None-guard
+                can_buy_more = count < config.MAX_PER_KEY and user and int(user["balance"]) >= w["price"]
                 if can_buy_more:
                     text = (
                         f"✅ استخدام موفق بود!\n"
@@ -709,11 +711,18 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await confirm_transfer(query, int(data.split(":")[2]))
             return
         if data.startswith("tr:x:"):
+            # 🔧 رفع باگ: cancel باید owner_id (از callback_data) را pop کند، نه clicker_id.
+            # قبلاً اگر کاربر غیر-owner کلیک می‌کرد، pending_transferowner سر جایش می‌ماند.
+            owner_id = int(data.split(":")[2])
             await utils.safe_answer(query)
-            utils.pending_transfers.pop(user_id, None)
-            msg = await utils.safe_edit(query, "❌ لغو شد.", utils.BACK_MAIN_KB)
+            if query.from_user.id == owner_id:
+                utils.pending_transfers.pop(owner_id, None)
+                msg = await utils.safe_edit(query, "❌ لغو شد.", utils.BACK_MAIN_KB)
+            else:
+                # غیر-owner — فقط پیام اطلاعات بده، pending را دست نزن
+                msg = await utils.safe_edit(query, "❌ این دکمه برای شما نیست.", utils.BACK_MAIN_KB)
             if msg:
-                utils.remember_owner(msg, user_id)
+                utils.remember_owner(msg, query.from_user.id)
             return
 
         if data.startswith("room:cancel:"):
@@ -764,14 +773,14 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if ok:
                 await update.message.reply_text(
                     f"✅ {utils.fmt(amount)} {'واریز' if action == 'bank_deposit' else 'برداشت'} شد.",
-                    reply_markup=utils.MAIN_MENU_KB
+                    reply_markup=utils.build_main_menu_kb()
                 )
                 if action == "bank_deposit":
                     base = (amount // 10000) * config.BASE_XP_DEPOSIT_10K
                     result = await db.progress_mission(user_id, "deposit_bank", amount, base_xp=min(base, 500))
                     await utils.notify_mission(context, update.message.chat_id, result)
             else:
-                await update.message.reply_text("❌ موجودی کافی نیست", reply_markup=utils.MAIN_MENU_KB)
+                await update.message.reply_text("❌ موجودی کافی نیست", reply_markup=utils.build_main_menu_kb())
             return
 
         if action == "game_entry":
@@ -857,12 +866,16 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if action == "transfer_card":
-            recipient = await db.find_user_by_card(text)
+            # 🔧 رفع باگ: نرمال‌سازی ورودی کارت — کارت به‌صورت 6037-XXXX-XXXX-XXXX
+            # نمایش داده می‌شود، پس کاربر ممکن است با dash کپی کند. dash/space را حذف کن
+            # و ارقام فارسی را به انگلیسی تبدیل کن.
+            cleaned = utils.fa_to_en(text).replace("-", "").replace(" ", "").replace("_", "").strip()
+            recipient = await db.find_user_by_card(cleaned)
             if not recipient:
-                await update.message.reply_text("❌ پیدا نشد")
+                await update.message.reply_text("❌ کارت مقصد پیدا نشد. مطمئن شو ۱۶ رقم صحیح وارد کرده‌ای.")
                 return
             if recipient["user_id"] == user_id:
-                await update.message.reply_text("❌ به خودت!")
+                await update.message.reply_text("❌ نمی‌تونی به خودت انتقال بزنی!")
                 return
             amount, fee = state["amount"], state["fee"]
             utils.pending_transfers[user_id] = {
@@ -871,8 +884,11 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "amount": amount, "fee": fee
             }
             utils.user_states.pop(user_id, None)
+            # 🔧 parse_mode=HTML اضافه شد تا utils.escape درست رندر شود
+            # (قبلاً &lt; &gt; به‌صورت literal نمایش داده می‌شد)
             msg = await update.message.reply_text(
-                f"💸 تایید:\n👤 {utils.escape(recipient['first_name'])}\n💰 {utils.fmt(amount)}",
+                f"💸 تایید انتقال:\n👤 گیرنده: {utils.escape(recipient['first_name'])}\n💰 مبلغ: {utils.fmt(amount)}\n💵 کارمزد: {utils.fmt(fee)}",
+                parse_mode=ParseMode.HTML,
                 reply_markup=utils.transfer_confirm_kb(user_id)
             )
             utils.remember_owner(msg, user_id)
@@ -1045,8 +1061,20 @@ async def post_init(app: Application):
     else:
         logger.warning("⚠️ REQUIRED_GROUP.id تنظیم نشده - بررسی جوین گروه غیرفعال است")
 
+    # ─── شروع سرور مینی‌اپ قمارخانه ───
+    try:
+        import webapp as _webapp
+        await _webapp.start_webapp()
+    except Exception as e:
+        logger.exception(f"⚠️ شروع سرور مینی‌اپ ناموفق: {e}")
+
 
 async def post_shutdown(app: Application):
+    try:
+        import webapp as _webapp
+        await _webapp.stop_webapp()
+    except Exception as e:
+        logger.warning(f"⚠️ توقف سرور مینی‌اپ: {e}")
     await db.close_db_pool()
 
 
