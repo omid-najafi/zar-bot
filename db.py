@@ -140,6 +140,11 @@ async def bank_withdraw(user_id: int, amount: int) -> bool:
 
 
 async def transfer_coins(sender_id: int, recipient_id: int, amount: int, fee: int) -> bool:
+    """
+    🔧 رفع باگ: recipient UPDATE قبلاً چک نمی‌شد — اگر recipient_id وجود نداشت،
+    پول فرستنده کم می‌شد ولی به گیرنده نمی‌رسید (پول ناپدید می‌شد).
+    حالا با rollback و return False اگر recipient پیدا نشد.
+    """
     total = amount + fee
     utils.invalidate_cache(sender_id); utils.invalidate_cache(recipient_id)
     async with db_pool.acquire() as conn:
@@ -150,6 +155,9 @@ async def transfer_coins(sender_id: int, recipient_id: int, amount: int, fee: in
                 if cur.rowcount != 1:
                     await conn.rollback(); return False
                 await cur.execute("UPDATE users SET balance = balance + %s WHERE user_id=%s", (amount, recipient_id))
+                if cur.rowcount != 1:
+                    # recipient وجود ندارد — rollback و برگرداندن پول فرستنده
+                    await conn.rollback(); return False
             await conn.commit(); return True
         except Exception:
             await conn.rollback(); return False
@@ -408,19 +416,36 @@ async def daily_payout(context=None):
 
 # ═══════════ XP و لول ═══════════
 async def add_xp(user_id: int, amount: int) -> tuple[int, int, bool]:
+    """
+    🔧 رفع باگ race condition: قبلاً read-modify-write بود (SELECT + UPDATE با مقدار مطلق)
+    که در concurrency هم‌زمان می‌توانست یک increment را از دست بدهد.
+    حالا atomic increment با `total_xp = total_xp + %s` استفاده می‌شود.
+    """
     if amount <= 0: return 0, 1, False
     utils.invalidate_cache(user_id)
     async with db_pool.acquire() as conn:
-        async with conn.cursor(aiomysql.DictCursor) as cur:
-            await cur.execute("SELECT total_xp FROM users WHERE user_id=%s", (user_id,))
-            row = await cur.fetchone()
-            old_xp = int(row["total_xp"] or 0) if row else 0
-            new_xp = old_xp + amount
-            new_level, _, _ = utils.calc_level(new_xp)
-            old_level, _, _ = utils.calc_level(old_xp)
-            await cur.execute("UPDATE users SET total_xp = %s, level = %s WHERE user_id=%s", (new_xp, new_level, user_id))
+        try:
+            await conn.begin()
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                # atomic increment + read در یک تراکنش
+                await cur.execute("SELECT total_xp, level FROM users WHERE user_id=%s FOR UPDATE", (user_id,))
+                row = await cur.fetchone()
+                if not row:
+                    await conn.rollback()
+                    return 0, 1, False
+                old_xp = int(row["total_xp"] or 0)
+                old_level = int(row["level"] or 1)
+                new_xp = old_xp + amount
+                new_level, _, _ = utils.calc_level(new_xp)
+                await cur.execute(
+                    "UPDATE users SET total_xp = total_xp + %s, level = %s WHERE user_id=%s",
+                    (amount, new_level, user_id))
             await conn.commit()
-    return new_xp, new_level, new_level > old_level
+            return new_xp, new_level, new_level > old_level
+        except Exception:
+            await conn.rollback()
+            logger.exception("add_xp failed")
+            return 0, 1, False
 
 
 async def unlock_kabareh(user_id: int) -> bool:
@@ -661,12 +686,17 @@ async def get_inventory_counts(user_id: int) -> dict:
 
 
 async def has_item(user_id: int, item_key: str) -> bool:
-    """بررسی اینکه آیا کاربر آیتم رو داره"""
+    """بررسی اینکه آیا کاربر آیتم رو داره.
+
+    🔧 رفع باگ: قبلاً از cur.rowcount بعد از SELECT استفاده می‌کرد که در aiomysql
+    پس از SELECT معنای قطعی ندارد (می‌تواند -1 باشد). حالا از fetchone استفاده می‌شود.
+    """
     async with db_pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("SELECT 1 FROM inventory WHERE user_id=%s AND item_key=%s LIMIT 1",
                               (user_id, item_key))
-            return cur.rowcount > 0
+            row = await cur.fetchone()
+            return row is not None
 
 
 async def consume_item(user_id: int, item_key: str) -> bool:
@@ -690,7 +720,11 @@ async def apply_damage(target_id: int, damage_percent: float) -> int:
     اعمال آسیب به کاربر هدف.
     درصد از (balance + bank_balance) کم می‌شه.
     ابتدا از balance کم می‌شه، اگر کافی نبود از bank_balance.
-    خروجی: مقدار کل آسیب وارد شده
+
+    🔧 رفع باگ: damage قبلاً می‌توانست bank_balance را منفی کند اگر
+    bank_balance < remaining بود. حالا damage به کل ثروت target cap می‌شود
+    تا هیچ‌گاه منفی نشود.
+    خروجی: مقدار کل آسیب وارد شده (نهایتاً به اندازه total)
     """
     utils.invalidate_cache(target_id)
     async with db_pool.acquire() as conn:
@@ -705,13 +739,16 @@ async def apply_damage(target_id: int, damage_percent: float) -> int:
                 bank = int(row["bank_balance"] or 0)
                 total = balance + bank
                 damage = int(total * damage_percent)
+                # 🔧 cap به total تا منفی نشود
+                if damage > total:
+                    damage = total
                 if damage <= 0:
                     await conn.rollback(); return 0
                 # اول از balance کم کن
                 if balance >= damage:
                     await cur.execute("UPDATE users SET balance = balance - %s WHERE user_id=%s", (damage, target_id))
                 else:
-                    # تمام balance رو صفر کن، بقیه از bank
+                    # تمام balance رو صفر کن، بقیه از bank (که حالا تضمین شده کافی است چون damage <= total)
                     remaining = damage - balance
                     await cur.execute("UPDATE users SET balance = 0, bank_balance = bank_balance - %s WHERE user_id=%s",
                                       (remaining, target_id))
