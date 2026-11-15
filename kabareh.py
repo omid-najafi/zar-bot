@@ -215,9 +215,9 @@ async def handle_callback(query, context, data, user_id):
             if not await db.deduct_balance(user_id, price):
                 await utils.safe_answer(query, "❌ موجودی!", show_alert=True); return
 
-            # ثبت کول‌داون
-            await db.set_last_kabareh(user_id, datetime.now(utils.TEHRAN).isoformat())
-
+            # 🔧 رفع باگ: کول‌داون را بعد از payout موفق تنظیم می‌کنیم، نه قبل از آن.
+            # قبلاً اگر بین set_last_kabareh و add_balance exception رخ می‌داد، کاربر
+            # پولش را از دست می‌داد و ۲۴ ساعت قفل می‌شد بدون هیچ چیزی در عوض.
             roll = random.random()
             baby = False
             story = GIRL_STORIES[girl_key]
@@ -242,7 +242,9 @@ async def handle_callback(query, context, data, user_id):
                 # بچه‌دار 10%
                 baby = True
                 gross = price * 3
-                received = gross - config.KABAREH_BABY_COST
+                # 🔧 Guard: اگر gross <= BABY_COST، received منفی می‌شد — db.add_balance
+                # آن را نادیده می‌گرفت و کاربر هیچی نمی‌گرفت. حالا max(0, ...) می‌گیرد.
+                received = max(0, gross - config.KABAREH_BABY_COST)
                 await db.add_balance(user_id, received)
                 body = story["baby"].format(
                     gross=utils.fmt(gross),
@@ -250,6 +252,9 @@ async def handle_callback(query, context, data, user_id):
                     received=utils.fmt(received),
                     profit=utils.fmt(received - price),
                     xp=config.KABAREH_BABY_XP)
+
+            # 🔧 حالا که payout موفق بود، کول‌داون را تنظیم کن
+            await db.set_last_kabareh(user_id, datetime.now(utils.TEHRAN).isoformat())
 
             text = (
                 f"{story['intro'].format(user=user_name)}\n"
