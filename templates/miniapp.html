@@ -1249,16 +1249,13 @@ async function refreshProfile(silent = false) {
 }
 
 async function loadGames() {
-  try {
-    const data = await api("GET", "/api/games");
-    App.games = data.games;
-    App.user = App.user || {};
-    App.user.balance = data.balance;
-    renderGames();
-    renderUser();
-  } catch (e) {
-    toast("بارگذاری بازی‌ها ناموفق", "error");
-  }
+  // 🔧 اگر خطا دهد، به init پاس می‌دهیم تا صفحه خطا نمایش داده شود
+  const data = await api("GET", "/api/games");
+  App.games = data.games;
+  App.user = App.user || {};
+  App.user.balance = data.balance;
+  renderGames();
+  renderUser();
 }
 
 // ═══════════════════════════════════════════
@@ -1285,15 +1282,21 @@ async function init() {
   // 🔧 دو مسیر احراز هویت: initData (داخل تلگرام) یا browserToken (مرورگر خارجی)
   if (!App.initData && !App.browserToken) {
     document.getElementById("loadingScreen").innerHTML =
-      `<div class="big-dice">⚠️</div><div style="text-align:center; padding: 20px;">برای ورود باید از دکمه قمارخانه در ربات استفاده کنید.<br>دکمه «🌐 بازی در مرورگر» لینک اختصاصی شما را باز می‌کند.</div>`;
+      `<div class="big-dice">⚠️</div><div style="text-align:center; padding: 20px;">برای ورود باید از دکمه قمارخانه در ربات استفاده کنید.<br>دکمه «🎲 قمارخانه زنده» لینک اختصاصی شما را باز می‌کند.</div>`;
     return;
   }
   try {
     await refreshProfile(true);
     await loadGames();
   } catch (e) {
+    // 🔧 نمایش خطای دقیق برای عیب‌یابی
+    const status = e.status ? ` (HTTP ${e.status})` : "";
     document.getElementById("loadingScreen").innerHTML =
-      `<div class="big-dice">⚠️</div><div style="text-align:center; padding: 20px;">${e.message}<br><button class="btn btn-primary" onclick="location.reload()" style="margin-top:14px;">تلاش دوباره</button></div>`;
+      `<div class="big-dice">⚠️</div><div style="text-align:center; padding: 20px; font-size: 14px;">`
+      + `<b>خطا در بارگذاری</b>${status}<br>`
+      + `<span style="color:#ff8888;">${e.message}</span><br><br>`
+      + `<span style="color:#888; font-size:12px;">اگر خطا 401 است: احراز هویت ناموفق<br>اگر خطا 500 است: خطای سرور — لاگ‌ها را بررسی کنید<br>اگر fetch error است: سرور در دسترس نیست</span>`
+      + `<br><button class="btn btn-primary" onclick="location.reload()" style="margin-top:14px;">تلاش دوباره</button></div>`;
     return;
   }
   document.getElementById("loadingScreen").style.display = "none";
