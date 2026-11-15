@@ -6,7 +6,7 @@ import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from cachetools import TTLCache
-from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from telegram.constants import ParseMode
 from telegram.error import BadRequest
 import config
@@ -39,14 +39,33 @@ _membership_cache = TTLCache(maxsize=2000, ttl=600)
 _logged_groups = set()
 
 # ═══════════ منوی اصلی ═══════════
-MAIN_MENU_KB = InlineKeyboardMarkup([
-    [InlineKeyboardButton("🏦 بانک", callback_data="bank:menu"), InlineKeyboardButton("🏠 ملک‌ها", callback_data="prop:menu")],
-    [InlineKeyboardButton("👷 کارگرها", callback_data="worker:menu"), InlineKeyboardButton("🎮 بازی‌ها", callback_data="game:menu")],
-    [InlineKeyboardButton("🎯 ماموریت‌ها", callback_data="mission:menu"), InlineKeyboardButton("💸 انتقال", callback_data="transfer:start")],
-    [InlineKeyboardButton("🎭 کاباره زر", callback_data="kabareh:menu"), InlineKeyboardButton("🏆 لیدربورد", callback_data="lb:menu")],
-    [InlineKeyboardButton("💀 بازار سیاه", callback_data="bm:menu:0")],
-    [InlineKeyboardButton("📚 راهنما", callback_data="help:menu")],
-])
+def _get_web_app_info():
+    """ساخت WebAppInfo برای دکمه قمارخانه — اگر URL تنظیم نشده باشد، None"""
+    url = getattr(config, "WEBAPP_PUBLIC_URL", "")
+    if not url:
+        return None
+    return WebAppInfo(url=url)
+
+
+def build_main_menu_kb() -> InlineKeyboardMarkup:
+    """ساخت کیبورد منوی اصلی — در هر فراخوانی از config می‌خواند تا URL به‌روز باشد"""
+    rows = [
+        [InlineKeyboardButton("🏦 بانک", callback_data="bank:menu"), InlineKeyboardButton("🏠 ملک‌ها", callback_data="prop:menu")],
+        [InlineKeyboardButton("👷 کارگرها", callback_data="worker:menu"), InlineKeyboardButton("🎮 بازی‌ها", callback_data="game:menu")],
+        [InlineKeyboardButton("🎯 ماموریت‌ها", callback_data="mission:menu"), InlineKeyboardButton("💸 انتقال", callback_data="transfer:start")],
+        [InlineKeyboardButton("🎭 کاباره زر", callback_data="kabareh:menu"), InlineKeyboardButton("🏆 لیدربورد", callback_data="lb:menu")],
+        [InlineKeyboardButton("💀 بازار سیاه", callback_data="bm:menu:0")],
+    ]
+    # دکمه قمارخانه مینی‌اپ — فقط اگر URL تنظیم شده باشد
+    wai = _get_web_app_info()
+    if wai is not None:
+        rows.append([InlineKeyboardButton("🎲 قمارخانه", web_app=wai)])
+    rows.append([InlineKeyboardButton("📚 راهنما", callback_data="help:menu")])
+    return InlineKeyboardMarkup(rows)
+
+
+# نسخه ثابت برای استفاده در کدهایی که هنوز از const استفاده می‌کنند (در زمان import ساخته می‌شود)
+MAIN_MENU_KB = build_main_menu_kb()
 
 BACK_MAIN_KB = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="menu:main")]])
 BACK_GAMES_KB = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت به بازی‌ها", callback_data="game:menu")]])
@@ -289,21 +308,32 @@ async def verify_membership(update, context) -> bool:
     user_id = update.effective_user.id
     bot = context.bot
 
-    is_joined, missing = await check_membership_quiet(bot, user_id)
+    is_joined, missing = await check_membership_quiet(bot, user_id, force=True)
     if is_joined:
         return True
 
     text = get_join_text(missing)
     kb = get_join_keyboard()
 
-    try:
-        if update.callback_query:
-            await update.callback_query.answer("❌ هنوز عضو نشدی!", show_alert=True)
-            await update.callback_query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
-        elif update.message:
+    # 🔧 رفع باگ: پاسخ callback و ویرایش پیام جدا شده‌اند.
+    # قبلاً هر دو داخل یک try بودند — اگر answer() خطا می‌دهد (مثلاً callback قبلاً پاسخ داده شده)،
+    # edit_message_text اجرا نمی‌شد و کاربر هیچ پیامی نمی‌دید.
+    if update.callback_query:
+        await safe_answer(update.callback_query, "❌ هنوز عضو نشدی!", show_alert=True)
+        msg = await safe_edit(update.callback_query, text, kb)
+        if msg is None:
+            # اگر ویرایش پیام ناموفق بود (مثلاً پیام قدیمی یا مالک دیگر)، پیام جدید بفرست
+            try:
+                await update.callback_query.from_user.send_message(
+                    text, parse_mode=ParseMode.HTML, reply_markup=kb
+                )
+            except Exception as e:
+                logger.warning(f"ارسال پیام جوین ناموفق (fallback): {e}")
+    elif update.message:
+        try:
             await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
-    except Exception as e:
-        logger.warning(f"ارسال پیام جوین ناموفق: {e}")
+        except Exception as e:
+            logger.warning(f"ارسال پیام جوین ناموفق: {e}")
 
     return False
 
