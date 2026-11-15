@@ -124,13 +124,26 @@ cd zar-bot && sudo bash install.sh
 | `BOT_TOKEN` | توکن ربات |
 | `OWNER_ID` | آیدی عددی مالک |
 | `START_BALANCE` | (اختیاری) موجودی هدیه شروع |
+| `WEBAPP_PUBLIC_URL` | URL عمومی سرور (بعد از فعال‌سازی Public Domain پر می‌شود) |
 
 ### ۵. افزودن دیتابیس MySQL
 
 - در Railway: `New` → `Database` → `Add MySQL`
 - متغیرهای دیتابیس به‌صورت خودکار تنظیم می‌شوند (`MYSQLHOST`, `MYSQLPORT`, `MYSQLUSER`, `MYSQLPASSWORD`, `MYSQLDATABASE`)
 
-### ۶. شروع بازی
+### ۶. افزودن Redis (برای مچ‌میکینگ پایدار مینی‌اپ)
+
+- در Railway: `New` → `Database` → `Add Redis`
+- متغیر `REDIS_URL` به‌صورت خودکار تنظیم می‌شود
+- **اگر Redis اضافه نشود**، مینی‌اپ در حالت fallback (درون‌حافظه‌ای) کار می‌کند — ولی صف مچ‌میکینگ بعد از ری‌استارت از بین می‌رود و کاربرانی که در صف بودند پولشان (escrow) تا زمان لغو دستی قفل می‌ماند. **Redis برای تولید ضروری است.**
+
+### ۷. فعال‌سازی Public Domain
+
+- در Railway: تب `Settings` → `Networking` → `Generate Domain`
+- URL تولیدشده (مثل `https://zar-bot-production.up.railway.app`) را در متغیر `WEBAPP_PUBLIC_URL` قرار بده
+- حالا دکمه «🎲 قمارخانه زنده» در منوی کازینو ربات کار می‌کند
+
+### ۸. شروع بازی
 
 - ربات رو به گروه اضافه کن (ترجیحاً ادمین).
 - در گروه بنویس: `زربات`
@@ -397,10 +410,16 @@ ufw allow پورت_جدید/tcp
 ```
 zar-bot/
 ├── bot.py              # فایل اصلی ربات
-├── config.py           # تنظیمات (ملک‌ها، کارگرها، بازی‌ها، ماموریت‌ها)
-├── db.py               # عملیات دیتابیس
+├── config.py           # تنظیمات (ملک‌ها، کارگرها، بازی‌ها، ماموریت‌ها، مینی‌اپ، Redis)
+├── db.py               # عملیات دیتابیس MySQL
 ├── utils.py            # توابع کمکی و کیبوردها
+├── webapp.py           # سرور aiohttp مینی‌اپ قمارخانه (حکم/پوکر/بلک‌جک + اسلات/تاس/چرخ)
+├── redis_client.py     # کلاینت Redis برای مچ‌میکینگ پایدار از ری‌استارت
 ├── kabareh.py          # بازی کاباره
+├── blackmarket.py      # بازار سیاه (سلاح و شلیک)
+├── leaderboard.py      # لیدربورد
+├── templates/
+│   └── miniapp.html    # فرانت‌اند مینی‌اپ (تم قرمز/مشکی)
 ├── games/
 │   ├── rps.py          # سنگ کاغذ قیچی
 │   ├── ttt.py          # دوز
@@ -409,12 +428,51 @@ zar-bot/
 │   └── casino.py       # کازینو (۷ بازی)
 ├── install.sh          # اسکریپت نصب VPS
 ├── manage.sh           # اسکریپت مدیریت
-├── .env.example        # نمونه فایل تنظیمات
-├── requirements.txt    # وابستگی‌های Python
+├── .env.example        # نمونه فایل تنظیمات (شامل Redis)
+├── requirements.txt    # وابستگی‌های Python (شامل redis)
 ├── railway.json        # تنظیمات Railway
 ├── Procfile            # تنظیمات Heroku/Railway
 └── runtime.txt         # نسخه Python
 ```
+
+---
+
+---
+
+## 🔒 اصلاحات امنیتی و باگ‌ها (نسخه اصلاح‌شده)
+
+این نسخه شامل رفع حدود ۳۰ باگ بحرانی و بالا است که توسط ممیزی کامل کد پیدا شد:
+
+### بحرانی
+- **کپی پول در بازی‌های دونفره مینی‌اپ**: شرط هر دو بازیکن هنگام match شدن به‌صورت escrow کم می‌شود (قبلاً فقط برنده پاداش می‌گرفت ولی هیچ‌کس پول نمی‌داد → تکرار بی‌نهایت سکه)
+- **نشت deck در پوکر/بلک‌جک**: کارت‌های باقی‌مانده (flop/turn/river آینده) به کلاینت نشت نمی‌کنند
+- **احراز هویت initDataUnsafe**: فقط از `Telegram.WebApp.initData` (sign شده) استفاده می‌شود، نه `initDataUnsafe` (غیر sign شده که اجازه جعل هویت می‌داد)
+- **XSS از اسم حریف**: `first_name` حریف قبل از innerHTML با `escHtml` پاک می‌شود
+- **تقلب کوییز**: گزینه‌ها و `ans` هنگام نمایش shuffle می‌شوند (قبلاً پاسخ همیشه گزینه اول بود)
+
+### بالا
+- **Race condition در مچ‌میکینگ**: قفل اتمیک (محلی + Redis) از double-match یک حریف جلوگیری می‌کند
+- **پوکر بدون call**: اکشن `call` اضافه شد؛ فاز فقط وقتی عوض می‌شود که هر دو `pot_per_player` برابر باشند
+- **بلک‌جک stood player**: بازیکنی که stand کرده نمی‌تواند دوباره hit کند
+- **Wheel straight flush**: دست A-2-3-4-5 هم‌رنگ درست تشخیص داده می‌شود
+- **add_xp race**: atomic increment با `SELECT ... FOR UPDATE` جایگزین read-modify-write شد
+- **transfer_coins**: چک `rowcount` گیرنده اضافه شد (قبلاً پول ناپدید می‌شد اگر گیرنده وجود نداشت)
+- **apply_damage**: damage به کل ثروت target cap می‌شود (قبلاً bank_balance منفی می‌شد)
+- **has_item**: از `fetchone` به جای `rowcount` (نامعتبر پس از SELECT) استفاده می‌شود
+- **کلیک کارت بلک‌جک**: کارت‌ها فقط در hokm playable هستند (در بلک‌جک قبلاً خطای game_error می‌داد)
+- **CORS/CSP/Cache-Control**: هدرهای امنیتی روی همه پاسخ‌ها اعمال می‌شود
+- **Polling روی 401**: polling متوقف می‌شود تا toast هر ۲.۵ ثانیه spam نشود
+
+### متوسط
+- **کول‌داون کاباره**: بعد از payout موفق تنظیم می‌شود (قبلاً قبل از آن → کاربر قفل ۲۴ ساعته بدون پاداش در صورت خطا)
+- **escrow در صف مچ‌میکینگ**: شرط هنگام join کم می‌شود و در لغو/تایم‌اوت برمی‌گردد
+- **کلیک کارت hokm**: فقط کارت‌های valid (follow-suit) playable هستند
+- **دکمه لغو پنالتی**: کاربر می‌تواند قبل از شوت کنسل کند و پولش را برگرداند
+- **None-guard در خرید ملک/کارگر**: اگر `get_user` None برگرداند crash نمی‌کند
+- **لغو انتقال**: `owner_id` از callback_data خوانده می‌شود (قبلاً clicker_id)
+- **نرمال‌سازی کارت انتقال**: dash/space حذف و ارقام فارسی تبدیل می‌شوند
+- **parse_mode HTML**: در پیام تأیید انتقال اضافه شد
+- **window.prompt/confirm**: با مودال سفارشی و `Telegram.WebApp.showConfirm` جایگزین شدند (در WebApp کار نمی‌کردند)
 
 ---
 
