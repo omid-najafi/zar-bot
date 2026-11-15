@@ -15,10 +15,13 @@ def casino_menu_kb():
         [InlineKeyboardButton("🎡 رولت", callback_data="casino:roulette"), InlineKeyboardButton("💣 مین‌یاب", callback_data="casino:mines")],
         [InlineKeyboardButton("🎯 چرخ شانس", callback_data="casino:wheel")],
     ]
-    # دکمه قمارخانه مینی‌اپ — فقط اگر URL تنظیم شده باشد
+    # دکمه قمارخانه مینی‌اپ
+    # 🔧 همیشه نمایش داده شود — اگر URL تنظیم شده web_app، اگر نه callback که پیام راهنما بدهد
     url = getattr(config, "WEBAPP_PUBLIC_URL", "")
-    if url:
+    if url and url.startswith("https://"):
         rows.append([InlineKeyboardButton("🎲 قمارخانه زنده (حکم، پوکر، بلک‌جک)", web_app=WebAppInfo(url=url))])
+    else:
+        rows.append([InlineKeyboardButton("🎲 قمارخانه زنده (غیرفعال)", callback_data="casino:webapp")])
     rows.append([InlineKeyboardButton("🔙 بازگشت به بازی‌ها", callback_data="game:menu")])
     return InlineKeyboardMarkup(rows)
 
@@ -119,6 +122,36 @@ def _lose_text(header: str, entry: int) -> str:
 
 
 async def handle_callback(query, context, data, user_id):
+    # 🔧 اگر مینی‌اپ فعال نیست، پیام راهنما نشان بده
+    if data == "casino:webapp":
+        url = getattr(config, "WEBAPP_PUBLIC_URL", "")
+        if url and not url.startswith("https://"):
+            msg = (
+                f"❌ مینی‌اپ فعال نیست!\n\n"
+                f"URL تنظیم شده اما HTTPS نیست:\n<code>{url}</code>\n\n"
+                f"تلگرام فقط HTTPS را برای WebApp قبول می‌کند.\n"
+                f"روی Railway: Settings → Networking → Generate Domain\n"
+                f"سپس URL را در متغیر WEBAPP_PUBLIC_URL قرار دهید."
+            )
+        else:
+            msg = (
+                f"❌ مینی‌اپ فعال نیست!\n\n"
+                f"برای فعال‌سازی:\n\n"
+                f"<b>۱. روی Railway:</b>\n"
+                f"   • Settings → Networking → Generate Domain\n"
+                f"   • URL تولیدشده را در متغیر <code>WEBAPP_PUBLIC_URL</code> بگذارید\n\n"
+                f"<b>۲. ثبت دامنه در BotFather:</b>\n"
+                f"   • به @BotFather پیام دهید\n"
+                f"   • <code>/setdomain</code> → ربات را انتخاب کنید\n"
+                f"   • دامنه (بدون https://) را وارد کنید\n\n"
+                f"<b>۳. افزودن Redis:</b>\n"
+                f"   • Railway → New → Database → Add Redis\n"
+                f"   • متغیر REDIS_URL خودکار تنظیم می‌شود\n\n"
+                f"بعد از این‌ها ری‌استارت کنید."
+            )
+        await utils.safe_answer(query, msg, show_alert=True)
+        return
+
     if data == "casino:cancel":
         pending = utils.casino_pending.pop(user_id, None)
         if pending:
