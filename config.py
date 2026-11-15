@@ -380,6 +380,14 @@ if _railway_domain and not _railway_domain.startswith("http"):
     _railway_domain = "https://" + _railway_domain
 WEBAPP_PUBLIC_URL = os.environ.get("WEBAPP_PUBLIC_URL", "").rstrip("/") or _railway_domain.rstrip("/")
 
+# لینک عمیق مینی‌اپ تلگرام (Web App short link)
+# وقتی در BotFather با /newapp یک Web App ثبت می‌کنید، تلگرام لینک کوتاه می‌دهد:
+#   https://t.me/<bot_username>/<app_name>
+# مثال: https://t.me/zargametel_bot/Zar1
+# این لینک وقتی کلیک شود، مینی‌اپ را داخل وب‌ویو تلگرام باز می‌کند و initData خودکار ارسال می‌شود.
+# 🔧 اولویت با این لینک است — اگر تنظیم شده باشد، دکمه کازینو از این استفاده می‌کند.
+WEBAPP_DEEP_LINK = os.environ.get("WEBAPP_DEEP_LINK", "").strip() or "https://t.me/zargametel_bot/Zar1"
+
 # مدت زمان انتظار برای یافتن حریف (ثانیه) — 60 ثانیه
 MATCHMAKING_TIMEOUT = 60
 
