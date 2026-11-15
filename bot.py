@@ -674,7 +674,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if data == "game:casino":
             await utils.safe_answer(query)
-            msg = await utils.safe_edit(query, "🎰 <b>کازینو</b>\n💰 حداقل 10,000", casino.casino_menu_kb())
+            msg = await utils.safe_edit(query, "🎰 <b>کازینو</b>\n💰 حداقل 10,000", casino.casino_menu_kb(user_id))
             if msg:
                 utils.remember_owner(msg, user_id)
             return
