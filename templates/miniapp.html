@@ -550,6 +550,7 @@
 // ═══════════════════════════════════════════
 const App = {
   initData: null,
+  browserToken: null,
   user: null,
   games: [],
   pendingGame: null,        // {key, name, emoji, type, min_bet, max_bet}
@@ -565,6 +566,8 @@ const App = {
 // Telegram SDK
 // ═══════════════════════════════════════════
 function setupTelegram() {
+  // 🔧 توکن مرورگر: از URL خوانده می‌شود (دکمه «🌐 بازی در مرورگر» توکن را در URL می‌گذارد)
+  App.browserToken = new URLSearchParams(window.location.search).get("token") || "";
   if (window.Telegram && Telegram.WebApp) {
     Telegram.WebApp.ready();
     Telegram.WebApp.expand();
@@ -598,6 +601,7 @@ function escHtml(s) {
 async function api(method, path, body) {
   const opts = { method, headers: {} };
   if (App.initData) opts.headers["X-Telegram-Init-Data"] = App.initData;
+  if (App.browserToken) opts.headers["X-Browser-Token"] = App.browserToken;
   if (body !== undefined && body !== null) {
     opts.headers["Content-Type"] = "application/json";
     opts.body = JSON.stringify(body);
@@ -1278,9 +1282,10 @@ document.getElementById("betModal").addEventListener("click", (e) => {
 // ═══════════════════════════════════════════
 async function init() {
   setupTelegram();
-  if (!App.initData) {
+  // 🔧 دو مسیر احراز هویت: initData (داخل تلگرام) یا browserToken (مرورگر خارجی)
+  if (!App.initData && !App.browserToken) {
     document.getElementById("loadingScreen").innerHTML =
-      `<div class="big-dice">⚠️</div><div style="text-align:center; padding: 20px;">این مینی‌اپ فقط از داخل تلگرام باز می‌شود.<br>لطفاً از دکمه قمارخانه در ربات استفاده کنید.</div>`;
+      `<div class="big-dice">⚠️</div><div style="text-align:center; padding: 20px;">برای ورود باید از دکمه قمارخانه در ربات استفاده کنید.<br>دکمه «🌐 بازی در مرورگر» لینک اختصاصی شما را باز می‌کند.</div>`;
     return;
   }
   try {
