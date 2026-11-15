@@ -48,19 +48,16 @@ def _get_web_app_info():
 
 
 def build_main_menu_kb() -> InlineKeyboardMarkup:
-    """ساخت کیبورد منوی اصلی — در هر فراخوانی از config می‌خواند تا URL به‌روز باشد"""
+    """ساخت کیبورد منوی اصلی"""
     rows = [
         [InlineKeyboardButton("🏦 بانک", callback_data="bank:menu"), InlineKeyboardButton("🏠 ملک‌ها", callback_data="prop:menu")],
         [InlineKeyboardButton("👷 کارگرها", callback_data="worker:menu"), InlineKeyboardButton("🎮 بازی‌ها", callback_data="game:menu")],
         [InlineKeyboardButton("🎯 ماموریت‌ها", callback_data="mission:menu"), InlineKeyboardButton("💸 انتقال", callback_data="transfer:start")],
         [InlineKeyboardButton("🎭 کاباره زر", callback_data="kabareh:menu"), InlineKeyboardButton("🏆 لیدربورد", callback_data="lb:menu")],
         [InlineKeyboardButton("💀 بازار سیاه", callback_data="bm:menu:0")],
+        [InlineKeyboardButton("📚 راهنما", callback_data="help:menu")],
     ]
-    # دکمه قمارخانه مینی‌اپ — فقط اگر URL تنظیم شده باشد
-    wai = _get_web_app_info()
-    if wai is not None:
-        rows.append([InlineKeyboardButton("🎲 قمارخانه", web_app=wai)])
-    rows.append([InlineKeyboardButton("📚 راهنما", callback_data="help:menu")])
+    # دکمه قمارخانه مینی‌اپ داخل منوی کازینو قرار دارد (games/casino.py)
     return InlineKeyboardMarkup(rows)
 
 
