@@ -1,0 +1,1190 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>🎲 قمارخانه زر</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --red: #e10600;
+    --red-dark: #8a0000;
+    --red-glow: #ff2525;
+    --black: #0a0a0a;
+    --black-2: #1a1a1a;
+    --black-3: #242424;
+    --gold: #d4af37;
+    --text: #f5f5f5;
+    --text-dim: #a0a0a0;
+    --green: #00d96b;
+    --shadow-red: 0 0 18px rgba(225, 6, 0, 0.55);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    height: 100%;
+    background: var(--black);
+    color: var(--text);
+    font-family: 'Tahoma', 'Vazirmatn', 'Segoe UI', sans-serif;
+    overflow-x: hidden;
+  }
+  body {
+    background:
+      radial-gradient(ellipse at top left, rgba(225, 6, 0, 0.18), transparent 50%),
+      radial-gradient(ellipse at bottom right, rgba(225, 6, 0, 0.10), transparent 60%),
+      linear-gradient(180deg, #0a0a0a 0%, #1a0606 100%);
+    min-height: 100vh;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+  /* ═══════ هدر بالای صفحه ═══════ */
+  .header {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    background: linear-gradient(90deg, rgba(10,10,10,0.97), rgba(40,5,5,0.97));
+    border-bottom: 2px solid var(--red);
+    box-shadow: 0 4px 14px rgba(0,0,0,0.6), inset 0 -1px 0 var(--red-glow);
+    backdrop-filter: blur(6px);
+  }
+  .brand {
+    display: flex; align-items: center; gap: 8px;
+    font-weight: 800; font-size: 18px;
+    background: linear-gradient(90deg, var(--gold), #ffcf5c, var(--gold));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    text-shadow: 0 0 12px rgba(212,175,55,0.3);
+  }
+  .brand .dice { font-size: 22px; filter: drop-shadow(0 0 6px var(--red)); }
+  .user-chip {
+    display: flex; align-items: center; gap: 8px;
+    background: rgba(225, 6, 0, 0.12);
+    border: 1px solid var(--red-dark);
+    border-radius: 999px;
+    padding: 4px 10px 4px 4px;
+    box-shadow: inset 0 0 6px rgba(225,6,0,0.2);
+  }
+  .avatar {
+    width: 30px; height: 30px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--red), var(--red-dark));
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 14px; color: white;
+    border: 2px solid var(--gold);
+    overflow: hidden;
+  }
+  .avatar img { width: 100%; height: 100%; object-fit: cover; }
+  .user-info { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.1; }
+  .user-name { font-size: 12px; font-weight: 700; max-width: 90px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .user-balance { font-size: 13px; color: var(--gold); font-weight: 800; }
+  .level-badge {
+    background: linear-gradient(90deg, var(--red), #ff5050);
+    color: white; font-weight: 800; font-size: 10px;
+    padding: 1px 6px; border-radius: 4px; margin-right: 4px;
+  }
+  /* ═══════ محتوای اصلی ═══════ */
+  .container {
+    max-width: 480px;
+    margin: 0 auto;
+    padding: 14px;
+    padding-bottom: 80px;
+  }
+  .hero {
+    background: linear-gradient(135deg, rgba(225,6,0,0.18), rgba(0,0,0,0.4));
+    border: 1px solid var(--red-dark);
+    border-radius: 14px;
+    padding: 18px 16px;
+    margin-bottom: 14px;
+    position: relative; overflow: hidden;
+  }
+  .hero::before {
+    content: ""; position: absolute; top: -20px; right: -20px;
+    width: 80px; height: 80px; border-radius: 50%;
+    background: radial-gradient(circle, var(--red-glow), transparent 70%);
+    filter: blur(8px);
+  }
+  .hero h1 {
+    font-size: 22px; font-weight: 900; color: var(--red-glow);
+    text-shadow: 0 0 14px rgba(225,6,0,0.6); margin-bottom: 4px;
+  }
+  .hero p { color: var(--text-dim); font-size: 13px; line-height: 1.6; }
+  .hero .balance-big {
+    margin-top: 10px;
+    font-size: 26px; font-weight: 900; color: var(--gold);
+    text-shadow: 0 0 10px rgba(212,175,55,0.4);
+  }
+  /* ═══════ کارت‌های بازی ═══════ */
+  .section-title {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 14px; font-weight: 800; color: var(--text-dim);
+    margin: 14px 0 10px; text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .section-title::before, .section-title::after {
+    content: ""; flex: 1; height: 1px;
+    background: linear-gradient(90deg, transparent, var(--red-dark), transparent);
+  }
+  .games-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+  }
+  .game-card {
+    background: linear-gradient(160deg, var(--black-3), var(--black-2));
+    border: 1px solid #333;
+    border-radius: 12px;
+    padding: 14px 10px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.18s ease;
+    position: relative; overflow: hidden;
+  }
+  .game-card::after {
+    content: ""; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+    background: linear-gradient(90deg, transparent, var(--red), transparent);
+    opacity: 0; transition: opacity 0.2s;
+  }
+  .game-card:active { transform: scale(0.96); border-color: var(--red); }
+  .game-card:hover { border-color: var(--red-dark); }
+  .game-card:hover::after { opacity: 1; }
+  .game-emoji { font-size: 32px; display: block; margin-bottom: 4px; filter: drop-shadow(0 0 6px rgba(225,6,0,0.4)); }
+  .game-name { font-size: 13px; font-weight: 800; color: var(--text); }
+  .game-type {
+    display: inline-block; margin-top: 4px;
+    font-size: 10px; padding: 1px 6px; border-radius: 4px;
+    background: rgba(225,6,0,0.18); color: var(--red-glow);
+    font-weight: 700;
+  }
+  .game-desc { font-size: 11px; color: var(--text-dim); margin-top: 4px; line-height: 1.4; }
+  /* ═══════ مودال شرط ═══════ */
+  .modal-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.85);
+    backdrop-filter: blur(4px);
+    display: none; align-items: center; justify-content: center;
+    z-index: 100; padding: 14px;
+  }
+  .modal-overlay.active { display: flex; }
+  .modal {
+    background: linear-gradient(180deg, var(--black-3), var(--black));
+    border: 1px solid var(--red);
+    border-radius: 16px;
+    padding: 20px 16px;
+    width: 100%; max-width: 380px;
+    box-shadow: 0 0 30px rgba(225,6,0,0.4);
+    animation: slideUp 0.25s ease;
+  }
+  @keyframes slideUp {
+    from { transform: translateY(40px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+  }
+  .modal h2 {
+    color: var(--red-glow); font-size: 18px; font-weight: 900;
+    margin-bottom: 4px; text-align: center;
+  }
+  .modal .subtitle { color: var(--text-dim); font-size: 12px; text-align: center; margin-bottom: 14px; }
+  .bet-input-row {
+    display: flex; gap: 6px; margin-bottom: 10px;
+  }
+  .bet-input {
+    flex: 1; background: var(--black);
+    border: 1px solid var(--red-dark);
+    border-radius: 8px; padding: 10px;
+    color: var(--gold); font-size: 16px; font-weight: 800;
+    text-align: center; font-family: monospace;
+  }
+  .bet-input:focus { outline: none; border-color: var(--red); box-shadow: 0 0 8px rgba(225,6,0,0.4); }
+  .bet-quick { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+  .quick-btn {
+    flex: 1; min-width: 60px;
+    background: var(--black-2); border: 1px solid #333;
+    color: var(--text-dim); font-size: 11px; font-weight: 700;
+    padding: 6px 4px; border-radius: 6px; cursor: pointer;
+  }
+  .quick-btn:active { background: var(--red-dark); color: white; }
+  /* ═══════ دکمه‌ها ═══════ */
+  .btn {
+    width: 100%; padding: 12px;
+    border: none; border-radius: 10px;
+    font-size: 15px; font-weight: 800;
+    cursor: pointer; transition: all 0.15s;
+    font-family: inherit;
+  }
+  .btn-primary {
+    background: linear-gradient(90deg, var(--red), var(--red-dark));
+    color: white;
+    box-shadow: 0 4px 14px rgba(225,6,0,0.4), inset 0 1px 0 rgba(255,255,255,0.15);
+  }
+  .btn-primary:active { transform: scale(0.97); }
+  .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-secondary {
+    background: var(--black-2); color: var(--text);
+    border: 1px solid #333;
+  }
+  .btn-secondary:active { transform: scale(0.97); background: var(--black-3); }
+  .btn-danger {
+    background: linear-gradient(90deg, #6a0000, #3a0000); color: #ff7777;
+    border: 1px solid #5a0000;
+  }
+  .btn-row { display: flex; gap: 8px; }
+  .btn-row .btn { flex: 1; }
+  /* ═══════ صفحه مچ‌میکینگ ═══════ */
+  .matchmaking {
+    text-align: center;
+    padding: 30px 16px;
+  }
+  .pulse-loader {
+    width: 90px; height: 90px;
+    margin: 0 auto 16px;
+    border-radius: 50%;
+    background: radial-gradient(circle, var(--red-glow) 10%, transparent 70%);
+    position: relative;
+    animation: pulse 1.6s infinite ease-in-out;
+  }
+  .pulse-loader::before {
+    content: "🎲"; position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 38px;
+  }
+  @keyframes pulse {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.15); opacity: 0.7; }
+  }
+  .countdown-ring {
+    display: inline-block;
+    width: 56px; height: 56px;
+    border-radius: 50%;
+    border: 3px solid var(--red-dark);
+    border-top-color: var(--red-glow);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 22px; font-weight: 900; color: var(--red-glow);
+    margin: 0 auto 10px;
+    animation: spin 1s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .mm-status { color: var(--text); font-size: 14px; margin: 8px 0; }
+  .mm-queue { color: var(--text-dim); font-size: 12px; }
+  /* ═══════ صفحه بازی ═══════ */
+  .game-screen {
+    display: none;
+  }
+  .game-screen.active { display: block; }
+  .opponent-bar {
+    background: linear-gradient(90deg, var(--black-3), var(--black-2));
+    border: 1px solid var(--red-dark);
+    border-radius: 10px;
+    padding: 8px 12px;
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 10px;
+  }
+  .vs-divider {
+    text-align: center; color: var(--red-glow);
+    font-size: 14px; font-weight: 900; margin: 6px 0;
+    text-shadow: 0 0 10px rgba(225,6,0,0.6);
+  }
+  .hand {
+    display: flex; gap: 6px; justify-content: center;
+    flex-wrap: wrap; margin: 10px 0;
+  }
+  .card {
+    background: linear-gradient(160deg, #fff, #e8e8e8);
+    color: #000;
+    border-radius: 8px;
+    padding: 10px 6px;
+    min-width: 50px;
+    text-align: center;
+    font-size: 18px; font-weight: 800;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.4);
+    cursor: pointer; transition: all 0.15s;
+    border: 2px solid transparent;
+    user-select: none;
+  }
+  .card.playable:hover { border-color: var(--red-glow); transform: translateY(-4px); box-shadow: 0 8px 16px rgba(225,6,0,0.4); }
+  .card:active { transform: scale(0.95); }
+  .card.red { color: var(--red-dark); }
+  .card.hidden-card {
+    background: linear-gradient(135deg, var(--red-dark), #4a0000);
+    color: var(--gold);
+    border: 1px solid var(--red);
+    cursor: default;
+  }
+  .card.hidden-card::before { content: "?"; }
+  .card .rank { font-size: 14px; }
+  .card .suit { font-size: 18px; }
+  .community {
+    background: rgba(0,0,0,0.4);
+    border: 1px dashed var(--red-dark);
+    border-radius: 10px;
+    padding: 12px;
+    margin: 10px 0;
+    text-align: center;
+  }
+  .community-label {
+    font-size: 11px; color: var(--text-dim);
+    text-transform: uppercase; margin-bottom: 6px;
+  }
+  .turn-indicator {
+    text-align: center; padding: 8px;
+    background: rgba(225,6,0,0.12);
+    border-left: 3px solid var(--red);
+    border-radius: 6px;
+    margin: 10px 0;
+    font-weight: 700; font-size: 13px;
+  }
+  .turn-indicator.mine { color: var(--green); border-left-color: var(--green); background: rgba(0,217,107,0.1); }
+  .turn-indicator.opponent { color: var(--text-dim); }
+  .pot-display {
+    text-align: center;
+    color: var(--gold); font-weight: 900; font-size: 18px;
+    margin: 8px 0;
+    text-shadow: 0 0 8px rgba(212,175,55,0.4);
+  }
+  .actions-row {
+    display: flex; gap: 6px; margin: 12px 0;
+  }
+  .actions-row .btn { padding: 10px 6px; font-size: 13px; }
+  /* ═══════ نتیجه ═══════ */
+  .result-banner {
+    text-align: center;
+    padding: 20px 14px;
+    border-radius: 12px;
+    margin: 14px 0;
+    border: 2px solid;
+    font-weight: 900;
+  }
+  .result-banner.win { background: linear-gradient(135deg, rgba(0,217,107,0.15), transparent); border-color: var(--green); color: var(--green); }
+  .result-banner.lose { background: linear-gradient(135deg, rgba(225,6,0,0.15), transparent); border-color: var(--red); color: var(--red-glow); }
+  .result-banner.tie { background: linear-gradient(135deg, rgba(212,175,55,0.15), transparent); border-color: var(--gold); color: var(--gold); }
+  .result-banner h3 { font-size: 22px; margin-bottom: 4px; }
+  .result-banner .prize { font-size: 18px; color: var(--gold); }
+  /* ═══════ نوار پایین ═══════ */
+  .bottom-bar {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    background: linear-gradient(180deg, var(--black-2), var(--black));
+    border-top: 2px solid var(--red);
+    padding: 8px 14px;
+    display: flex; justify-content: space-around;
+    z-index: 40;
+  }
+  .bottom-bar .nav-btn {
+    background: none; border: none; color: var(--text-dim);
+    font-size: 11px; padding: 4px 10px;
+    cursor: pointer; font-family: inherit;
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+  }
+  .bottom-bar .nav-btn.active { color: var(--red-glow); }
+  .bottom-bar .nav-btn .icon { font-size: 18px; }
+  /* ═══════ توست ═══════ */
+  .toast {
+    position: fixed; top: 70px; left: 50%; transform: translateX(-50%);
+    background: var(--black-3); border: 1px solid var(--red);
+    color: var(--text); padding: 10px 16px;
+    border-radius: 8px; font-size: 13px; font-weight: 700;
+    z-index: 200; opacity: 0; transition: opacity 0.25s;
+    pointer-events: none;
+    max-width: 90%; text-align: center;
+  }
+  .toast.show { opacity: 1; }
+  .toast.error { border-color: var(--red); color: #ff8888; }
+  .toast.success { border-color: var(--green); color: var(--green); }
+  /* ═══════ انیمیشن اسلات ═══════ */
+  .slots-reels {
+    display: flex; justify-content: center; gap: 10px;
+    margin: 16px 0;
+  }
+  .reel {
+    width: 70px; height: 70px;
+    background: white; color: var(--red-dark);
+    border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 40px;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.5);
+    border: 2px solid var(--gold);
+  }
+  .reel.spinning { animation: shake 0.1s linear infinite; }
+  @keyframes shake {
+    0% { transform: translateY(0); }
+    50% { transform: translateY(-3px); }
+    100% { transform: translateY(0); }
+  }
+  .hidden { display: none !important; }
+  .loading-screen {
+    position: fixed; inset: 0; background: var(--black);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    z-index: 300; color: var(--text-dim);
+  }
+  .loading-screen .big-dice { font-size: 60px; animation: pulse 1s infinite; margin-bottom: 14px; }
+  .form-row { margin-bottom: 12px; }
+  .form-label { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 4px; }
+  .form-select {
+    width: 100%; background: var(--black);
+    border: 1px solid var(--red-dark);
+    color: var(--text); padding: 10px;
+    border-radius: 8px; font-family: inherit; font-size: 14px;
+  }
+</style>
+</head>
+<body>
+
+<!-- لودینگ اولیه -->
+<div class="loading-screen" id="loadingScreen">
+  <div class="big-dice">🎲</div>
+  <div>در حال بارگذاری قمارخانه...</div>
+</div>
+
+<!-- هدر -->
+<div class="header">
+  <div class="brand">
+    <span class="dice">🎲</span>
+    <span>قمارخانه زر</span>
+  </div>
+  <div class="user-chip">
+    <div class="avatar" id="userAvatar">؟</div>
+    <div class="user-info">
+      <div class="user-name"><span class="level-badge" id="userLevel">L1</span><span id="userName">میهمان</span></div>
+      <div class="user-balance"><span id="userBalance">0</span> 🪙</div>
+    </div>
+  </div>
+</div>
+
+<!-- صفحه اصلی -->
+<div class="container">
+  <div id="homeView">
+    <div class="hero">
+      <h1>🎰 خوش آمدی!</h1>
+      <p>قمارخانه زرکوین — جایی که ثروت یا ورشکستی در یک تاس نهفته است. بازی‌های تک‌نفره فوری یا بازی‌های دونفره با حریف زنده.</p>
+      <div class="balance-big"><span id="heroBalance">0</span> 🪙 زرکوین</div>
+    </div>
+
+    <div class="section-title">🎮 بازی‌های دونفره</div>
+    <div class="games-grid" id="games2pGrid"></div>
+
+    <div class="section-title">🎰 بازی‌های تک‌نفره</div>
+    <div class="games-grid" id="games1pGrid"></div>
+  </div>
+
+  <!-- صفحه مچ‌میکینگ -->
+  <div id="matchmakingView" class="hidden">
+    <div class="matchmaking">
+      <div class="pulse-loader"></div>
+      <h2 style="color: var(--red-glow); margin-bottom: 8px;">در جستجوی حریف...</h2>
+      <div class="mm-status" id="mmStatus">منتظر بمان...</div>
+      <div class="mm-queue" id="mmQueue"></div>
+      <div class="countdown-ring" id="mmCountdown">60</div>
+      <div style="margin-top: 14px;">
+        <button class="btn btn-danger" onclick="cancelMatchmaking()">❌ لغو</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- صفحه بازی -->
+  <div id="gameView" class="game-screen">
+    <div id="gameContent"></div>
+  </div>
+</div>
+
+<!-- نوار پایین -->
+<div class="bottom-bar">
+  <button class="nav-btn active" id="navHome" onclick="showHome()">
+    <span class="icon">🏠</span>
+    <span>خانه</span>
+  </button>
+  <button class="nav-btn" id="navRefresh" onclick="refreshProfile()">
+    <span class="icon">🔄</span>
+    <span>رفرش</span>
+  </button>
+  <button class="nav-btn" id="navExit" onclick="exitApp()">
+    <span class="icon">🚪</span>
+    <span>خروج</span>
+  </button>
+</div>
+
+<!-- مودال شرط -->
+<div class="modal-overlay" id="betModal">
+  <div class="modal">
+    <h2 id="betModalTitle">🎰 شرط بگذار</h2>
+    <div class="subtitle" id="betModalSubtitle"></div>
+    <div class="bet-input-row">
+      <input type="number" class="bet-input" id="betInput" placeholder="مبلغ شرط" min="0" inputmode="numeric">
+    </div>
+    <div class="bet-quick" id="betQuickBtns"></div>
+    <div id="diceOptions" class="hidden">
+      <div class="form-row">
+        <label class="form-label">پیش‌بینی مجموع تاس:</label>
+        <select class="form-select" id="dicePrediction">
+          <option value="under">زیر ۷ (×۲)</option>
+          <option value="over">بالای ۷ (×۲)</option>
+          <option value="equal">مساوی ۷ (×۴)</option>
+        </select>
+      </div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-secondary" onclick="closeBetModal()">انصراف</button>
+      <button class="btn btn-primary" id="betConfirmBtn">شروع بازی</button>
+    </div>
+  </div>
+</div>
+
+<!-- توست -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ═══════════════════════════════════════════
+// _State: وضعیت برنامه
+// ═══════════════════════════════════════════
+const App = {
+  initData: null,
+  user: null,
+  games: [],
+  pendingGame: null,        // {key, name, emoji, type, min_bet, max_bet}
+  pendingBet: 0,
+  matchmakingTimer: null,
+  gamePollTimer: null,
+  currentGameId: null,
+  currentGameState: null,
+  isExiting: false,
+};
+
+// ═══════════════════════════════════════════
+// Telegram SDK
+// ═══════════════════════════════════════════
+function setupTelegram() {
+  if (window.Telegram && Telegram.WebApp) {
+    Telegram.WebApp.ready();
+    Telegram.WebApp.expand();
+    Telegram.WebApp.setHeaderColor('#0a0a0a');
+    Telegram.WebApp.setBackgroundColor('#0a0a0a');
+    Telegram.WebApp.enableClosingConfirmation();
+    App.initData = Telegram.WebApp.initData || Telegram.WebApp.initDataUnsafe;
+    // برای تست روی دسکتاپ، initData ممکن است خالی باشد
+    if (!App.initData) {
+      App.initData = new URLSearchParams(window.location.search).get("init_data") || "";
+    }
+  } else {
+    App.initData = new URLSearchParams(window.location.search).get("init_data") || "";
+  }
+}
+
+// ═══════════════════════════════════════════
+// API helpers
+// ═══════════════════════════════════════════
+async function api(method, path, body) {
+  const opts = { method, headers: {} };
+  if (App.initData) opts.headers["X-Telegram-Init-Data"] = App.initData;
+  if (body !== undefined && body !== null) {
+    opts.headers["Content-Type"] = "application/json";
+    opts.body = JSON.stringify(body);
+  }
+  try {
+    const res = await fetch(path, opts);
+    const data = await res.json();
+    if (!data.ok) {
+      throw new Error(data.error || "خطای ناشناخته");
+    }
+    return data.data;
+  } catch (e) {
+    console.error("API error:", path, e);
+    throw e;
+  }
+}
+
+// ═══════════════════════════════════════════
+//  Toast
+// ═══════════════════════════════════════════
+let toastTimer = null;
+function toast(msg, type = "") {
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.className = "toast show " + type;
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.className = "toast", 2200);
+}
+
+// ═══════════════════════════════════════════
+// نمایش‌گرها
+// ═══════════════════════════════════════════
+function showHome() {
+  document.getElementById("homeView").classList.remove("hidden");
+  document.getElementById("matchmakingView").classList.add("hidden");
+  document.getElementById("gameView").classList.remove("active");
+  document.querySelectorAll(".nav-btn").forEach(b => b.classList.remove("active"));
+  document.getElementById("navHome").classList.add("active");
+  stopMatchmaking();
+  stopGamePolling();
+}
+
+function showMatchmaking() {
+  document.getElementById("homeView").classList.add("hidden");
+  document.getElementById("matchmakingView").classList.remove("hidden");
+  document.getElementById("gameView").classList.remove("active");
+  document.querySelectorAll(".nav-btn").forEach(b => b.classList.remove("active"));
+}
+
+function showGame() {
+  document.getElementById("homeView").classList.add("hidden");
+  document.getElementById("matchmakingView").classList.add("hidden");
+  document.getElementById("gameView").classList.add("active");
+  document.querySelectorAll(".nav-btn").forEach(b => b.classList.remove("active"));
+}
+
+// ═══════════════════════════════════════════
+// رندر هدر / پروفایل
+// ═══════════════════════════════════════════
+function renderUser() {
+  if (!App.user) return;
+  const u = App.user;
+  const name = (u.first_name || u.username || "بی‌نام").slice(0, 18);
+  document.getElementById("userName").textContent = name;
+  document.getElementById("userLevel").textContent = "L" + u.level;
+  document.getElementById("userBalance").textContent = fmtNum(u.balance);
+  document.getElementById("heroBalance").textContent = fmtNum(u.balance);
+  const avatar = document.getElementById("userAvatar");
+  if (u.avatar_url) {
+    avatar.innerHTML = `<img src="${u.avatar_url}" alt="">`;
+  } else {
+    avatar.textContent = (name[0] || "؟").toUpperCase();
+  }
+}
+
+function fmtNum(n) {
+  return (n || 0).toLocaleString("fa-IR");
+}
+
+// ═══════════════════════════════════════════
+// رندر لیست بازی‌ها
+// ═══════════════════════════════════════════
+function renderGames() {
+  const grid2 = document.getElementById("games2pGrid");
+  const grid1 = document.getElementById("games1pGrid");
+  grid2.innerHTML = "";
+  grid1.innerHTML = "";
+  for (const g of App.games) {
+    const card = document.createElement("div");
+    card.className = "game-card";
+    const typeLabel = g.type === "1p" ? "تک‌نفره" : g.type === "2p" ? "دونفره" : "چندنفره";
+    card.innerHTML = `
+      <span class="game-emoji">${g.emoji}</span>
+      <div class="game-name">${g.name}</div>
+      <span class="game-type">${typeLabel}</span>
+      <div class="game-desc">${g.desc}</div>
+    `;
+    card.onclick = () => openBetModal(g);
+    (g.type === "1p" ? grid1 : grid2).appendChild(card);
+  }
+}
+
+// ═══════════════════════════════════════════
+// مودال شرط
+// ═══════════════════════════════════════════
+function openBetModal(game) {
+  App.pendingGame = game;
+  document.getElementById("betModalTitle").textContent = `${game.emoji} ${game.name}`;
+  document.getElementById("betModalSubtitle").textContent = `حداقل: ${fmtNum(game.min_bet)} | حداکثر: ${fmtNum(game.max_bet)}`;
+  document.getElementById("betInput").value = game.min_bet;
+  document.getElementById("betInput").min = game.min_bet;
+  document.getElementById("betInput").max = game.max_bet;
+  // دکمه‌های سریع
+  const quickDiv = document.getElementById("betQuickBtns");
+  quickDiv.innerHTML = "";
+  const presets = [game.min_bet, game.min_bet * 5, game.min_bet * 10, Math.min(game.max_bet, game.min_bet * 50)];
+  for (const v of presets) {
+    const b = document.createElement("button");
+    b.className = "quick-btn";
+    b.textContent = fmtNum(v);
+    b.onclick = () => { document.getElementById("betInput").value = v; };
+    quickDiv.appendChild(b);
+  }
+  // نمایش گزینه تاس فقط برای بازی dice
+  document.getElementById("diceOptions").classList.toggle("hidden", game.key !== "dice");
+  // متن دکمه
+  const btn = document.getElementById("betConfirmBtn");
+  btn.textContent = game.type === "1p" ? "🎲 بازی کن" : "🔍 پیدا کن حریف";
+  btn.onclick = confirmBet;
+  document.getElementById("betModal").classList.add("active");
+}
+
+function closeBetModal() {
+  document.getElementById("betModal").classList.remove("active");
+  App.pendingGame = null;
+}
+
+async function confirmBet() {
+  const g = App.pendingGame;
+  if (!g) return;
+  const betVal = parseInt(document.getElementById("betInput").value, 10);
+  if (!betVal || betVal < g.min_bet) {
+    toast(`حداقل شرط ${fmtNum(g.min_bet)} است`, "error");
+    return;
+  }
+  if (betVal > g.max_bet) {
+    toast(`حداکثر شرط ${fmtNum(g.max_bet)} است`, "error");
+    return;
+  }
+  if (App.user && betVal > App.user.balance) {
+    toast("موجودی کافی نیست", "error");
+    return;
+  }
+  App.pendingBet = betVal;
+  closeBetModal();
+  if (g.type === "1p") {
+    await playSingle(g, betVal);
+  } else {
+    await startMatchmaking(g, betVal);
+  }
+}
+
+// ═══════════════════════════════════════════
+//  بازی تک‌نفره
+// ═══════════════════════════════════════════
+async function playSingle(game, bet) {
+  const payload = {};
+  if (game.key === "dice") {
+    payload.prediction = document.getElementById("dicePrediction").value;
+  }
+  try {
+    toast("🎲 در حال بازی...", "");
+    const result = await api("POST", "/api/play/single", {
+      game_key: game.key, bet, payload,
+    });
+    await refreshProfile(true);
+    renderResultSingle(game, bet, result);
+  } catch (e) {
+    toast(e.message, "error");
+  }
+}
+
+function renderResultSingle(game, bet, result) {
+  const view = document.getElementById("gameView");
+  showGame();
+  const win = result.win || 0;
+  const isWin = win > bet;
+  const isTie = win === bet;
+  const bannerClass = isWin ? "win" : (isTie ? "tie" : "lose");
+  const bannerText = isWin ? "🎉 بردی!" : (isTie ? "🤝 مساوی" : "💸 باختی");
+  let extra = "";
+  if (game.key === "slots") {
+    extra = `<div class="slots-reels">${result.outcome.match(/[^\s]+/g).slice(0,3).map(s => `<div class="reel">${s}</div>`).join("")}</div>`;
+  } else {
+    extra = `<div style="text-align:center; font-size:18px; margin:14px 0; color:var(--gold); font-weight:800;">${result.outcome}</div>`;
+  }
+  view.querySelector("#gameContent").innerHTML = `
+    <h2 style="text-align:center; color:var(--red-glow); margin-bottom:10px;">${game.emoji} ${game.name}</h2>
+    ${extra}
+    <div class="result-banner ${bannerClass}">
+      <h3>${bannerText}</h3>
+      <div class="prize">شرط: ${fmtNum(bet)} | برنده: ${fmtNum(win)} 🪙</div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-secondary" onclick="showHome()">🔙 خانه</button>
+      <button class="btn btn-primary" onclick="openBetModal(App.games.find(g=>g.key==='${game.key}'))">🔄 دوباره</button>
+    </div>
+  `;
+}
+
+// ═══════════════════════════════════════════
+//  مچ‌میکینگ
+// ═══════════════════════════════════════════
+async function startMatchmaking(game, bet) {
+  showMatchmaking();
+  document.getElementById("mmStatus").textContent = `جستجوی حریف برای ${game.name}...`;
+  document.getElementById("mmQueue").textContent = `شرط: ${fmtNum(bet)} 🪙`;
+  document.getElementById("mmCountdown").textContent = "60";
+  try {
+    const r = await api("POST", "/api/match/join", { game_key: game.key, bet });
+    if (r.matched) {
+      // بلافاصله حریف پیدا شد
+      await enterGame(r.game_id, r.game_key);
+    } else {
+      // شروع polling
+      startMatchPolling();
+    }
+  } catch (e) {
+    toast(e.message, "error");
+    showHome();
+  }
+}
+
+let mmCountdown = 60;
+function startMatchPolling() {
+  mmCountdown = 60;
+  stopMatchmaking();
+  App.matchmakingTimer = setInterval(async () => {
+    mmCountdown--;
+    document.getElementById("mmCountdown").textContent = mmCountdown;
+    if (mmCountdown <= 0) {
+      stopMatchmaking();
+      toast("⏱ حریفی پیدا نشد", "error");
+      showHome();
+      return;
+    }
+    try {
+      const s = await api("GET", "/api/match/status");
+      if (s.status === "matched") {
+        stopMatchmaking();
+        await enterGame(s.game_id, s.game_key);
+      } else if (s.status === "timeout") {
+        stopMatchmaking();
+        toast("⏱ حریفی پیدا نشد", "error");
+        showHome();
+      } else if (s.status === "waiting") {
+        document.getElementById("mmQueue").textContent =
+          `در صف: ${s.queue_size || 1} نفر | زمان باقی‌مانده: ${s.remaining}s`;
+      } else if (s.status === "idle") {
+        // خارج شده از صف — احتمالاً توسط کاربر
+        stopMatchmaking();
+        showHome();
+      }
+    } catch (e) {
+      console.error("match status error:", e);
+    }
+  }, 1000);
+}
+
+function stopMatchmaking() {
+  if (App.matchmakingTimer) {
+    clearInterval(App.matchmakingTimer);
+    App.matchmakingTimer = null;
+  }
+}
+
+async function cancelMatchmaking() {
+  stopMatchmaking();
+  try { await api("POST", "/api/match/cancel"); } catch (e) {}
+  showHome();
+}
+
+// ═══════════════════════════════════════════
+//  صفحه بازی دونفره
+// ═══════════════════════════════════════════
+async function enterGame(gameId, gameKey) {
+  App.currentGameId = gameId;
+  showGame();
+  await fetchGameState();
+  startGamePolling();
+}
+
+async function fetchGameState() {
+  if (!App.currentGameId) return;
+  try {
+    const s = await api("GET", `/api/game/state?game_id=${App.currentGameId}`);
+    App.currentGameState = s;
+    renderGameState(s);
+  } catch (e) {
+    console.error("game state error:", e);
+    toast(e.message, "error");
+  }
+}
+
+function startGamePolling() {
+  stopGamePolling();
+  App.gamePollTimer = setInterval(async () => {
+    if (!App.currentGameId) return;
+    await fetchGameState();
+    if (App.currentGameState && App.currentGameState.finished) {
+      stopGamePolling();
+    }
+  }, 2500);
+}
+
+function stopGamePolling() {
+  if (App.gamePollTimer) {
+    clearInterval(App.gamePollTimer);
+    App.gamePollTimer = null;
+  }
+}
+
+function renderGameState(s) {
+  const view = document.getElementById("gameView");
+  const game = App.games.find(g => g.key === s.game_key);
+  const myIdx = s.my_index;
+  const oppIdx = myIdx === 0 ? 1 : 0;
+  const me = s.players[myIdx];
+  const opp = s.players[oppIdx];
+  const isMyTurn = s.turn_idx === myIdx && !s.finished;
+  let body = "";
+
+  // نوار حریف
+  body += `
+    <div class="opponent-bar">
+      <div style="display:flex; align-items:center; gap:8px;">
+        <div class="avatar" style="width:28px; height:28px; font-size:12px;">${(opp.name[0] || "؟").toUpperCase()}</div>
+        <div>
+          <div style="font-size:13px; font-weight:700;">${opp.name}</div>
+          <div style="font-size:11px; color:var(--text-dim);">حریف</div>
+        </div>
+      </div>
+      <div style="color:var(--gold); font-weight:800;">${fmtNum(s.bet)} 🪙</div>
+    </div>
+  `;
+
+  // دست حریف (پنهان)
+  if (s.data && s.data.hands) {
+    const oppHand = s.data.hands[oppIdx];
+    body += `<div class="hand">`;
+    if (oppHand) {
+      for (const c of oppHand) {
+        body += `<div class="card hidden-card"></div>`;
+      }
+    }
+    body += `</div>`;
+  }
+
+  // متن VS
+  body += `<div class="vs-divider">⚔️ VS ⚔️</div>`;
+
+  // community cards (پوکر)
+  if (s.data && s.data.community && s.data.community.length) {
+    body += `<div class="community">
+      <div class="community-label">Community</div>
+      <div class="hand">${s.data.community.map(c => cardHtml(c)).join("")}</div>
+    </div>`;
+  }
+
+  // معلومات خاص بازی
+  if (s.game_key === "hokm") {
+    if (s.data.trump_suit) {
+      body += `<div class="turn-indicator">حکم: <b style="color:var(--gold); font-size:18px;">${s.data.trump_suit}</b></div>`;
+    }
+    if (s.data.tricks_won) {
+      body += `<div class="pot-display">برد دورها — شما: ${s.data.tricks_won[myIdx]} | حریف: ${s.data.tricks_won[oppIdx]}</div>`;
+    }
+    if (s.data.current_trick && s.data.current_trick.length) {
+      body += `<div class="community">
+        <div class="community-label">دور فعلی</div>
+        <div class="hand">${s.data.current_trick.map(t => cardHtml(t.card)).join("")}</div>
+      </div>`;
+    }
+  } else if (s.game_key === "poker") {
+    body += `<div class="pot-display"> پات: ${fmtNum(s.pot)} 🪙</div>`;
+    if (s.data.phase) {
+      body += `<div class="turn-indicator">مرحله: <b>${phaseLabel(s.data.phase)}</b></div>`;
+    }
+  } else if (s.game_key === "blackjack") {
+    if (s.data.totals) {
+      body += `<div class="turn-indicator">مجموع شما: <b style="color:var(--green);">${s.data.totals[myIdx]}</b> | حریف: ?</div>`;
+    }
+  }
+
+  // نوبت
+  if (!s.finished) {
+    body += `<div class="turn-indicator ${isMyTurn ? 'mine' : 'opponent'}">
+      ${isMyTurn ? '✅ نوبت شماست!' : '⏳ نوبت حریف...'}
+    </div>`;
+  }
+
+  // دست من
+  if (s.data && s.data.hands) {
+    const myHand = s.data.hands[myIdx];
+    body += `<div class="hand">`;
+    if (myHand) {
+      for (let i = 0; i < myHand.length; i++) {
+        const c = myHand[i];
+        const playable = isMyTurn && (s.game_key === "hokm" || s.game_key === "blackjack");
+        body += `<div class="card ${cardColor(c)} ${playable ? 'playable' : ''}" onclick="${playable ? `playCard(${i})` : ''}">${cardHtmlInner(c)}</div>`;
+      }
+    }
+    body += `</div>`;
+  }
+
+  // اکشن‌های بازی
+  if (!s.finished && isMyTurn) {
+    body += `<div class="actions-row">`;
+    if (s.game_key === "hokm" && s.data.phase === "choose_trump") {
+      body += `<button class="btn btn-primary" onclick="chooseTrump('♠')">♠</button>`;
+      body += `<button class="btn btn-primary" onclick="chooseTrump('♥')">♥</button>`;
+      body += `<button class="btn btn-primary" onclick="chooseTrump('♦')">♦</button>`;
+      body += `<button class="btn btn-primary" onclick="chooseTrump('♣')">♣</button>`;
+    }
+    if (s.game_key === "poker") {
+      body += `<button class="btn btn-secondary" onclick="pokerAction('check')">✅ چک</button>`;
+      body += `<button class="btn btn-primary" onclick="pokerRaise()">⬆️ ریز</button>`;
+      body += `<button class="btn btn-danger" onclick="pokerAction('fold')">🏳️ فولد</button>`;
+    }
+    if (s.game_key === "blackjack") {
+      body += `<button class="btn btn-primary" onclick="blackjackAction('hit')">➕ هیت</button>`;
+      body += `<button class="btn btn-secondary" onclick="blackjackAction('stand')">✋ استند</button>`;
+    }
+    body += `</div>`;
+  }
+
+  // تسلیم
+  if (!s.finished) {
+    body += `<button class="btn btn-danger" style="margin-top:6px;" onclick="leaveGame()">🏳️ تسلیم شو</button>`;
+  }
+
+  // نتیجه نهایی
+  if (s.finished) {
+    const isWin = s.winner === me.user_id;
+    const isTie = s.winner === null;
+    const bannerClass = isWin ? "win" : (isTie ? "tie" : "lose");
+    const bannerText = isWin ? "🎉 بردی!" : (isTie ? "🤝 مساوی" : "💸 باختی");
+    const prize = s.data.winner_prize || (s.data.prize_each ? s.data.prize_each : 0);
+    body += `<div class="result-banner ${bannerClass}">
+      <h3>${bannerText}</h3>
+      <div class="prize">${isWin ? `جایزه: ${fmtNum(prize)} 🪙` : (isTie ? `بازگشت: ${fmtNum(prize)} 🪙` : "شرط را از دست دادی")}</div>
+    </div>`;
+    body += `<button class="btn btn-primary" onclick="exitToHome()">🔙 بازگشت به خانه</button>`;
+  }
+
+  view.querySelector("#gameContent").innerHTML = `
+    <h2 style="text-align:center; color:var(--red-glow); margin-bottom:10px;">${game ? game.emoji : ""} ${game ? game.name : ""}</h2>
+    ${body}
+  `;
+}
+
+function cardHtml(c) {
+  return `<div class="card ${cardColor(c)}">${cardHtmlInner(c)}</div>`;
+}
+function cardColor(c) {
+  if (!c) return "";
+  return (c.suit === "♥" || c.suit === "♦") ? "red" : "";
+}
+function cardHtmlInner(c) {
+  if (!c) return "?";
+  if (c.hidden) return "?";
+  return `<div class="rank">${c.rank}</div><div class="suit">${c.suit}</div>`;
+}
+function phaseLabel(p) {
+  return ({
+    preflop: "پیش‌فلاپ", flop: "فلاپ", turn: "ترن", river: "ریور", showdown: "شو‌داون",
+    play: "بازی", choose_trump: "انتخاب حکم", finished: "پایان",
+  })[p] || p;
+}
+
+// ═══════════════════════════════════════════
+// اکشن‌های بازی
+// ═══════════════════════════════════════════
+async function playCard(idx) {
+  if (!App.currentGameId) return;
+  try {
+    await api("POST", "/api/game/action", {
+      game_id: App.currentGameId, action: "play_card",
+      payload: { card_index: idx },
+    });
+    await fetchGameState();
+  } catch (e) { toast(e.message, "error"); }
+}
+
+async function chooseTrump(suit) {
+  if (!App.currentGameId) return;
+  try {
+    await api("POST", "/api/game/action", {
+      game_id: App.currentGameId, action: "choose_trump",
+      payload: { suit },
+    });
+    await fetchGameState();
+  } catch (e) { toast(e.message, "error"); }
+}
+
+async function pokerAction(action, payload = {}) {
+  if (!App.currentGameId) return;
+  try {
+    await api("POST", "/api/game/action", {
+      game_id: App.currentGameId, action, payload,
+    });
+    await fetchGameState();
+  } catch (e) { toast(e.message, "error"); }
+}
+
+async function pokerRaise() {
+  const amount = prompt("مبلغ raise (زرکوین):", "10000");
+  if (!amount) return;
+  await pokerAction("raise", { amount: parseInt(amount, 10) });
+}
+
+async function blackjackAction(action) {
+  if (!App.currentGameId) return;
+  try {
+    await api("POST", "/api/game/action", {
+      game_id: App.currentGameId, action, payload: {},
+    });
+    await fetchGameState();
+  } catch (e) { toast(e.message, "error"); }
+}
+
+async function leaveGame() {
+  if (!App.currentGameId) return;
+  if (!confirm("مطمئنی می‌خوای تسلیم بشی؟ شرط را از دست می‌دهی.")) return;
+  try {
+    await api("POST", "/api/game/leave", {});
+    await fetchGameState();
+  } catch (e) { toast(e.message, "error"); }
+}
+
+function exitToHome() {
+  App.currentGameId = null;
+  App.currentGameState = null;
+  stopGamePolling();
+  showHome();
+  refreshProfile(true);
+}
+
+// ═══════════════════════════════════════════
+// رفرش پروفایل
+// ═══════════════════════════════════════════
+async function refreshProfile(silent = false) {
+  try {
+    const u = await api("GET", "/api/profile");
+    App.user = u;
+    renderUser();
+    if (!silent) toast("✅ به‌روز شد", "success");
+  } catch (e) {
+    if (!silent) toast("احراز هویت ناموفق — لطفاً از تلگرام وارد شو", "error");
+  }
+}
+
+async function loadGames() {
+  try {
+    const data = await api("GET", "/api/games");
+    App.games = data.games;
+    App.user = App.user || {};
+    App.user.balance = data.balance;
+    renderGames();
+    renderUser();
+  } catch (e) {
+    toast("بارگذاری بازی‌ها ناموفق", "error");
+  }
+}
+
+// ═══════════════════════════════════════════
+// خروج
+// ═══════════════════════════════════════════
+function exitApp() {
+  if (window.Telegram && Telegram.WebApp) {
+    Telegram.WebApp.close();
+  } else {
+    window.close();
+  }
+}
+
+// بستن مودال با کلیک روی پس‌زمینه
+document.getElementById("betModal").addEventListener("click", (e) => {
+  if (e.target.id === "betModal") closeBetModal();
+});
+
+// ═══════════════════════════════════════════
+// راه‌اندازی
+// ═══════════════════════════════════════════
+async function init() {
+  setupTelegram();
+  if (!App.initData) {
+    document.getElementById("loadingScreen").innerHTML =
+      `<div class="big-dice">⚠️</div><div style="text-align:center; padding: 20px;">این مینی‌اپ فقط از داخل تلگرام باز می‌شود.<br>لطفاً از دکمه قمارخانه در ربات استفاده کنید.</div>`;
+    return;
+  }
+  try {
+    await refreshProfile(true);
+    await loadGames();
+  } catch (e) {
+    document.getElementById("loadingScreen").innerHTML =
+      `<div class="big-dice">⚠️</div><div style="text-align:center; padding: 20px;">${e.message}<br><button class="btn btn-primary" onclick="location.reload()" style="margin-top:14px;">تلاش دوباره</button></div>`;
+    return;
+  }
+  document.getElementById("loadingScreen").style.display = "none";
+}
+
+init();
+</script>
+</body>
+</html>
