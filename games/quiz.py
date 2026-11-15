@@ -193,8 +193,16 @@ QUIZ_QUESTIONS = [
 
 def get_random_q():
     if random.random() < 0.7:
-        return random.choice(QUIZ_QUESTIONS)
-    
+        q = dict(random.choice(QUIZ_QUESTIONS))
+        # 🔧 رفع باگ: گزینه‌ها و ans درست را shuffle کن تا کاربر نتونه همیشه
+        # روی گزینه اول کلیک کنه و برنده بشه (باگ تقلب)
+        correct = q["opts"][q["ans"]]
+        opts = list(q["opts"])
+        random.shuffle(opts)
+        q["opts"] = opts
+        q["ans"] = opts.index(correct)
+        return q
+
     kind = random.choice(["add", "sub", "mul"])
     if kind == "add":
         a, b = random.randint(11, 99), random.randint(11, 99)
@@ -205,7 +213,7 @@ def get_random_q():
     else:
         a, b = random.randint(2, 15), random.randint(2, 15)
         ans = a * b; q = f"{a} × {b} = ?"
-    
+
     offsets = [-4, -3, -2, -1, 1, 2, 3, 4, 5]
     random.shuffle(offsets)
     wrongs = []
@@ -213,7 +221,7 @@ def get_random_q():
         if len(wrongs) == 3: break
         w = ans + off
         if w > 0: wrongs.append(w)
-        
+
     opts = [ans] + wrongs
     random.shuffle(opts)
     return {"q": q, "opts": [str(x) for x in opts], "ans": opts.index(ans)}
