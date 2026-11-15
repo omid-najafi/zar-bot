@@ -16,10 +16,12 @@ def casino_menu_kb():
         [InlineKeyboardButton("🎯 چرخ شانس", callback_data="casino:wheel")],
     ]
     # دکمه قمارخانه مینی‌اپ
-    # 🔧 همیشه نمایش داده شود — اگر URL تنظیم شده web_app، اگر نه callback که پیام راهنما بدهد
+    # 🔧 دو دکمه: داخل تلگرام (web_app) + مرورگر خارجی (url)
+    # هر دو از WEBAPP_PUBLIC_URL استفاده می‌کنند
     url = getattr(config, "WEBAPP_PUBLIC_URL", "")
     if url and url.startswith("https://"):
-        rows.append([InlineKeyboardButton("🎲 قمارخانه زنده (حکم، پوکر، بلک‌جک)", web_app=WebAppInfo(url=url))])
+        rows.append([InlineKeyboardButton("🎲 قمارخانه (داخل تلگرام)", web_app=WebAppInfo(url=url))])
+        rows.append([InlineKeyboardButton("🌐 بازی در مرورگر", url=url)])
     else:
         rows.append([InlineKeyboardButton("🎲 قمارخانه زنده (حکم، پوکر، بلک‌جک)", callback_data="casino:webapp")])
     rows.append([InlineKeyboardButton("🔙 بازگشت به بازی‌ها", callback_data="game:menu")])
