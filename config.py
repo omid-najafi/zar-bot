@@ -389,6 +389,33 @@ MINIAPP_MIN_BALANCE = 1_000  # حداقل موجودی برای ورود به م
 # کارمزد بازی‌های دونفره مینی‌اپ
 MINIAPP_COMMISSION_RATE = 0.05  # ۵٪
 
+# ═══════════ Redis (برای مچ‌میکینگ پایدار مینی‌اپ) ═══════════
+# Redis از ری‌استارت سرور جان می‌برد — صف انتظار و بازی‌های نیمه‌تمام پایدار می‌شوند
+# روی Railway: متغیر REDIS_URL به‌صورت خودکار از Redis plugin تزریق می‌شود
+# مثال: redis://default:password@railway-redis.railway.internal:6379
+# یا روی public URL: rediss://default:password@up.railway.app:6379
+REDIS_URL = os.getenv("REDIS_URL") or os.getenv("REDISCLOUD_URL") or ""
+# اگر REDIS_URL تنظیم نشده، از جزئیات جداگانه بساز (VPS)
+if not REDIS_URL:
+    REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+    REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+    REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", "")
+    REDIS_DB = int(os.getenv("REDIS_DB", "0"))
+else:
+    # parse_url برای مقادیر جداگانه لازم نیست — aioredis/redis-py خودش parse می‌کند
+    REDIS_HOST = None
+    REDIS_PORT = None
+    REDIS_PASSWORD = None
+    REDIS_DB = 0
+
+# پیشوند کلیدهای Redis برای مینی‌اپ
+REDIS_PREFIX = "zarbot:miniapp"
+
+# مدت زمان نگه‌داری بازی در Redis (ثانیه) — ۳۰ دقیقه
+GAME_TTL = 1800
+# مدت زمان ماندن در صف (ثانیه) — همان MATCHMAKING_TIMEOUT + چند ثانیه بافر
+QUEUE_TTL = MATCHMAKING_TIMEOUT + 30
+
 # ═══════════ لیست بازی‌های مینی‌اپ ═══════════
 # type: "1p" (تک‌نفره) | "2p" (دونفره با مچ‌میکینگ) | "4p" (چهارنفره)
 MINIAPP_GAMES = {
