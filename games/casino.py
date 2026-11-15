@@ -1,14 +1,14 @@
 import asyncio
 import random
 import logging
-from telegram import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
+from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.constants import ParseMode
 import utils, db, config
 
 logger = logging.getLogger("zarcoin")
 DICE_FACES = {1: "1️⃣", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣", 5: "5️⃣", 6: "6️⃣"}
 
-def casino_menu_kb():
+def casino_menu_kb(user_id: int | None = None):
     rows = [
         [InlineKeyboardButton("🎰 اسلات", callback_data="casino:slots"), InlineKeyboardButton("🎲 تاس", callback_data="casino:dice")],
         [InlineKeyboardButton("🪙 شیر یا خط", callback_data="casino:coin"), InlineKeyboardButton("🃏 کارت شانس", callback_data="casino:card")],
@@ -16,12 +16,16 @@ def casino_menu_kb():
         [InlineKeyboardButton("🎯 چرخ شانس", callback_data="casino:wheel")],
     ]
     # دکمه قمارخانه مینی‌اپ
-    # 🔧 دو دکمه: داخل تلگرام (web_app) + مرورگر خارجی (url)
-    # هر دو از WEBAPP_PUBLIC_URL استفاده می‌کنند
-    url = getattr(config, "WEBAPP_PUBLIC_URL", "")
-    if url and url.startswith("https://"):
-        rows.append([InlineKeyboardButton("🎲 قمارخانه (داخل تلگرام)", web_app=WebAppInfo(url=url))])
-        rows.append([InlineKeyboardButton("🌐 بازی در مرورگر", url=url)])
+    # 🔧 اولویت ۱: لینک عمیق تلگرام (t.me/bot/app) — داخل وب‌ویو باز می‌شود، initData خودکار
+    # 🔧 اولویت ۲: URL مرورگر با توکن امضاشده (اگر لینک عمیق نباشد)
+    deep_link = getattr(config, "WEBAPP_DEEP_LINK", "").strip()
+    public_url = getattr(config, "WEBAPP_PUBLIC_URL", "")
+    if deep_link and deep_link.startswith("https://t.me/"):
+        rows.append([InlineKeyboardButton("🎲 قمارخانه زنده (حکم، پوکر، بلک‌جک)", url=deep_link)])
+    elif public_url and public_url.startswith("https://") and user_id:
+        token = utils.generate_browser_token(user_id)
+        browser_url = f"{public_url}/?token={token}"
+        rows.append([InlineKeyboardButton("🎲 قمارخانه زنده (حکم، پوکر، بلک‌جک)", url=browser_url)])
     else:
         rows.append([InlineKeyboardButton("🎲 قمارخانه زنده (حکم، پوکر، بلک‌جک)", callback_data="casino:webapp")])
     rows.append([InlineKeyboardButton("🔙 بازگشت به بازی‌ها", callback_data="game:menu")])
@@ -126,31 +130,19 @@ def _lose_text(header: str, entry: int) -> str:
 async def handle_callback(query, context, data, user_id):
     # 🔧 اگر مینی‌اپ فعال نیست، پیام راهنما نشان بده
     if data == "casino:webapp":
-        url = getattr(config, "WEBAPP_PUBLIC_URL", "")
-        if url and not url.startswith("https://"):
-            msg = (
-                f"❌ مینی‌اپ فعال نیست!\n\n"
-                f"URL تنظیم شده اما HTTPS نیست:\n<code>{url}</code>\n\n"
-                f"تلگرام فقط HTTPS را برای WebApp قبول می‌کند.\n"
-                f"روی Railway: Settings → Networking → Generate Domain\n"
-                f"سپس URL را در متغیر WEBAPP_PUBLIC_URL قرار دهید."
-            )
-        else:
-            msg = (
-                f"❌ مینی‌اپ فعال نیست!\n\n"
-                f"برای فعال‌سازی:\n\n"
-                f"<b>۱. روی Railway:</b>\n"
-                f"   • Settings → Networking → Generate Domain\n"
-                f"   • URL تولیدشده را در متغیر <code>WEBAPP_PUBLIC_URL</code> بگذارید\n\n"
-                f"<b>۲. ثبت دامنه در BotFather:</b>\n"
-                f"   • به @BotFather پیام دهید\n"
-                f"   • <code>/setdomain</code> → ربات را انتخاب کنید\n"
-                f"   • دامنه (بدون https://) را وارد کنید\n\n"
-                f"<b>۳. افزودن Redis:</b>\n"
-                f"   • Railway → New → Database → Add Redis\n"
-                f"   • متغیر REDIS_URL خودکار تنظیم می‌شود\n\n"
-                f"بعد از این‌ها ری‌استارت کنید."
-            )
+        deep_link = getattr(config, "WEBAPP_DEEP_LINK", "").strip()
+        msg = (
+            f"❌ قمارخانه زنده فعال نیست!\n\n"
+            f"<b>راه‌حل ساده — لینک عمیق تلگرام:</b>\n\n"
+            f"۱. به @BotFather پیام دهید\n"
+            f"۲. <code>/newapp</code> → ربات را انتخاب کنید\n"
+            f"۳. نام، توضیح و عکس را وارد کنید\n"
+            f"۴. URL سرور مینی‌اپ را وارد کنید (HTTPS)\n"
+            f"۵. تلگرام لینک کوتاه می‌دهد: <code>t.me/zargametel_bot/Zar1</code>\n\n"
+            f"سپس این لینک را در متغیر <code>WEBAPP_DEEP_LINK</code> بگذارید:\n"
+            f"<code>WEBAPP_DEEP_LINK=https://t.me/zargametel_bot/Zar1</code>\n\n"
+            f"یا متغیر <code>WEBAPP_PUBLIC_URL</code> را روی URL سرور HTTPS تنظیم کنید."
+        )
         await utils.safe_answer(query, msg, show_alert=True)
         return
 
@@ -158,7 +150,7 @@ async def handle_callback(query, context, data, user_id):
         pending = utils.casino_pending.pop(user_id, None)
         if pending:
             await db.add_balance(user_id, pending["entry"])
-            await utils.safe_edit(query, f"❌ بازی لغو شد و {utils.fmt(pending['entry'])} زرکوین برگشت.", casino_menu_kb())
+            await utils.safe_edit(query, f"❌ بازی لغو شد و {utils.fmt(pending['entry'])} زرکوین برگشت.", casino_menu_kb(user_id))
         else:
             await utils.safe_answer(query, "❌ بازی فعالی نداری", show_alert=True)
             return
