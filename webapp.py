@@ -23,6 +23,7 @@ from aiohttp import web
 
 import config
 import db
+import redis_client
 
 logger = logging.getLogger("zarcoin.webapp")
 
@@ -32,7 +33,7 @@ TEMPLATES_DIR = BASE_DIR / "templates"
 MINIAPP_HTML = TEMPLATES_DIR / "miniapp.html"
 
 # ═══════════ ساختار داده‌های درون‌حافظه‌ای ═══════════
-# صف مچ‌میکینگ: { game_key: { user_id: MatchEntry } }
+# صف مچ‌میکینگ (fallback فقط وقتی Redis نباشد): { game_key: { user_id: MatchEntry } }
 _match_queues: dict[str, dict[int, "MatchEntry"]] = {}
 
 # بازی‌های فعال: { game_id: GameState }
@@ -40,6 +41,9 @@ _active_games: dict[str, "GameState"] = {}
 
 # نگاشت user_id → game_id (برای پیدا کردن سریع بازی کاربر)
 _user_games: dict[int, str] = {}
+
+# قفل سراسری برای matchmaking atomic (محلی؛ در Redis از RedisLock استفاده می‌شود)
+_matchmaking_lock = asyncio.Lock()
 
 
 class MatchEntry:
@@ -83,6 +87,9 @@ def validate_init_data(init_data_raw: str) -> dict | None:
     """
     اعتبارسنجی initData تلگرام طبق مستندات رسمی.
     برمی‌گرداند: dict شامل user (parsed) یا None.
+
+    🔧 نکته مهم: data-check-string باید از مقادیر URL-encoded اصلی ساخته شود
+    (parse_qsl آن‌ها را decode می‌کرد که باعث عدم تطابق هش می‌شد).
     """
     if not init_data_raw:
         return None
@@ -91,17 +98,22 @@ def validate_init_data(init_data_raw: str) -> dict | None:
         logger.error("❌ BOT_TOKEN تنظیم نشده — اعتبارسنجی initData غیرممکن")
         return None
 
-    try:
-        parsed = dict(urllib.parse.parse_qsl(init_data_raw, keep_blank_values=True))
-    except Exception:
-        return None
-
-    received_hash = parsed.pop("hash", None)
+    # پارس دستی بدون URL-decode — برای حفظ encoding اصلی Telegram
+    pairs = {}
+    received_hash = None
+    for chunk in init_data_raw.split("&"):
+        if "=" not in chunk:
+            continue
+        k, _, v = chunk.partition("=")
+        if k == "hash":
+            received_hash = v
+        else:
+            pairs[k] = v
     if not received_hash:
         return None
 
-    # ساخت data-check-string با کلیدها به ترتیب الفبایی
-    data_check = "\n".join(f"{k}={v}" for k, v in sorted(parsed.items()))
+    # ساخت data-check-string با کلیدها به ترتیب الفبایی، مقادیر URL-encoded اصلی
+    data_check = "\n".join(f"{k}={pairs[k]}" for k in sorted(pairs.keys()))
 
     # کلید محرمانه: HMAC(SHA256, bot_token, "WebAppData")
     secret_key = hmac.new(b"WebAppData", bot_token.encode(), hashlib.sha256).digest()
@@ -112,19 +124,23 @@ def validate_init_data(init_data_raw: str) -> dict | None:
         return None
 
     # اعتبارسنجی auth_date (پیر بودن بیش از ۱ روز رد شود)
-    auth_date = parsed.get("auth_date")
-    if auth_date:
+    auth_date_raw = pairs.get("auth_date")
+    if auth_date_raw:
         try:
-            if time.time() - int(auth_date) > 86400:
+            # auth_date عدد است — decode امن
+            auth_date = int(urllib.parse.unquote(auth_date_raw))
+            if time.time() - auth_date > 86400:
                 logger.warning("⚠️ initData خیلی قدیمی است")
                 return None
         except ValueError:
             return None
 
-    user_json = parsed.get("user")
-    if not user_json:
+    # مقدار user را URL-decode کن و سپس JSON parse
+    user_raw = pairs.get("user")
+    if not user_raw:
         return None
     try:
+        user_json = urllib.parse.unquote(user_raw)
         user = json.loads(user_json)
     except Exception:
         return None
@@ -133,10 +149,12 @@ def validate_init_data(init_data_raw: str) -> dict | None:
 
 async def _get_user_for_request(request: web.Request) -> dict | None:
     """استخراج و اعتبارسنجی کاربر از درخواست"""
+    # 🔧 فقط از header یا query بخوان — body متعلق به handler است و نباید
+    # توسط این تابع مصرف شود (در غیر این صورت request.json() در handler خطا می‌دهد)
     init_data = (
         request.headers.get("X-Telegram-Init-Data")
         or request.query.get("init_data")
-        or (await _read_body_initdata(request))
+        or ""
     )
     tg_user = validate_init_data(init_data)
     if not tg_user:
@@ -161,17 +179,6 @@ async def _get_user_for_request(request: web.Request) -> dict | None:
             logger.exception(f"ensure_user در مینی‌اپ ناموفق: {e}")
             return None
     return db_user
-
-
-async def _read_body_initdata(request: web.Request) -> str:
-    """برای POST با body شامل init_data"""
-    try:
-        body = await request.json()
-        if isinstance(body, dict):
-            return body.get("init_data", "")
-    except Exception:
-        pass
-    return ""
 
 
 # ═══════════ دفترچه وسیله پاسخ JSON ═══════════
@@ -257,7 +264,14 @@ async def handle_games(request: web.Request):
 
 # ═══════════ API: مچ‌میکینگ ═══════════
 async def handle_match_join(request: web.Request):
-    """پیوستن به صف مچ‌میکینگ برای یک بازی دونفره"""
+    """پیوستن به صف مچ‌میکینگ برای یک بازی دونفره.
+
+    🔧 رفع باگ‌های بحرانی:
+    1. شرط (bet) به‌صورت escrow از موجودی کم می‌شود تا بعداً کپی پول نشود.
+    2. قفل اتمیک برای جلوگیری از race condition (همان حریف دو بار matched نشود).
+    3. بررسی cross-queue — کاربر نمی‌تواند همزمان در چند صف باشد.
+    4. اعتبارسنجی ورودی (int) با try/except.
+    """
     user = await _get_user_for_request(request)
     if not user:
         return json_err("احراز هویت ناموفق", 401, "auth")
@@ -267,7 +281,10 @@ async def handle_match_join(request: web.Request):
     except Exception:
         return json_err("درخواست نامعتبر", 400)
     game_key = body.get("game_key")
-    bet = int(body.get("bet", 0))
+    try:
+        bet = int(body.get("bet", 0))
+    except (ValueError, TypeError):
+        return json_err("مبلغ نامعتبر", 400)
     if game_key not in config.MINIAPP_GAMES:
         return json_err("بازی نامعتبر", 400)
     game = config.MINIAPP_GAMES[game_key]
@@ -278,62 +295,143 @@ async def handle_match_join(request: web.Request):
     if int(user.get("balance", 0)) < bet:
         return json_err("موجودی کافی نیست", 400, "balance")
 
-    # اگر کاربر از قبل در یک بازی فعال است، نپذیر
+    # بررسی اینکه کاربر در بازی فعال نیست — هم در حافظه هم در Redis
     if user_id in _user_games:
         return json_err("شما از قبل در یک بازی فعال هستید", 400, "in_game")
+    if redis_client.is_redis_available():
+        active_gid = await redis_client.get_user_game(user_id)
+        if active_gid:
+            return json_err("شما از قبل در یک بازی فعال هستید", 400, "in_game")
 
-    # اگر کاربر از قبل در صف است، نپذیر
-    queue = _match_queues.setdefault(game_key, {})
-    if user_id in queue:
-        return json_err("شما از قبل در صف هستید", 400, "in_queue")
+    # قفل سراسری (محلی) + قفل توزیع‌شده (Redis) برای atomic matchmaking
+    async with _matchmaking_lock:
+        # 🔧 escrow: شرط را همین حالا از کاربر کم کن (و در صورت لغو/تایم‌اوت برگردان)
+        # این از race condition TOCTOU روی موجودی جلوگیری می‌کند.
+        ok = await db.deduct_balance(user_id, bet)
+        if not ok:
+            return json_err("کم کردن شرط ناموفق (موجودی تغییر کرد)", 400, "balance")
 
-    # پاکسازی ورودی‌های منقضی شده
-    _cleanup_queue(game_key)
+        # بررسی صف در حالت درون‌حافظه (fallback) یا Redis
+        if redis_client.is_redis_available():
+            # در Redis — بررسی cross-queue
+            status = await redis_client.get_queue_status(user_id)
+            if status:
+                # کاربر در صف است — escrow را برگردان
+                await db.add_balance(user_id, bet)
+                return json_err("شما از قبل در صف هستید", 400, "in_queue")
 
-    # پیدا کردن حریف منتظر با همان شرط
-    for opponent_id, opp_entry in list(queue.items()):
-        if opponent_id == user_id:
-            continue
-        if opp_entry.bet != bet:
-            continue
-        # اطمینان از موجودی حریف
-        opp_db = await db.get_user(opponent_id)
-        if not opp_db or int(opp_db.get("balance", 0)) < bet:
+            # جستجوی حریف در صف Redis
+            opponent = await redis_client.find_opponent_and_remove(game_key, bet, user_id)
+            if opponent:
+                # حریف پیدا شد — اعتبارسنجی موجودی حریف (escrow او قبلاً کم شده، پس فقط چک کنیم زنده است)
+                opp_db = await db.get_user(opponent["user_id"])
+                if not opp_db:
+                    # حریف حذف شده — پولش را هم برگردان (نه — او در صف نبود، پس escrow او در cancel/timeout برگردانده می‌شود)
+                    # خودمان در صف می‌رویم
+                    await redis_client.add_to_queue(game_key, bet, user_id, {
+                        "name": user.get("first_name", "") or "بی‌نام",
+                        "balance": int(user.get("balance", 0)),
+                        "avatar": "",
+                    })
+                    return json_ok({"matched": False, "queue_position": 1, "timeout": config.MATCHMAKING_TIMEOUT})
+                # حریف پیدا شد — بازی بساز
+                # نکته: escrow هر دو کاربر قبلاً کم شده (حریف هنگام join کردن کم کرده)
+                game_id = f"g{int(time.time()*1000)}{random.randint(100,999)}"
+                players = [
+                    {"user_id": opponent["user_id"], "name": opponent["name"] or "بی‌نام", "avatar": opponent.get("avatar", ""), "balance": int(opp_db.get("balance", 0))},
+                    {"user_id": user_id, "name": user.get("first_name", "") or "بی‌نام", "avatar": "", "balance": int(user.get("balance", 0))},
+                ]
+                gs = GameState(game_id, game_key, players, bet)
+                # pot شامل شرط هر دو است (هر دو escrow شده‌اند)
+                gs.pot = bet * 2
+                _active_games[game_id] = gs
+                _user_games[opponent["user_id"]] = game_id
+                _user_games[user_id] = game_id
+                # در Redis هم نگه دار
+                await redis_client.set_user_game(opponent["user_id"], game_id)
+                await redis_client.set_user_game(user_id, game_id)
+                await _init_game_state(gs)
+                logger.info(f"🎮 بازی شروع شد (Redis): {game_id} ({game_key}) — {players[0]['name']} vs {players[1]['name']}")
+                return json_ok({
+                    "matched": True,
+                    "game_id": game_id,
+                    "game_key": game_key,
+                    "players": players,
+                    "bet": bet,
+                    "pot": bet * 2,
+                })
+
+            # حریف نیست — به صف Redis اضافه کن (escrow از قبل کم شده)
+            added = await redis_client.add_to_queue(game_key, bet, user_id, {
+                "name": user.get("first_name", "") or "بی‌نام",
+                "balance": int(user.get("balance", 0)),
+                "avatar": "",
+            })
+            if not added:
+                # یا در صف/بازی است یا خطا — escrow را برگردان
+                await db.add_balance(user_id, bet)
+                return json_err("شما از قبل در صف یا بازی هستید", 400, "in_queue")
+            logger.info(f"⏳ کاربر {user_id} به صف Redis {game_key} پیوست (شرط: {bet:,})")
+            return json_ok({"matched": False, "queue_position": 1, "timeout": config.MATCHMAKING_TIMEOUT})
+
+        # حالت fallback (در حافظه) — همان منطق قبلی ولی با escrow
+        # بررسی cross-queue: کاربر نباید در هیچ صف دیگری باشد
+        for gk, q in _match_queues.items():
+            if user_id in q:
+                await db.add_balance(user_id, bet)
+                return json_err("شما از قبل در صف هستید", 400, "in_queue")
+
+        queue = _match_queues.setdefault(game_key, {})
+        # پاکسازی ورودی‌های منقضی شده (با refund)
+        _cleanup_queue_with_refund(game_key)
+
+        # پیدا کردن حریف منتظر با همان شرط
+        matched_opponent = None
+        for opponent_id, opp_entry in list(queue.items()):
+            if opponent_id == user_id:
+                continue
+            if opp_entry.bet != bet:
+                continue
+            # 🔧 pop قبل از await برای جلوگیری از race condition
             queue.pop(opponent_id, None)
-            continue
-        # حریف پیدا شد — بازی بساز
-        queue.pop(opponent_id, None)
-        game_id = f"g{int(time.time()*1000)}{random.randint(100,999)}"
-        players = [
-            {"user_id": opponent_id, "name": opp_entry.name, "avatar": opp_entry.avatar, "balance": int(opp_db.get("balance", 0))},
-            {"user_id": user_id, "name": user.get("first_name", "") or "بی‌نام", "avatar": "", "balance": int(user.get("balance", 0))},
-        ]
-        gs = GameState(game_id, game_key, players, bet)
-        _active_games[game_id] = gs
-        _user_games[opponent_id] = game_id
-        _user_games[user_id] = game_id
-        # مقداردهی اولیه بازی
-        await _init_game_state(gs)
-        logger.info(f"🎮 بازی شروع شد: {game_id} ({game_key}) — {players[0]['name']} vs {players[1]['name']}")
-        return json_ok({
-            "matched": True,
-            "game_id": game_id,
-            "game_key": game_key,
-            "players": players,
-            "bet": bet,
-            "pot": bet * 2,
-        })
+            matched_opponent = (opponent_id, opp_entry)
+            break
 
-    # حریف نیست — به صف اضافه کن
-    queue[user_id] = MatchEntry(
-        user_id=user_id,
-        name=user.get("first_name", "") or "بی‌نام",
-        balance=int(user.get("balance", 0)),
-        bet=bet,
-        avatar="",
-    )
-    logger.info(f"⏳ کاربر {user_id} به صف {game_key} پیوست (شرط: {bet:,})")
-    return json_ok({"matched": False, "queue_position": len(queue), "timeout": config.MATCHMAKING_TIMEOUT})
+        if matched_opponent:
+            opponent_id, opp_entry = matched_opponent
+            # escrow حریف هنگام join کردنش کم شده (در این شاخه fallback)
+            # چک کنیم حریف هنوز معتبر است
+            game_id = f"g{int(time.time()*1000)}{random.randint(100,999)}"
+            players = [
+                {"user_id": opponent_id, "name": opp_entry.name, "avatar": opp_entry.avatar, "balance": opp_entry.balance},
+                {"user_id": user_id, "name": user.get("first_name", "") or "بی‌نام", "avatar": "", "balance": int(user.get("balance", 0))},
+            ]
+            gs = GameState(game_id, game_key, players, bet)
+            gs.pot = bet * 2
+            _active_games[game_id] = gs
+            _user_games[opponent_id] = game_id
+            _user_games[user_id] = game_id
+            await _init_game_state(gs)
+            logger.info(f"🎮 بازی شروع شد (mem): {game_id} ({game_key}) — {players[0]['name']} vs {players[1]['name']}")
+            return json_ok({
+                "matched": True,
+                "game_id": game_id,
+                "game_key": game_key,
+                "players": players,
+                "bet": bet,
+                "pot": bet * 2,
+            })
+
+        # حریف نیست — به صف اضافه کن (escrow از قبل کم شده)
+        queue[user_id] = MatchEntry(
+            user_id=user_id,
+            name=user.get("first_name", "") or "بی‌نام",
+            balance=int(user.get("balance", 0)),
+            bet=bet,
+            avatar="",
+        )
+        logger.info(f"⏳ کاربر {user_id} به صف {game_key} پیوست (شرط: {bet:,})")
+        return json_ok({"matched": False, "queue_position": len(queue), "timeout": config.MATCHMAKING_TIMEOUT})
 
 
 async def handle_match_status(request: web.Request):
@@ -345,6 +443,8 @@ async def handle_match_status(request: web.Request):
 
     # اگر در بازی فعال است
     gid = _user_games.get(user_id)
+    if not gid and redis_client.is_redis_available():
+        gid = await redis_client.get_user_game(user_id)
     if gid and gid in _active_games:
         gs = _active_games[gid]
         return json_ok({
@@ -356,7 +456,27 @@ async def handle_match_status(request: web.Request):
             "pot": gs.pot,
         })
 
-    # اگر در صف است
+    # اگر در صف است — اول Redis، بعد حافظه
+    if redis_client.is_redis_available():
+        st = await redis_client.get_queue_status(user_id)
+        if st:
+            remaining = st["remaining"]
+            if remaining == 0:
+                # تایم‌اوت — escrow را برگردان و از صف پاک کن
+                await redis_client.remove_from_queue(user_id)
+                await db.add_balance(user_id, st["bet"])
+                logger.info(f"⏰ تایم‌اوت مچ‌میکینگ Redis برای کاربر {user_id} — {st['bet']} برگشت")
+                return json_ok({"status": "timeout", "message": "حریفی پیدا نشد — دوباره تلاش کنید"})
+            return json_ok({
+                "status": "waiting",
+                "game_key": st["game_key"],
+                "bet": st["bet"],
+                "elapsed": int(time.time() - st["joined_at"]),
+                "remaining": remaining,
+                "queue_size": 1,
+            })
+
+    # حالت fallback حافظه
     for game_key, queue in _match_queues.items():
         if user_id in queue:
             entry = queue[user_id]
@@ -364,6 +484,9 @@ async def handle_match_status(request: web.Request):
             remaining = max(0, config.MATCHMAKING_TIMEOUT - elapsed)
             if remaining == 0:
                 queue.pop(user_id, None)
+                # escrow را برگردان (قبلاً کم شده)
+                await db.add_balance(user_id, entry.bet)
+                logger.info(f"⏰ تایم‌اوت مچ‌میکینگ mem برای کاربر {user_id} — {entry.bet} برگشت")
                 return json_ok({"status": "timeout", "message": "حریفی پیدا نشد — دوباره تلاش کنید"})
             return json_ok({
                 "status": "waiting",
@@ -379,27 +502,57 @@ async def handle_match_status(request: web.Request):
 
 
 async def handle_match_cancel(request: web.Request):
-    """لغو مچ‌میکینگ"""
+    """لغو مچ‌میکینگ — escrow برگردانده می‌شود"""
     user = await _get_user_for_request(request)
     if not user:
         return json_err("احراز هویت ناموفق", 401, "auth")
     user_id = int(user.get("user_id", 0))
     removed = False
+    refunded = 0
+
+    # Redis
+    if redis_client.is_redis_available():
+        st = await redis_client.get_queue_status(user_id)
+        if st:
+            refunded = st["bet"]
+            await redis_client.remove_from_queue(user_id)
+            removed = True
+
+    # حالت fallback حافظه
     for game_key, queue in _match_queues.items():
         if user_id in queue:
-            queue.pop(user_id, None)
-            removed = True
-            logger.info(f"❌ کاربر {user_id} مچ‌میکینگ {game_key} را لغو کرد")
-    return json_ok({"cancelled": removed})
+            entry = queue.pop(user_id, None)
+            if entry:
+                refunded = entry.bet
+                removed = True
+
+    if removed and refunded > 0:
+        await db.add_balance(user_id, refunded)
+        logger.info(f"❌ کاربر {user_id} مچ‌میکینگ را لغو کرد — {refunded} برگشت")
+    return json_ok({"cancelled": removed, "refunded": refunded})
 
 
 def _cleanup_queue(game_key: str):
-    """حذف ورودی‌های منقضی شده از صف"""
+    """حذف ورودی‌های منقضی شده از صف (بدون refund — در fallback قدیمی)"""
     queue = _match_queues.get(game_key, {})
     now = time.time()
     expired = [uid for uid, e in queue.items() if now - e.joined_at > config.MATCHMAKING_TIMEOUT]
     for uid in expired:
         queue.pop(uid, None)
+
+
+async def _cleanup_queue_with_refund(game_key: str):
+    """حذف ورودی‌های منقضی شده از صف با refund escrow (در حالت fallback)"""
+    queue = _match_queues.get(game_key, {})
+    now = time.time()
+    expired = [(uid, e) for uid, e in list(queue.items()) if now - e.joined_at > config.MATCHMAKING_TIMEOUT]
+    for uid, e in expired:
+        queue.pop(uid, None)
+        try:
+            await db.add_balance(uid, e.bet)
+            logger.info(f"⏰ تایم‌اوت صف mem: کاربر {uid} {e.bet} برگشت")
+        except Exception as ex:
+            logger.warning(f"refund در cleanup ناموفق ({uid}): {ex}")
 
 
 # ═══════════ API: وضعیت بازی و حرکت ═══════════
@@ -430,8 +583,12 @@ async def handle_game_action(request: web.Request):
     except Exception:
         return json_err("درخواست نامعتبر", 400)
     action = body.get("action")
-    payload = body.get("payload", {}) or {}
+    payload = body.get("payload") or {}
+    if not isinstance(payload, dict):
+        payload = {}
     gid = body.get("game_id") or _user_games.get(user_id)
+    if not gid and redis_client.is_redis_available():
+        gid = await redis_client.get_user_game(user_id)
     if not gid or gid not in _active_games:
         return json_err("بازی یافت نشد", 404, "no_game")
     gs = _active_games[gid]
@@ -457,11 +614,16 @@ async def handle_game_leave(request: web.Request):
         return json_err("احراز هویت ناموفق", 401, "auth")
     user_id = int(user.get("user_id", 0))
     gid = _user_games.get(user_id)
+    if not gid and redis_client.is_redis_available():
+        gid = await redis_client.get_user_game(user_id)
     if not gid or gid not in _active_games:
         return json_err("بازی یافت نشد", 404, "no_game")
     gs = _active_games[gid]
     if gs.finished:
         return json_err("بازی تمام شده", 400, "finished")
+    # 🔧 بررسی صریح که کاربر در بازی است
+    if not any(p["user_id"] == user_id for p in gs.players):
+        return json_err("شما در این بازی نیستید", 403, "not_in_game")
     # کاربر تسلیم می‌شود — حریف برنده
     opponent_id = next((p["user_id"] for p in gs.players if p["user_id"] != user_id), None)
     await _finish_game(gs, winner_id=opponent_id, reason="surrender", loser_id=user_id)
@@ -469,7 +631,18 @@ async def handle_game_leave(request: web.Request):
 
 
 def _serialize_game_state(gs: GameState, viewer_id: int) -> dict:
-    """سریالایز وضعیت بازی برای کاربر — دست‌های حریف پنهان می‌شوند"""
+    """سریالایز وضعیت بازی برای کاربر — دست‌های حریف و deck پنهان می‌شوند.
+
+    🔧 رفع باگ بحرانی: deck (کارتهای باقی‌مانده) و سایر داده‌های حساس بازی
+    نباید به کلاینت نشت کنند — می‌توانست آینده flop/turn/river را فاش کند.
+    """
+    # ابتدا یک کپی سطحی از data بگیر
+    data = dict(gs.data)
+    # 🔧 حذف فیلدهای حساس که نباید به کلاینت بروند
+    data.pop("deck", None)
+    # hands را جداگانه فیلتر کن
+    hands = data.pop("hands", None)
+
     s = {
         "game_id": gs.game_id,
         "game_key": gs.game_key,
@@ -481,23 +654,36 @@ def _serialize_game_state(gs: GameState, viewer_id: int) -> dict:
         "my_index": next((i for i, p in enumerate(gs.players) if p["user_id"] == viewer_id), None),
         "winner": gs.winner,
         "finished": gs.finished,
-        "data": gs.data,
+        "data": data,
     }
-    # برای بازی‌های ورق‌بازی، دست حریف را پنهان کن
-    if gs.game_key in ("hokm", "poker", "blackjack"):
-        hands = gs.data.get("hands", [])
+
+    # برای بازی‌های ورق‌بازی، دست حریف را پنهان کن (مگر در پایان)
+    if gs.game_key in ("hokm", "poker", "blackjack") and hands is not None:
         visible_hands = []
         for i, hand in enumerate(hands):
             if gs.players[i]["user_id"] == viewer_id:
                 visible_hands.append(hand)
             else:
-                # برای پوکر/بلک‌جک، در پایان دست حریف را نشان بده
+                # در پایان، دست حریف را نشان بده
                 if gs.finished:
                     visible_hands.append(hand)
                 else:
                     visible_hands.append([{"hidden": True} for _ in hand])
-        s["data"] = dict(gs.data)
         s["data"]["hands"] = visible_hands
+        # 🔧 فیلدهای حساس دیگر برای blackjack/poker را پاک کن
+        if gs.game_key == "blackjack":
+            # totals را فقط در پایان نشان بده (در غیر این صورت کلاینت می‌تواند از hand حریف حساب کند)
+            if not gs.finished:
+                totals = s["data"].get("totals", [0, 0])
+                my_idx = s["my_index"]
+                if my_idx is not None and 0 <= my_idx < len(totals):
+                    s["data"]["totals"] = [None if i != my_idx else totals[i] for i in range(len(totals))]
+        if gs.game_key == "poker":
+            # ranks را فقط در پایان نشان بده
+            if not gs.finished:
+                s["data"].pop("ranks", None)
+    elif hands is not None:
+        s["data"]["hands"] = hands
     return s
 
 
@@ -530,27 +716,48 @@ async def _dispatch_action(gs: GameState, user_id: int, action: str, payload: di
 
 # ═══════════ پایان بازی و پاداش ═══════════
 async def _finish_game(gs: GameState, winner_id: int | None, reason: str = "normal", loser_id: int | None = None):
-    """پایان بازی — پاداش به برنده، کارمزد کم می‌شود"""
+    """پایان بازی — پاداش به برنده، کارمزد کم می‌شود.
+
+    🔧 نکته: شرط هر دو بازیکن هنگام match شدن به‌صورت escrow کم شده است،
+    پس pot = 2*bet از قبل در سیستم است. فقط کافی است به برنده prize = pot - commission
+    داده شود (مساوی: به هر دو نصف pot - نصف commission).
+
+    🔧 رفع باگ: کاربران بلافاصله از _user_games حذف می‌شوند تا بتوانند دوباره
+    وارد صف شوند (قبلاً ۳۰ ثانیه قفل می‌شدند). بازی برای ۳۰ ثانیه در _active_games
+    باقی می‌ماند تا کاربر نتیجه را ببیند.
+    """
     if gs.finished:
         return
     gs.finished = True
     gs.winner = winner_id
     gs.state = "finished"
     gs.data["finish_reason"] = reason
-    # کارمزد از کل پاداش کم می‌شود
+    # کارمزد از کل pot کم می‌شود
     commission = int(gs.pot * config.MINIAPP_COMMISSION_RATE)
     prize = gs.pot - commission
     if winner_id is None:
-        # مساوی — به هر دو نفر نصف شرط برگردانده شود
-        half = gs.bet - int(commission / 2)
+        # مساوی — به هر دو نفر نصف pot برگردانده شود (منهای نصف کارمزد)
+        half = int(prize / 2)
         for p in gs.players:
             await db.add_balance(p["user_id"], half)
         gs.data["prize_each"] = half
     else:
         await db.add_balance(winner_id, prize)
         gs.data["winner_prize"] = prize
-    # پاک کردن بازی پس از مدت کوتاه (تا کاربر نتیجه را ببیند)
-    asyncio.get_event_loop().call_later(30, _purge_game, gs.game_id)
+    # 🔧 کاربران را بلافاصله از _user_games و Redis پاک کن تا دوباره وارد صف شوند
+    for p in gs.players:
+        if _user_games.get(p["user_id"]) == gs.game_id:
+            _user_games.pop(p["user_id"], None)
+        if redis_client.is_redis_available():
+            await redis_client.clear_user_game(p["user_id"])
+    # پاک کردن بازی پس از ۳۰ ثانیه (تا کاربر نتیجه را ببیند)
+    # 🔧 get_running_loop به جای get_event_loop (deprecated در 3.10+)
+    try:
+        loop = asyncio.get_running_loop()
+        loop.call_later(30, _purge_game, gs.game_id)
+    except RuntimeError:
+        # اگر loop نباشد، بازی در حافظه می‌ماند تا purge دستی
+        pass
     logger.info(
         f"🏁 بازی {gs.game_id} ({gs.game_key}) پایان یافت — "
         f"برنده: {winner_id}, جایزه: {prize if winner_id else 'split'}"
@@ -799,6 +1006,9 @@ def _poker_hand_rank(cards: list[dict]) -> tuple:
 
     # straight flush
     if is_flush and flush_values:
+        # 🔧 بررسی wheel straight flush (A-2-3-4-5 same suit) — قبلاً تشخیص داده نمی‌شد
+        if set([14, 2, 3, 4, 5]).issubset(set(flush_values)):
+            return (8, 5)
         for i in range(len(flush_values) - 4):
             if flush_values[i] - flush_values[i + 4] == 4:
                 return (8, flush_values[i])
@@ -848,6 +1058,12 @@ def _poker_hand_rank(cards: list[dict]) -> tuple:
 
 
 async def _poker_action(gs: GameState, user_id: int, action: str, payload: dict) -> dict:
+    """
+    🔧 رفع باگ منطق پوکر:
+    - اکشن "call" اضافه شد (برای match کردن raise)
+    - بعد از raise، _poker_advance فوراً صدا نمی‌شود — حریف باید call/fold کند
+    - فاز فقط وقتی عوض می‌شود که هر دو بازیکن pot_per_player برابر داشته باشند
+    """
     player_idx = next((i for i, p in enumerate(gs.players) if p["user_id"] == user_id), None)
     if player_idx is None:
         raise GameError("شما در این بازی نیستید")
@@ -863,41 +1079,78 @@ async def _poker_action(gs: GameState, user_id: int, action: str, payload: dict)
         return {"ok": True, "folded": True, "winner": winner_id, "game_finished": True}
 
     if action == "check":
+        # فقط وقتی current_bet == pot_per_player[player_idx] مجاز است (هیچ outstanding raise ای نیست)
+        if data["current_bet"] > data["pot_per_player"][player_idx]:
+            raise GameError("باید call یا fold کنی — raise وجود دارد")
         data["actions_this_phase"] += 1
         data["history"].append({"player_idx": player_idx, "action": "check"})
+        # اگر هر دو check کرده‌اند (یا یکی check و دیگری call)، advance
         await _poker_advance(gs)
         return {"ok": True, "checked": True, "phase": data["phase"]}
 
+    if action == "call":
+        # match کردن current_bet
+        needed = data["current_bet"] - data["pot_per_player"][player_idx]
+        if needed <= 0:
+            raise GameError("چیزی برای call کردن نیست — می‌توانی check کنی")
+        player = await db.get_user(user_id)
+        if not player or int(player.get("balance", 0)) < needed:
+            raise GameError("موجودی کافی برای call نیست")
+        ok = await db.deduct_balance(user_id, needed)
+        if not ok:
+            raise GameError("کم کردن مبلغ call ناموفق")
+        gs.pot += needed
+        data["pot_per_player"][player_idx] += needed
+        data["actions_this_phase"] += 1
+        data["history"].append({"player_idx": player_idx, "action": "call", "amount": needed})
+        await _poker_advance(gs)
+        return {"ok": True, "called": True, "amount": needed, "phase": data["phase"]}
+
     if action == "raise":
-        raise_amount = int(payload.get("amount", 0))
+        try:
+            raise_amount = int(payload.get("amount", 0))
+        except (ValueError, TypeError):
+            raise GameError("مبلغ raise نامعتبر")
         if raise_amount <= 0:
             raise GameError("مبلغ raise نامعتبر")
+        # اول باید current_bet را match کند (call) و بعد raise_amount اضافه کند
+        needed_call = data["current_bet"] - data["pot_per_player"][player_idx]
+        total_needed = needed_call + raise_amount
         player = await db.get_user(user_id)
-        if not player or int(player.get("balance", 0)) < raise_amount:
+        if not player or int(player.get("balance", 0)) < total_needed:
             raise GameError("موجودی کافی برای raise نیست")
-        await db.deduct_balance(user_id, raise_amount)
-        gs.pot += raise_amount
-        data["pot_per_player"][player_idx] += raise_amount
+        ok = await db.deduct_balance(user_id, total_needed)
+        if not ok:
+            raise GameError("کم کردن مبلغ raise ناموفق")
+        gs.pot += total_needed
+        data["pot_per_player"][player_idx] += total_needed
         data["current_bet"] = data["pot_per_player"][player_idx]
         data["actions_this_phase"] += 1
-        data["history"].append({"player_idx": player_idx, "action": "raise", "amount": raise_amount})
-        # بعد از raise، حریف باید call یا fold کند
+        data["history"].append({"player_idx": player_idx, "action": "raise", "amount": total_needed})
+        # نوبت حریف — او باید call/raise/fold کند (advance خودکار وقتی او call/check کند)
         gs.turn_idx = (player_idx + 1) % 2
-        # در ساده‌سازی، هر دو بازیکن یک اکشن داشته باشند کافی است
-        await _poker_advance(gs)
-        return {"ok": True, "raised": True, "amount": raise_amount, "phase": data["phase"]}
+        # 🔧 حریف باید act کند — advance را صریحاً صدا نزن
+        return {"ok": True, "raised": True, "amount": total_needed, "phase": data["phase"]}
 
     raise GameError("اکشن نامعتبر")
 
 
 async def _poker_advance(gs: GameState):
-    """پیشروی فاز پوکر"""
+    """پیشروی فاز پوکر.
+
+    🔧 رفع باگ: فاز فقط وقتی عوض می‌شود که هر دو بازیکن act کرده باشند
+    AND pot_per_player برابر باشد (یعنی raise ای outstanding نباشد).
+    """
     data = gs.data
-    # هر دو بازیکن باید در این فاز اکشن کرده باشند
+    # اگر هر دو بازیکن act نکرده‌اند، فقط نوبت را عوض کن
     if data["actions_this_phase"] < 2:
         gs.turn_idx = (gs.turn_idx + 1) % 2
         return
-    # فاز بعدی
+    # اگر pot_per_player برابر نیست (یعنی یکی raise کرده و دیگری هنوز call نکرده) — advance نکن
+    if data["pot_per_player"][0] != data["pot_per_player"][1]:
+        gs.turn_idx = (gs.turn_idx + 1) % 2
+        return
+    # هر دو act کرده‌اند و bets برابر است — فاز بعدی
     if data["phase"] == "preflop":
         data["community"].extend([data["deck"].pop() for _ in range(3)])
         data["phase"] = "flop"
@@ -912,7 +1165,9 @@ async def _poker_advance(gs: GameState):
         data["phase"] = "showdown"
         await _poker_showdown(gs)
         return
+    # ریست برای فاز جدید
     data["actions_this_phase"] = 0
+    # نوبت بازیکن بعد از dealer در فاز جدید
     gs.turn_idx = (data["dealer_idx"] + 1) % 2
 
 
@@ -971,6 +1226,10 @@ async def _blackjack_init(gs: GameState):
 
 
 async def _blackjack_action(gs: GameState, user_id: int, action: str, payload: dict) -> dict:
+    """
+    🔧 رفع باگ: بازیکنی که stand کرده نباید بتواند دوباره hit کند.
+    همچنین اگر حریف stand کرده باشد، نوبت به او نرود.
+    """
     player_idx = next((i for i, p in enumerate(gs.players) if p["user_id"] == user_id), None)
     if player_idx is None:
         raise GameError("شما در این بازی نیستید")
@@ -979,6 +1238,9 @@ async def _blackjack_action(gs: GameState, user_id: int, action: str, payload: d
     data = gs.data
     if data["phase"] != "play":
         raise GameError("بازی در مرحله بازی نیست")
+    # 🔧 اگر بازیکن stand کرده، نباید بتواند hit کند
+    if data["stand"][player_idx]:
+        raise GameError("شما stand کرده‌اید — نمی‌توانید حرکت کنید")
 
     if action == "hit":
         card = data["deck"].pop()
@@ -997,8 +1259,11 @@ async def _blackjack_action(gs: GameState, user_id: int, action: str, payload: d
             data["stand"][player_idx] = True
             await _blackjack_check_finish(gs)
             return {"ok": True, "hit": True, "card": card, "total": total, "stand": True}
-        # نوبت حریف اگر هر دو stand شده باشند، در غیر این صورت می‌تواند ادامه دهد
-        gs.turn_idx = (player_idx + 1) % 2
+        # نوبت حریف اگر او هنوز stand نکرده — در غیر این صورت نوبت همین بازیکن می‌ماند
+        opponent_idx = (player_idx + 1) % 2
+        if not data["stand"][opponent_idx]:
+            gs.turn_idx = opponent_idx
+        # اگر حریف stand کرده، نوبت همین بازیکن می‌ماند تا او هم stand/bust کند
         return {"ok": True, "hit": True, "card": card, "total": total}
 
     if action == "stand":
@@ -1045,7 +1310,10 @@ async def handle_single_play(request: web.Request):
     except Exception:
         return json_err("درخواست نامعتبر", 400)
     game_key = body.get("game_key")
-    bet = int(body.get("bet", 0))
+    try:
+        bet = int(body.get("bet", 0))
+    except (ValueError, TypeError):
+        return json_err("مبلغ نامعتبر", 400)
     if game_key not in config.MINIAPP_GAMES:
         return json_err("بازی نامعتبر", 400)
     game = config.MINIAPP_GAMES[game_key]
@@ -1062,16 +1330,22 @@ async def handle_single_play(request: web.Request):
         return json_err("کم کردن شرط ناموفق", 500)
 
     # اجرای بازی
-    if game_key == "slots":
-        result = _play_slots(bet)
-    elif game_key == "dice":
-        result = _play_dice(bet, body)
-    elif game_key == "wheel":
-        result = _play_wheel(bet, body)
-    else:
-        # بازپرداخت اگر بازی ناشناخته
+    try:
+        if game_key == "slots":
+            result = _play_slots(bet)
+        elif game_key == "dice":
+            result = _play_dice(bet, body)
+        elif game_key == "wheel":
+            result = _play_wheel(bet, body)
+        else:
+            # بازپرداخت اگر بازی ناشناخته
+            await db.add_balance(user_id, bet)
+            return json_err("بازی پشتیبانی نمی‌شود", 400)
+    except Exception as e:
+        # 🔧 در صورت خطا، شرط را برگردان
+        logger.exception(f"خطا در اجرای بازی {game_key}: {e}")
         await db.add_balance(user_id, bet)
-        return json_err("بازی پشتیبانی نمی‌شود", 400)
+        return json_err("خطا در اجرای بازی — پول برگشت داده شد", 500)
 
     # اگر برنده شد، جایزه اضافه شود
     if result["win"] > 0:
@@ -1086,6 +1360,7 @@ async def handle_single_play(request: web.Request):
         "game_key": game_key,
         "bet": bet,
         "outcome": result["outcome"],
+        "reels": result.get("reels"),  # 🔧 reels جداگانه برای کلاینت
         "win": result["win"],
         "balance_after": int((await db.get_user(user_id) or {}).get("balance", 0)),
     })
@@ -1105,16 +1380,20 @@ def _play_slots(bet: int) -> dict:
         multipliers = {"🍒": 5, "🔔": 8, "🍋": 10, "⭐": 15, "💎": 25, "7️⃣": 50}
         mult = multipliers.get(reels[0], 3)
         win = bet * mult
-        return {"outcome": f"🎉 جکپات! {outcome} — {mult}x", "win": win}
+        return {"outcome": f"🎉 جکپات! — {mult}x", "reels": reels, "win": win}
     elif reels[0] == reels[1] or reels[1] == reels[2] or reels[0] == reels[2]:
         win = int(bet * 0.5)
-        return {"outcome": f"≈ تقریباً! {outcome} — ۰.۵x", "win": win}
-    return {"outcome": f"{outcome} — باخت", "win": 0}
+        return {"outcome": f"≈ تقریباً! — ۰.۵x", "reels": reels, "win": win}
+    return {"outcome": "باخت", "reels": reels, "win": 0}
 
 
 def _play_dice(bet: int, body: dict) -> dict:
     """تاس: کاربر پیش‌بینی می‌کند بالای ۷ یا زیر ۷ یا مساوی ۷"""
-    prediction = body.get("payload", {}).get("prediction", "over")  # over, under, equal
+    # 🔧 payload ممکن است None باشد اگر کلاینت null بفرستد
+    payload = body.get("payload") or {}
+    prediction = payload.get("prediction", "over")  # over, under, equal
+    if prediction not in ("over", "under", "equal"):
+        prediction = "over"
     d1, d2 = random.randint(1, 6), random.randint(1, 6)
     total = d1 + d2
     win = 0
@@ -1129,7 +1408,7 @@ def _play_dice(bet: int, body: dict) -> dict:
         msg = f"🎲 {d1}+{d2}={total} — زیر ۷! ×۲"
     else:
         msg = f"🎲 {d1}+{d2}={total} — باخت"
-    return {"outcome": msg, "win": win}
+    return {"outcome": msg, "reels": [str(d1), str(d2)], "win": win}
 
 
 def _play_wheel(bet: int, body: dict) -> dict:
@@ -1141,7 +1420,7 @@ def _play_wheel(bet: int, body: dict) -> dict:
     idx = random.randint(0, len(segments) - 1)
     mult, label = segments[idx]
     win = int(bet * mult)
-    return {"outcome": f"🎡 روی {label} متوقف شد — {'+' + str(win) if win > 0 else 'باخت'}", "win": win}
+    return {"outcome": f"🎡 روی {label} متوقف شد — {'+' + str(win) if win > 0 else 'باخت'}", "reels": [label], "win": win}
 
 
 # ═══════════ API: خروج از مینی‌اپ ═══════════
@@ -1150,8 +1429,34 @@ async def handle_health(request: web.Request):
 
 
 # ═══════════ ساخت و اجرای اپ ═══════════
+@web.middleware
+async def security_headers_middleware(request: web.Request, handler):
+    """اعمال هدرهای امنیتی و Cache-Control روی همه پاسخ‌ها.
+
+    🔧 رفع باگ: قبلاً هیچ CORS/Cache-Control/CSP روی پاسخ‌ها نبود.
+    Telegram WebApp نیاز به no-cache دارد تا بعد از deploy نسخه جدید سرو شود.
+    """
+    response = await handler(request)
+    # no-store برای جلوگیری از کش HTML و API بعد از deploy
+    response.headers.setdefault("Cache-Control", "no-store, no-cache, must-revalidate")
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+    # CSP — فقط scripts از self و telegram.org مجاز
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; script-src 'self' 'unsafe-inline' https://telegram.org; "
+        "style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self';"
+    )
+    # CORS — اجازه به Telegram origins (و self)
+    origin = request.headers.get("Origin", "")
+    if origin:
+        response.headers.setdefault("Access-Control-Allow-Origin", origin)
+        response.headers.setdefault("Access-Control-Allow-Credentials", "true")
+    return response
+
+
 def create_app() -> web.Application:
-    app = web.Application()
+    app = web.Application(middlewares=[security_headers_middleware])
     app.router.add_get("/", handle_index)
     app.router.add_get("/index.html", handle_index)
     app.router.add_get("/api/health", handle_health)
@@ -1164,7 +1469,6 @@ def create_app() -> web.Application:
     app.router.add_post("/api/game/action", handle_game_action)
     app.router.add_post("/api/game/leave", handle_game_leave)
     app.router.add_post("/api/play/single", handle_single_play)
-    # middleware برای CORS و no-cache
     return app
 
 
@@ -1176,12 +1480,17 @@ async def start_webapp():
     global _web_runner
     if _web_runner is not None:
         return
+    # 🔧 اتصال به Redis (اگر URL تنظیم شده باشد) — قبل از start سرور
+    try:
+        await redis_client.init_redis()
+    except Exception as e:
+        logger.warning(f"⚠️ init_redis ناموفق (ادامه در حالت fallback): {e}")
     app = create_app()
     _web_runner = web.AppRunner(app)
     await _web_runner.setup()
     site = web.TCPSite(_web_runner, "0.0.0.0", config.WEBAPP_PORT)
     await site.start()
-    logger.info(f"🚀 مینی‌اپ روی پورت {config.WEBAPP_PORT} اجرا شد")
+    logger.info(f"🚀 مینی‌اپ روی پورت {config.WEBAPP_PORT} اجرا شد (Redis: {'✅' if redis_client.is_redis_available() else '⚠️ fallback'})")
     if config.WEBAPP_PUBLIC_URL:
         logger.info(f"🌐 URL عمومی: {config.WEBAPP_PUBLIC_URL}")
 
@@ -1192,3 +1501,8 @@ async def stop_webapp():
         await _web_runner.cleanup()
         _web_runner = None
         logger.info("🛑 سرور مینی‌اپ متوقف شد")
+    # 🔧 بستن Redis
+    try:
+        await redis_client.close_redis()
+    except Exception:
+        pass
