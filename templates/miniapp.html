@@ -526,6 +526,21 @@
   </div>
 </div>
 
+<!-- 🔧 مودال raise پوکر — جایگزین window.prompt که در WebApp کار نمی‌کند -->
+<div class="modal-overlay" id="raiseModal">
+  <div class="modal">
+    <h2>⬆️ ریز (Raise)</h2>
+    <div class="subtitle" id="raiseModalSubtitle">مبلغ raise را وارد کن</div>
+    <div class="bet-input-row">
+      <input type="number" class="bet-input" id="raiseInput" placeholder="مبلغ raise" min="0" inputmode="numeric">
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-secondary" onclick="closeRaiseModal()">انصراف</button>
+      <button class="btn btn-primary" id="raiseConfirmBtn">⬆️ ریز کن</button>
+    </div>
+  </div>
+</div>
+
 <!-- توست -->
 <div class="toast" id="toast"></div>
 
@@ -556,14 +571,25 @@ function setupTelegram() {
     Telegram.WebApp.setHeaderColor('#0a0a0a');
     Telegram.WebApp.setBackgroundColor('#0a0a0a');
     Telegram.WebApp.enableClosingConfirmation();
-    App.initData = Telegram.WebApp.initData || Telegram.WebApp.initDataUnsafe;
-    // برای تست روی دسکتاپ، initData ممکن است خالی باشد
+    // 🔧 رفع باگ بحرانی: فقط از initData (رشته‌ی sign شده) استفاده کن.
+    // initDataUnsafe یک آبجکت parse شده و غیر sign شده است — استفاده از آن به‌عنوان
+    // credential، احراز هویت HMAC را دور می‌زد و هر کاربر می‌توانست خودش را جای
+    // دیگری جا بزند. initDataUnsafe فقط برای نمایش اسم استفاده شود.
+    App.initData = Telegram.WebApp.initData || "";
+    // برای تست روی دسکتاپ، initData ممکن است خالی باشد — از query param بگیر
     if (!App.initData) {
       App.initData = new URLSearchParams(window.location.search).get("init_data") || "";
     }
   } else {
     App.initData = new URLSearchParams(window.location.search).get("init_data") || "";
   }
+}
+
+// 🔧 تابع escape برای جلوگیری از XSS وقتی رشته‌های server-controlled در innerHTML می‌روند
+function escHtml(s) {
+  s = String(s == null ? "" : s);
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
 // ═══════════════════════════════════════════
@@ -580,7 +606,11 @@ async function api(method, path, body) {
     const res = await fetch(path, opts);
     const data = await res.json();
     if (!data.ok) {
-      throw new Error(data.error || "خطای ناشناخته");
+      // 🔧 اضافه کردن status code به error برای تشخیص 401 (توقف polling)
+      const err = new Error(data.error || "خطای ناشناخته");
+      err.status = res.status;
+      err.code = data.code;
+      throw err;
     }
     return data.data;
   } catch (e) {
@@ -764,9 +794,12 @@ function renderResultSingle(game, bet, result) {
   const bannerText = isWin ? "🎉 بردی!" : (isTie ? "🤝 مساوی" : "💸 باختی");
   let extra = "";
   if (game.key === "slots") {
-    extra = `<div class="slots-reels">${result.outcome.match(/[^\s]+/g).slice(0,3).map(s => `<div class="reel">${s}</div>`).join("")}</div>`;
+    // 🔧 رفع باگ: از آرایه reels که سرور جداگانه می‌فرستد استفاده کن، نه regex
+    // پارس کردن outcome (که با "🎉 جکپات!" یا "≈ تقریباً!" شروع می‌شد و reels اشتباه می‌داد)
+    const reels = Array.isArray(result.reels) ? result.reels : ["❓","❓","❓"];
+    extra = `<div class="slots-reels">${reels.map(s => `<div class="reel">${s}</div>`).join("")}</div>`;
   } else {
-    extra = `<div style="text-align:center; font-size:18px; margin:14px 0; color:var(--gold); font-weight:800;">${result.outcome}</div>`;
+    extra = `<div style="text-align:center; font-size:18px; margin:14px 0; color:var(--gold); font-weight:800;">${escHtml(result.outcome)}</div>`;
   }
   view.querySelector("#gameContent").innerHTML = `
     <h2 style="text-align:center; color:var(--red-glow); margin-bottom:10px;">${game.emoji} ${game.name}</h2>
@@ -813,7 +846,10 @@ function startMatchPolling() {
     mmCountdown--;
     document.getElementById("mmCountdown").textContent = mmCountdown;
     if (mmCountdown <= 0) {
+      // 🔧 رفع باگ: قبل از showHome، صف را در سرور لغو کن تا escrow برگردد
+      // و کاربر در صف سرور گیر نکند
       stopMatchmaking();
+      try { await api("POST", "/api/match/cancel"); } catch (e) {}
       toast("⏱ حریفی پیدا نشد", "error");
       showHome();
       return;
@@ -828,6 +864,11 @@ function startMatchPolling() {
         toast("⏱ حریفی پیدا نشد", "error");
         showHome();
       } else if (s.status === "waiting") {
+        // 🔧 countdown را از زمان باقی‌مانده سرور sync کن (بدون drift)
+        if (typeof s.remaining === "number" && s.remaining >= 0) {
+          mmCountdown = s.remaining;
+          document.getElementById("mmCountdown").textContent = mmCountdown;
+        }
         document.getElementById("mmQueue").textContent =
           `در صف: ${s.queue_size || 1} نفر | زمان باقی‌مانده: ${s.remaining}s`;
       } else if (s.status === "idle") {
@@ -869,10 +910,26 @@ async function fetchGameState() {
   try {
     const s = await api("GET", `/api/game/state?game_id=${App.currentGameId}`);
     App.currentGameState = s;
+    App.gameFetchErrors = 0;  // 🔧 ریست شمارنده خطا
     renderGameState(s);
   } catch (e) {
     console.error("game state error:", e);
-    toast(e.message, "error");
+    App.gameFetchErrors = (App.gameFetchErrors || 0) + 1;
+    // 🔧 رفع باگ: روی 401 (احراز هویت ناموفق) یا خطای مکرر، polling را متوقف کن
+    // تا toast هر ۲.۵ ثانیه spam نشود
+    if (e.status === 401 || App.gameFetchErrors >= 3) {
+      stopGamePolling();
+      toast(e.status === 401 ? "احراز هویت ناموفق — دوباره وارد شو" : "ارتباط با بازی قطع شد", "error");
+      // اگر بازی تمام شده ولی خطا داشتیم، به صفحه نتیجه نرو
+      if (e.status !== 401 && App.currentGameState && App.currentGameState.finished) {
+        renderGameState(App.currentGameState);
+      } else if (e.status === 401) {
+        showHome();
+      }
+    } else if (App.gameFetchErrors === 1) {
+      // فقط اولین خطا را toast کن (نه هر بار)
+      toast(e.message, "error");
+    }
   }
 }
 
@@ -905,12 +962,15 @@ function renderGameState(s) {
   let body = "";
 
   // نوار حریف
+  // 🔧 رفع باگ XSS: اسم حریف از Telegram first_name می‌آید و می‌توانست حاوی
+  // <img onerror=...> باشد — با escHtml پاک شود
+  const oppNameSafe = escHtml(opp.name);
   body += `
     <div class="opponent-bar">
       <div style="display:flex; align-items:center; gap:8px;">
-        <div class="avatar" style="width:28px; height:28px; font-size:12px;">${(opp.name[0] || "؟").toUpperCase()}</div>
+        <div class="avatar" style="width:28px; height:28px; font-size:12px;">${escHtml((opp.name[0] || "؟").toUpperCase())}</div>
         <div>
-          <div style="font-size:13px; font-weight:700;">${opp.name}</div>
+          <div style="font-size:13px; font-weight:700;">${oppNameSafe}</div>
           <div style="font-size:11px; color:var(--text-dim);">حریف</div>
         </div>
       </div>
@@ -980,8 +1040,17 @@ function renderGameState(s) {
     if (myHand) {
       for (let i = 0; i < myHand.length; i++) {
         const c = myHand[i];
-        const playable = isMyTurn && (s.game_key === "hokm" || s.game_key === "blackjack");
-        body += `<div class="card ${cardColor(c)} ${playable ? 'playable' : ''}" onclick="${playable ? `playCard(${i})` : ''}">${cardHtmlInner(c)}</div>`;
+        // 🔧 رفع باگ: فقط hokm کارت‌ها playable هستند (با کلیک روی کارت می‌توانی play کنی).
+        // blackjack فقط hit/stand دارد — کلیک روی کارت در blackjack قبلاً action "play_card"
+        // می‌فرستاد که در سرور نامعتبر بود و خطای "game_error" می‌داد.
+        const playable = isMyTurn && s.game_key === "hokm";
+        // 🔧 برای hokm، بررسی follow-suit (اگر باید به رنگ lead پاسخ دهد و این کارت lead نیست، غیرقابل کلیک)
+        let canPlay = playable;
+        if (playable && s.game_key === "hokm" && s.data.lead_suit) {
+          const hasLead = myHand.some(cc => cc.suit === s.data.lead_suit);
+          if (hasLead && c.suit !== s.data.lead_suit) canPlay = false;
+        }
+        body += `<div class="card ${cardColor(c)} ${canPlay ? 'playable' : ''}" ${canPlay ? `onclick="playCard(${i})"` : ''}>${cardHtmlInner(c)}</div>`;
       }
     }
     body += `</div>`;
@@ -997,7 +1066,15 @@ function renderGameState(s) {
       body += `<button class="btn btn-primary" onclick="chooseTrump('♣')">♣</button>`;
     }
     if (s.game_key === "poker") {
-      body += `<button class="btn btn-secondary" onclick="pokerAction('check')">✅ چک</button>`;
+      // 🔧 اضافه شدن دکمه Call (وقتی outstanding raise هست)
+      const myContribution = (s.data.pot_per_player && s.data.pot_per_player[myIdx]) || 0;
+      const oppContribution = (s.data.pot_per_player && s.data.pot_per_player[oppIdx]) || 0;
+      const callNeeded = (s.data.current_bet || 0) - myContribution;
+      if (callNeeded > 0) {
+        body += `<button class="btn btn-primary" onclick="pokerAction('call')">📞 کال (${fmtNum(callNeeded)})</button>`;
+      } else {
+        body += `<button class="btn btn-secondary" onclick="pokerAction('check')">✅ چک</button>`;
+      }
       body += `<button class="btn btn-primary" onclick="pokerRaise()">⬆️ ریز</button>`;
       body += `<button class="btn btn-danger" onclick="pokerAction('fold')">🏳️ فولد</button>`;
     }
@@ -1087,10 +1164,32 @@ async function pokerAction(action, payload = {}) {
   } catch (e) { toast(e.message, "error"); }
 }
 
+// 🔧 رفع باگ: pokerRaise از یک مودال سفارشی استفاده می‌کند (window.prompt
+// در WebApp تلگرام کار نمی‌کند و null برمی‌گرداند که NaN می‌شد)
 async function pokerRaise() {
-  const amount = prompt("مبلغ raise (زرکوین):", "10000");
-  if (!amount) return;
-  await pokerAction("raise", { amount: parseInt(amount, 10) });
+  const modal = document.getElementById("raiseModal");
+  const input = document.getElementById("raiseInput");
+  const myBalance = App.user ? App.user.balance : 0;
+  input.min = 1;
+  input.max = myBalance;
+  input.value = Math.min(10000, myBalance);
+  modal.classList.add("active");
+  // callback را روی دکمه confirm تنظیم کن
+  document.getElementById("raiseConfirmBtn").onclick = async () => {
+    const amount = parseInt(input.value, 10);
+    closeRaiseModal();
+    if (!amount || amount <= 0) {
+      toast("مبلغ نامعتبر", "error");
+      return;
+    }
+    try {
+      await pokerAction("raise", { amount });
+    } catch (e) { toast(e.message, "error"); }
+  };
+}
+
+function closeRaiseModal() {
+  document.getElementById("raiseModal").classList.remove("active");
 }
 
 async function blackjackAction(action) {
@@ -1103,13 +1202,24 @@ async function blackjackAction(action) {
   } catch (e) { toast(e.message, "error"); }
 }
 
+// 🔧 رفع باگ: leaveGame از Telegram.WebApp.showConfirm استفاده می‌کند
+// (window.confirm در WebApp کار نمی‌کند و undefined برمی‌گرداند)
 async function leaveGame() {
   if (!App.currentGameId) return;
-  if (!confirm("مطمئنی می‌خوای تسلیم بشی؟ شرط را از دست می‌دهی.")) return;
-  try {
-    await api("POST", "/api/game/leave", {});
-    await fetchGameState();
-  } catch (e) { toast(e.message, "error"); }
+  const doLeave = async () => {
+    try {
+      await api("POST", "/api/game/leave", {});
+      await fetchGameState();
+    } catch (e) { toast(e.message, "error"); }
+  };
+  if (window.Telegram && Telegram.WebApp && Telegram.WebApp.showConfirm) {
+    Telegram.WebApp.showConfirm("مطمئنی می‌خوای تسلیم بشی؟ شرط را از دست می‌دهی.", (ok) => {
+      if (ok) doLeave();
+    });
+  } else {
+    // fallback برای تست دسکتاپ
+    if (confirm("مطمئنی می‌خوای تسلیم بشی؟ شرط را از دست می‌دهی.")) doLeave();
+  }
 }
 
 function exitToHome() {
