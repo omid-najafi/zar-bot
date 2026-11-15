@@ -4,7 +4,12 @@ from telegram.constants import ParseMode
 import utils, db, config
 
 def kb():
-    return InlineKeyboardMarkup([[InlineKeyboardButton("⚽ شوت!", callback_data="pen:shoot")]])
+    # 🔧 رفع باگ: دکمه لغو اضافه شد — قبلاً کاربر اگر شوت نمی‌کرد، entry برای همیشه
+    # در حافظه گیر می‌ماند و پولش گم می‌شد
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("⚽ شوت!", callback_data="pen:shoot")],
+        [InlineKeyboardButton("❌ لغو و بازگشت پول", callback_data="pen:cancel")],
+    ])
 
 async def start_game(update, amount, context):
     user_id = update.effective_user.id
@@ -13,6 +18,18 @@ async def start_game(update, amount, context):
     utils.remember_owner(msg, user_id)
 
 async def handle_callback(query, context, data, user_id):
+    # 🔧 اضافه شدن شاخه لغو — entry را برگردان
+    if data == "pen:cancel":
+        game = utils.penalty_games.pop(user_id, None)
+        if game:
+            await db.add_balance(user_id, game["entry"])
+            await utils.safe_edit(query, f"❌ بازی لغو شد و {utils.fmt(game['entry'])} زرکوین برگشت.", utils.BACK_GAMES_KB)
+        else:
+            await utils.safe_answer(query, "❌ بازی فعالی نداری", show_alert=True)
+            return
+        await utils.safe_answer(query)
+        return
+
     if data != "pen:shoot":
         await utils.safe_answer(query); return
     game = utils.penalty_games.pop(user_id, None)
@@ -20,6 +37,7 @@ async def handle_callback(query, context, data, user_id):
         await utils.safe_answer(query, "❌ بازی فعالی نداری", show_alert=True); return
 
     is_goal = random.random() < 0.5
+    chat_id = game["chat_id"]
 
     if is_goal:
         full = game["entry"] * 2
@@ -34,13 +52,13 @@ async def handle_callback(query, context, data, user_id):
 
     # ✅ ثبت ماموریت‌ها
     r_p = await db.progress_mission(user_id, "play_penalty", 1, base_xp=config.BASE_XP_PLAY_GAME)
-    await utils.notify_mission(context, query.message.chat_id, r_p)
+    await utils.notify_mission(context, chat_id, r_p)
 
     r_any = await db.progress_mission(user_id, "play_any_game", 1, base_xp=0)
-    await utils.notify_mission(context, query.message.chat_id, r_any)
+    await utils.notify_mission(context, chat_id, r_any)
 
     if is_goal:
         r_win = await db.progress_mission(user_id, "win_penalty", 1, base_xp=config.BASE_XP_WIN_GAME)
-        await utils.notify_mission(context, query.message.chat_id, r_win)
+        await utils.notify_mission(context, chat_id, r_win)
         r_any_win = await db.progress_mission(user_id, "win_any_game", 1, base_xp=0)
-        await utils.notify_mission(context, query.message.chat_id, r_any_win)
+        await utils.notify_mission(context, chat_id, r_any_win)
