@@ -9,6 +9,7 @@
 - تم قرمز و مشکی (در templates/miniapp.html)
 """
 import asyncio
+import base64
 import hashlib
 import hmac
 import json
@@ -147,6 +148,31 @@ def validate_init_data(init_data_raw: str) -> dict | None:
     return user
 
 
+# ═══════════ توکن مرورگر (جایگزین initData برای باز شدن در مرورگر خارجی) ═══════════
+# تولید توکن در utils.py انجام می‌شود (سمت ربات). اینجا فقط اعتبارسنجی می‌شود.
+_BROWSER_TOKEN_TTL = 86400 * 30  # ۳۰ روز (برای لاگ)
+
+
+def validate_browser_token(token: str) -> int | None:
+    """اعتبارسنجی توکن مرورگر — برمی‌گرداند user_id یا None"""
+    if not token or "." not in token:
+        return None
+    try:
+        raw_b64, sig = token.rsplit(".", 1)
+        raw = base64.urlsafe_b64decode(raw_b64.encode())
+        expected_sig = hmac.new(config.BOT_TOKEN.encode(), raw, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(sig, expected_sig):
+            logger.warning("⚠️ توکن مرورگر نامعتبر — امضا مطابقت ندارد")
+            return None
+        payload = json.loads(raw)
+        if payload.get("exp", 0) < time.time():
+            logger.warning("⚠️ توکن مرورگر منقضی شده")
+            return None
+        return int(payload.get("uid", 0)) or None
+    except Exception:
+        return None
+
+
 async def _get_user_for_request(request: web.Request) -> dict | None:
     """استخراج و اعتبارسنجی کاربر از درخواست"""
     # 🔧 فقط از header یا query بخوان — body متعلق به handler است و نباید
@@ -156,27 +182,45 @@ async def _get_user_for_request(request: web.Request) -> dict | None:
         or request.query.get("init_data")
         or ""
     )
-    tg_user = validate_init_data(init_data)
-    if not tg_user:
-        return None
-    user_id = tg_user.get("id")
+    tg_user = None
+    user_id = None
+    tg_user_fields = None
+    if init_data:
+        tg_user = validate_init_data(init_data)
+        if tg_user:
+            user_id = tg_user.get("id")
+            tg_user_fields = tg_user
+    # 🔧 جایگزین initData: توکن مرورگر (برای باز شدن در مرورگر خارجی)
+    if not user_id:
+        browser_token = (
+            request.headers.get("X-Browser-Token")
+            or request.query.get("token")
+            or ""
+        )
+        if browser_token:
+            user_id = validate_browser_token(browser_token)
+            tg_user_fields = None
     if not user_id:
         return None
     # اطمینان از وجود کاربر در DB
     db_user = await db.get_user(int(user_id))
     if not db_user:
-        # اگر هنوز ثبت نشده، یک رکورد موقت می‌سازیم
-        try:
-            db_user = await db.ensure_user(type("U", (), {
-                "id": int(user_id),
-                "first_name": tg_user.get("first_name", ""),
-                "last_name": tg_user.get("last_name", ""),
-                "username": tg_user.get("username", ""),
-                "language_code": tg_user.get("language_code", "fa"),
-                "is_bot": False,
-            })())
-        except Exception as e:
-            logger.exception(f"ensure_user در مینی‌اپ ناموفق: {e}")
+        # اگر هنوز ثبت نشده، یک رکورد موقت می‌سازیم (فقط مسیر initData که فیلدها دارد)
+        if tg_user_fields:
+            try:
+                db_user = await db.ensure_user(type("U", (), {
+                    "id": int(user_id),
+                    "first_name": tg_user_fields.get("first_name", ""),
+                    "last_name": tg_user_fields.get("last_name", ""),
+                    "username": tg_user_fields.get("username", ""),
+                    "language_code": tg_user_fields.get("language_code", "fa"),
+                    "is_bot": False,
+                })())
+            except Exception as e:
+                logger.exception(f"ensure_user در مینی‌اپ ناموفق: {e}")
+                return None
+        else:
+            # مسیر توکن مرورگر: کاربر باید از قبل در DB باشد (توکن فقط از ربات صادر می‌شود)
             return None
     return db_user
 
