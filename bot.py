@@ -2,7 +2,7 @@ import logging
 import re
 import random
 from datetime import datetime, time
-from telegram import ChatMember, InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import ChatMember, InlineKeyboardButton, InlineKeyboardMarkup, MenuButtonWebApp, Update, WebAppInfo
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application, CallbackQueryHandler, ChatMemberHandler, CommandHandler,
@@ -1067,6 +1067,27 @@ async def post_init(app: Application):
         await _webapp.start_webapp()
     except Exception as e:
         logger.exception(f"⚠️ شروع سرور مینی‌اپ ناموفق: {e}")
+
+    # ─── تنظیم دکمه منوی ربات (هامبرگری) برای باز کردن مینی‌اپ ───
+    # 🔧 این مهم‌ترین راه برای دسترسی به مینی‌اپ است — دکمه هامبرگری تلگرام
+    webapp_url = getattr(config, "WEBAPP_PUBLIC_URL", "")
+    if webapp_url and webapp_url.startswith("https://"):
+        try:
+            await app.bot.set_chat_menu_button(
+                menu_button=MenuButtonWebApp(text="🎲 قمارخانه", web_app=WebAppInfo(url=webapp_url))
+            )
+            logger.info(f"✅ دکمه منوی ربات روی مینی‌اپ تنظیم شد: {webapp_url}")
+        except Exception as e:
+            logger.warning(f"⚠️ تنظیم MenuButton ناموفق (دامنه در BotFather ثبت نشده؟): {e}")
+    else:
+        logger.warning(
+            "⚠️ WEBAPP_PUBLIC_URL تنظیم نشده یا HTTPS نیست — دکمه قمارخانه زنده غیرفعال است.\n"
+            "   برای فعال‌سازی:\n"
+            "   1. روی Railway: Settings → Networking → Generate Domain\n"
+            "   2. URL را در متغیر WEBAPP_PUBLIC_URL بگذارید\n"
+            "   3. در BotFather: /setdomain → دامنه را ثبت کنید\n"
+            "   4. Railway → New → Database → Add Redis"
+        )
 
 
 async def post_shutdown(app: Application):
