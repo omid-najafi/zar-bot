@@ -190,6 +190,9 @@ async def _get_user_for_request(request: web.Request) -> dict | None:
         if tg_user:
             user_id = tg_user.get("id")
             tg_user_fields = tg_user
+            logger.info(f"✅ initData معتبر — user_id={user_id}")
+        else:
+            logger.warning(f"⚠️ initData نامعتبر (طول: {len(init_data)}) — احراز هویت ناموفق")
     # 🔧 جایگزین initData: توکن مرورگر (برای باز شدن در مرورگر خارجی)
     if not user_id:
         browser_token = (
@@ -200,10 +203,19 @@ async def _get_user_for_request(request: web.Request) -> dict | None:
         if browser_token:
             user_id = validate_browser_token(browser_token)
             tg_user_fields = None
+            if user_id:
+                logger.info(f"✅ توکن مرورگر معتبر — user_id={user_id}")
+            else:
+                logger.warning("⚠️ توکن مرورگر نامعتبر")
     if not user_id:
+        logger.warning("⚠️ هیچ اعتبار معتبری پیدا نشود — 401")
         return None
     # اطمینان از وجود کاربر در DB
-    db_user = await db.get_user(int(user_id))
+    try:
+        db_user = await db.get_user(int(user_id))
+    except Exception as e:
+        logger.exception(f"⚠️ db.get_user خطا داد: {e}")
+        return None
     if not db_user:
         # اگر هنوز ثبت نشده، یک رکورد موقت می‌سازیم (فقط مسیر initData که فیلدها دارد)
         if tg_user_fields:
@@ -221,6 +233,7 @@ async def _get_user_for_request(request: web.Request) -> dict | None:
                 return None
         else:
             # مسیر توکن مرورگر: کاربر باید از قبل در DB باشد (توکن فقط از ربات صادر می‌شود)
+            logger.warning(f"⚠️ کاربر {user_id} در DB نیست و مسیر توکن مرورگر است")
             return None
     return db_user
 
@@ -1467,9 +1480,29 @@ def _play_wheel(bet: int, body: dict) -> dict:
     return {"outcome": f"🎡 روی {label} متوقف شد — {'+' + str(win) if win > 0 else 'باخت'}", "reels": [label], "win": win}
 
 
-# ═══════════ API: خروج از مینی‌اپ ═══════════
+# ═══════════ API: سلامت سرور (بدون احراز هویت — برای عیب‌یابی) ═══════════
 async def handle_health(request: web.Request):
-    return json_ok({"status": "ok", "games": list(config.MINIAPP_GAMES.keys())})
+    """بررسی سلامت سرور: وضعیت BOT_TOKEN، DB، Redis، بازی‌ها"""
+    status = {"status": "ok", "games": list(config.MINIAPP_GAMES.keys())}
+    # بررسی BOT_TOKEN
+    status["bot_token_set"] = bool(config.BOT_TOKEN)
+    # بررسی DB
+    try:
+        test_user = await db.get_user(1)
+        status["db"] = "ok"
+    except Exception as e:
+        status["db"] = f"error: {e}"
+        status["status"] = "degraded"
+    # بررسی Redis
+    try:
+        status["redis"] = "ok" if redis_client.is_redis_available() else "fallback"
+    except Exception:
+        status["redis"] = "unknown"
+    # بررسی عمق initData برای عیب‌یابی (بدون افشای محتوا)
+    init_data = request.headers.get("X-Telegram-Init-Data") or request.query.get("init_data") or ""
+    status["has_init_data"] = bool(init_data)
+    status["has_browser_token"] = bool(request.headers.get("X-Browser-Token") or request.query.get("token"))
+    return json_ok(status)
 
 
 # ═══════════ ساخت و اجرای اپ ═══════════
