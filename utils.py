@@ -3,6 +3,11 @@ import secrets
 import string
 import asyncio
 import logging
+import hmac
+import hashlib
+import base64
+import json
+import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from cachetools import TTLCache
@@ -12,6 +17,20 @@ from telegram.error import BadRequest
 import config
 
 logger = logging.getLogger("zarcoin")
+
+
+# ═══════════ توکن مرورگر (جایگزین initData برای باز شدن مینی‌اپ در مرورگر خارجی) ═══════════
+# سرور (webapp.py) این توکن را با همان الگوریتم اعتبارسنجی می‌کند.
+_BROWSER_TOKEN_TTL = 86400 * 30  # ۳۰ روز
+
+
+def generate_browser_token(user_id: int, ttl: int = _BROWSER_TOKEN_TTL) -> str:
+    """تولید توکن امضاشده برای دسترسی مرورگر — فرمت: base64(payload).signature"""
+    payload = {"uid": int(user_id), "exp": int(time.time()) + ttl}
+    raw = json.dumps(payload, separators=(",", ":")).encode()
+    sig = hmac.new(config.BOT_TOKEN.encode(), raw, hashlib.sha256).hexdigest()
+    return base64.urlsafe_b64encode(raw).decode() + "." + sig
+
 
 TEHRAN = ZoneInfo("Asia/Tehran")
 PERSIAN_DIGITS = "۰۱۲۳۴۵۶۷۸۹"
