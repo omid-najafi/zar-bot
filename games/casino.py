@@ -21,7 +21,7 @@ def casino_menu_kb():
     if url and url.startswith("https://"):
         rows.append([InlineKeyboardButton("🎲 قمارخانه زنده (حکم، پوکر، بلک‌جک)", web_app=WebAppInfo(url=url))])
     else:
-        rows.append([InlineKeyboardButton("🎲 قمارخانه زنده (غیرفعال)", callback_data="casino:webapp")])
+        rows.append([InlineKeyboardButton("🎲 قمارخانه زنده (حکم، پوکر، بلک‌جک)", callback_data="casino:webapp")])
     rows.append([InlineKeyboardButton("🔙 بازگشت به بازی‌ها", callback_data="game:menu")])
     return InlineKeyboardMarkup(rows)
 
