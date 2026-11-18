@@ -21,13 +21,13 @@ def casino_menu_kb(user_id: int | None = None):
     deep_link = getattr(config, "WEBAPP_DEEP_LINK", "").strip()
     public_url = getattr(config, "WEBAPP_PUBLIC_URL", "")
     if deep_link and deep_link.startswith("https://t.me/"):
-        rows.append([InlineKeyboardButton("🎲 قمارخانه زنده (حکم، پوکر، بلک‌جک)", url=deep_link)])
+        rows.append([InlineKeyboardButton("🎲 قمارخانه زنده", url=deep_link)])
     elif public_url and public_url.startswith("https://") and user_id:
         token = utils.generate_browser_token(user_id)
         browser_url = f"{public_url}/?token={token}"
-        rows.append([InlineKeyboardButton("🎲 قمارخانه زنده (حکم، پوکر، بلک‌جک)", url=browser_url)])
+        rows.append([InlineKeyboardButton("🎲 قمارخانه زنده", url=browser_url)])
     else:
-        rows.append([InlineKeyboardButton("🎲 قمارخانه زنده (حکم، پوکر، بلک‌جک)", callback_data="casino:webapp")])
+        rows.append([InlineKeyboardButton("🎲 قمارخانه زنده", callback_data="casino:webapp")])
     rows.append([InlineKeyboardButton("🔙 بازگشت به بازی‌ها", callback_data="game:menu")])
     return InlineKeyboardMarkup(rows)
 
@@ -176,7 +176,8 @@ async def handle_callback(query, context, data, user_id):
             await utils.safe_answer(query, "❌ بازی فعالی نداری", show_alert=True); return
         utils.casino_pending.pop(user_id, None)
         entry = pending["entry"]
-        chat_id = query.message.chat_id if query.message else query.from_user.id
+        # 🔧 رفع باگ: query.message ممکن است None باشد (پیام قدیمی/اینلاین)
+        chat_id = (query.message.chat_id if query.message else None) or query.from_user.id
         is_win = False
 
         # 🔧 رفع باگ: اگر هر شاخه بازی exception پرتاب کند، entry را برگردان.
@@ -192,25 +193,26 @@ async def handle_callback(query, context, data, user_id):
                 pass
             await utils.safe_answer(query)
             return
-        # تعیین is_win برای ثبت ماموریت — از query context نمی‌توان مستقیم گرفت،
-        # پس _record را داخل _play_casino_branch صدا نمی‌زنیم؛ در عوض از یک flag ساده استفاده می‌کنیم.
-        # برای سادگی، ماموریت‌ها را در پایان ثبت می‌کنیم (is_win از آخرین شاخه مشخص است).
-        # نکته: is_win برای dice/coin/card/etc در _play_casino_branch محاسبه می‌شود؛
-        # آن را از طریق attribute موقت روی query نگه می‌داریم.
+        # 🔧 تعیین is_win برای ثبت ماموریت
         is_win = getattr(query, "_casino_is_win", False)
 
-        # ✅ ثبت ماموریت‌ها (برای همه بازی‌های کازینو)
-        await _record_casino_missions(context, chat_id, user_id, is_win)
+        # ✅ ثبت ماموریت‌ها — در try/except تا خطای DB بازی را خراب نکند
+        try:
+            await _record_casino_missions(context, chat_id, user_id, is_win)
+        except Exception as e:
+            logger.warning(f"⚠️ ثبت ماموریت کازینو ناموفق (بدون تاثیر روی بازی): {e}")
 
 
 async def _play_casino_branch(cg, parts, entry, user_id, chat_id, query, context):
     """اجرای یک شاخه بازی کازینو. اگر exception پرتاب کند، caller entry را برمی‌گرداند."""
     if cg == "dice":
+        # 🔧 رفع باگ: query.message ممکن است None باشد — reply_to_message_id اختیاری است
+        reply_to = query.message.message_id if query.message else None
         try:
-            dice_msg = await context.bot.send_dice(
-                chat_id=chat_id, emoji="🎲",
-                reply_to_message_id=query.message.message_id,
-                allow_sending_without_reply=True)
+            kwargs = dict(chat_id=chat_id, emoji="🎲", allow_sending_without_reply=True)
+            if reply_to:
+                kwargs["reply_to_message_id"] = reply_to
+            dice_msg = await context.bot.send_dice(**kwargs)
         except Exception as e:
             logger.error(f"Dice send error: {e}")
             await db.add_balance(user_id, entry)
