@@ -21,13 +21,13 @@ def casino_menu_kb(user_id: int | None = None):
     deep_link = getattr(config, "WEBAPP_DEEP_LINK", "").strip()
     public_url = getattr(config, "WEBAPP_PUBLIC_URL", "")
     if deep_link and deep_link.startswith("https://t.me/"):
-        rows.append([InlineKeyboardButton("🎲 قمارخانه زنده", url=deep_link)])
+        rows.append([InlineKeyboardButton("🎲 قمارخانه زنده (حکم، پوکر، بلک‌جک)", url=deep_link)])
     elif public_url and public_url.startswith("https://") and user_id:
         token = utils.generate_browser_token(user_id)
         browser_url = f"{public_url}/?token={token}"
-        rows.append([InlineKeyboardButton("🎲 قمارخانه زنده", url=browser_url)])
+        rows.append([InlineKeyboardButton("🎲 قمارخانه زنده (حکم، پوکر، بلک‌جک)", url=browser_url)])
     else:
-        rows.append([InlineKeyboardButton("🎲 قمارخانه زنده", callback_data="casino:webapp")])
+        rows.append([InlineKeyboardButton("🎲 قمارخانه زنده (حکم، پوکر، بلک‌جک)", callback_data="casino:webapp")])
     rows.append([InlineKeyboardButton("🔙 بازگشت به بازی‌ها", callback_data="game:menu")])
     return InlineKeyboardMarkup(rows)
 
@@ -176,8 +176,7 @@ async def handle_callback(query, context, data, user_id):
             await utils.safe_answer(query, "❌ بازی فعالی نداری", show_alert=True); return
         utils.casino_pending.pop(user_id, None)
         entry = pending["entry"]
-        # 🔧 رفع باگ: query.message ممکن است None باشد (پیام قدیمی/اینلاین)
-        chat_id = (query.message.chat_id if query.message else None) or query.from_user.id
+        chat_id = query.message.chat_id if query.message else query.from_user.id
         is_win = False
 
         # 🔧 رفع باگ: اگر هر شاخه بازی exception پرتاب کند، entry را برگردان.
@@ -193,20 +192,33 @@ async def handle_callback(query, context, data, user_id):
                 pass
             await utils.safe_answer(query)
             return
-        # 🔧 تعیین is_win برای ثبت ماموریت
+        # تعیین is_win برای ثبت ماموریت — از query context نمی‌توان مستقیم گرفت،
+        # پس _record را داخل _play_casino_branch صدا نمی‌زنیم؛ در عوض از یک flag ساده استفاده می‌کنیم.
+        # برای سادگی، ماموریت‌ها را در پایان ثبت می‌کنیم (is_win از آخرین شاخه مشخص است).
+        # نکته: is_win برای dice/coin/card/etc در _play_casino_branch محاسبه می‌شود؛
+        # آن را از طریق attribute موقت روی query نگه می‌داریم.
         is_win = getattr(query, "_casino_is_win", False)
 
-        # ✅ ثبت ماموریت‌ها — در try/except تا خطای DB بازی را خراب نکند
-        try:
-            await _record_casino_missions(context, chat_id, user_id, is_win)
-        except Exception as e:
-            logger.warning(f"⚠️ ثبت ماموریت کازینو ناموفق (بدون تاثیر روی بازی): {e}")
+        # ✅ ثبت ماموریت‌ها (برای همه بازی‌های کازینو)
+        await _record_casino_missions(context, chat_id, user_id, is_win)
+
+
+async def _safe_add_balance(user_id, amount, game_name):
+    """افزودن موجودی با مدیریت خطا — اگر DB خطا دهد، exception پرتاب نمی‌کند."""
+    try:
+        await db.add_balance(user_id, amount)
+        return True
+    except Exception as e:
+        logger.exception(f"⚠️ db.add_balance ناموفق ({game_name}, user={user_id}, amount={amount}): {e}")
+        return False
 
 
 async def _play_casino_branch(cg, parts, entry, user_id, chat_id, query, context):
     """اجرای یک شاخه بازی کازینو. اگر exception پرتاب کند، caller entry را برمی‌گرداند."""
+    logger.info(f"🎮 casino play: cg={cg}, parts={parts}, entry={entry}, user={user_id}")
+
     if cg == "dice":
-        # 🔧 رفع باگ: query.message ممکن است None باشد — reply_to_message_id اختیاری است
+        # 🔧 رفع باگ: query.message ممکن است None باشد
         reply_to = query.message.message_id if query.message else None
         try:
             kwargs = dict(chat_id=chat_id, emoji="🎲", allow_sending_without_reply=True)
@@ -215,13 +227,18 @@ async def _play_casino_branch(cg, parts, entry, user_id, chat_id, query, context
             dice_msg = await context.bot.send_dice(**kwargs)
         except Exception as e:
             logger.error(f"Dice send error: {e}")
-            await db.add_balance(user_id, entry)
+            await _safe_add_balance(user_id, entry, "dice-refund")
             await utils.safe_edit(query, "❌ خطا در ارتباط با تلگرام. پول شما برگشت داده شد.", casino_back_kb())
             await utils.safe_answer(query)
             return
 
-        await asyncio.sleep(4.5)
-        res = dice_msg.dice.value
+        # 🔧 رفع باگ: اگر dice_msg یا dice_msg.dice None باشد، مقدار تصادفی بگیر
+        try:
+            await asyncio.sleep(4.5)
+            res = dice_msg.dice.value
+        except Exception as e:
+            logger.error(f"Dice value error: {e} — استفاده از مقدار تصادفی")
+            res = random.randint(1, 6)
         face = DICE_FACES.get(res, "🎲")
 
         if parts[3] == "exact":
@@ -241,7 +258,9 @@ async def _play_casino_branch(cg, parts, entry, user_id, chat_id, query, context
 
         if is_win:
             text, prize, _ = _win_text("تاس", header, entry, mult)
-            await db.add_balance(user_id, prize)
+            ok = await _safe_add_balance(user_id, prize, "dice-win")
+            if not ok:
+                text += "\n⚠️ به‌روزرسانی موجودی ناموفق — بعداً تلاش کنید."
         else:
             text = _lose_text(header, entry)
         await utils.safe_edit(query, text, casino_back_kb())
@@ -254,7 +273,9 @@ async def _play_casino_branch(cg, parts, entry, user_id, chat_id, query, context
         is_win = (res == parts[3])
         if is_win:
             text, prize, _ = _win_text("شیر یا خط", header, entry, 2)
-            await db.add_balance(user_id, prize)
+            ok = await _safe_add_balance(user_id, prize, "coin-win")
+            if not ok:
+                text += "\n⚠️ به‌روزرسانی موجودی ناموفق — بعداً تلاش کنید."
         else:
             text = _lose_text(header, entry)
         await utils.safe_edit(query, text, casino_back_kb())
@@ -267,7 +288,9 @@ async def _play_casino_branch(cg, parts, entry, user_id, chat_id, query, context
         is_win = (res == parts[3])
         if is_win:
             text, prize, _ = _win_text("کارت شانس", header, entry, 4)
-            await db.add_balance(user_id, prize)
+            ok = await _safe_add_balance(user_id, prize, "card-win")
+            if not ok:
+                text += "\n⚠️ به‌روزرسانی موجودی ناموفق — بعداً تلاش کنید."
         else:
             text = _lose_text(header, entry)
         await utils.safe_edit(query, text, casino_back_kb())
@@ -275,8 +298,6 @@ async def _play_casino_branch(cg, parts, entry, user_id, chat_id, query, context
         query._casino_is_win = is_win
 
     elif cg == "roulette":
-        # رولت اروپایی: 0-36
-        # 0 = سبز، اعداد فرد = قرمز، اعداد زوج = مشکی
         res = random.randint(0, 36)
         if res == 0:
             color = "green"
@@ -295,7 +316,9 @@ async def _play_casino_branch(cg, parts, entry, user_id, chat_id, query, context
         if is_win:
             mult = 36 if choice == "green" else 2
             text, prize, _ = _win_text("رولت", header, entry, mult)
-            await db.add_balance(user_id, prize)
+            ok = await _safe_add_balance(user_id, prize, "roulette-win")
+            if not ok:
+                text += "\n⚠️ به‌روزرسانی موجودی ناموفق — بعداً تلاش کنید."
         else:
             text = _lose_text(header, entry)
         await utils.safe_edit(query, text, casino_back_kb())
@@ -303,11 +326,9 @@ async def _play_casino_branch(cg, parts, entry, user_id, chat_id, query, context
         query._casino_is_win = is_win
 
     elif cg == "mines":
-        # مین‌یاب: ۵ در، ۳ جواهر، ۲ مین
         gems = set(random.sample(range(1, 6), config.MINES_GEMS))
         choice = int(parts[3])
         is_win = choice in gems
-        # نمایش همه درها
         doors_display = ""
         for i in range(1, 6):
             if i in gems:
@@ -320,7 +341,9 @@ async def _play_casino_branch(cg, parts, entry, user_id, chat_id, query, context
         header = f"💣 <b>مین‌یاب</b>\n━━━━━━━━━━━━━━━━━━\n🎯 نتیجه:\n{doors_display}\n"
         if is_win:
             text, prize, _ = _win_text("مین‌یاب", header, entry, 1.7)
-            await db.add_balance(user_id, prize)
+            ok = await _safe_add_balance(user_id, prize, "mines-win")
+            if not ok:
+                text += "\n⚠️ به‌روزرسانی موجودی ناموفق — بعداً تلاش کنید."
         else:
             text = _lose_text(header, entry)
         await utils.safe_edit(query, text, casino_back_kb())
@@ -328,16 +351,23 @@ async def _play_casino_branch(cg, parts, entry, user_id, chat_id, query, context
         query._casino_is_win = is_win
 
     elif cg == "wheel":
-        # چرخ شانس: ۶ قسمت، کاربر عدد ۱-۶ انتخاب می‌کند
         res = random.randint(1, config.WHEEL_SEGMENTS)
         choice = int(parts[3])
         header = f"🎯 <b>چرخ شانس</b>\n━━━━━━━━━━━━━━━━━━\n🎯 چرخ روی عدد <b>{res}</b> متوقف شد!\nانتخاب تو: <b>{choice}</b>\n\n"
         is_win = (res == choice)
         if is_win:
             text, prize, _ = _win_text("چرخ شانس", header, entry, 6)
-            await db.add_balance(user_id, prize)
+            ok = await _safe_add_balance(user_id, prize, "wheel-win")
+            if not ok:
+                text += "\n⚠️ به‌روزرسانی موجودی ناموفق — بعداً تلاش کنید."
         else:
             text = _lose_text(header, entry)
         await utils.safe_edit(query, text, casino_back_kb())
         await utils.safe_answer(query)
         query._casino_is_win = is_win
+
+    else:
+        logger.error(f"⚠️ بازی ناشناخته: {cg}")
+        await _safe_add_balance(user_id, entry, f"unknown-{cg}-refund")
+        await utils.safe_edit(query, "❌ بازی ناشناخته — پول برگشت.", casino_back_kb())
+        await utils.safe_answer(query)
