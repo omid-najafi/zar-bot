@@ -21,13 +21,13 @@ def casino_menu_kb(user_id: int | None = None):
     deep_link = getattr(config, "WEBAPP_DEEP_LINK", "").strip()
     public_url = getattr(config, "WEBAPP_PUBLIC_URL", "")
     if deep_link and deep_link.startswith("https://t.me/"):
-        rows.append([InlineKeyboardButton("🎲 قمارخانه زنده (حکم، پوکر، بلک‌جک)", url=deep_link)])
+        rows.append([InlineKeyboardButton("🎲 قمارخانه زنده", url=deep_link)])
     elif public_url and public_url.startswith("https://") and user_id:
         token = utils.generate_browser_token(user_id)
         browser_url = f"{public_url}/?token={token}"
-        rows.append([InlineKeyboardButton("🎲 قمارخانه زنده (حکم، پوکر، بلک‌جک)", url=browser_url)])
+        rows.append([InlineKeyboardButton("🎲 قمارخانه زنده", url=browser_url)])
     else:
-        rows.append([InlineKeyboardButton("🎲 قمارخانه زنده (حکم، پوکر، بلک‌جک)", callback_data="casino:webapp")])
+        rows.append([InlineKeyboardButton("🎲 قمارخانه زنده", callback_data="casino:webapp")])
     rows.append([InlineKeyboardButton("🔙 بازگشت به بازی‌ها", callback_data="game:menu")])
     return InlineKeyboardMarkup(rows)
 
@@ -182,7 +182,7 @@ async def handle_callback(query, context, data, user_id):
         # 🔧 رفع باگ: اگر هر شاخه بازی exception پرتاب کند، entry را برگردان.
         # قبلاً pop قبل از اجرا بود، پس crash بعد از pop پول را گم می‌کرد.
         try:
-            await _play_casino_branch(cg, parts, entry, user_id, chat_id, query, context)
+            is_win = await _play_casino_branch(cg, parts, entry, user_id, chat_id, query, context)
         except Exception as e:
             logger.exception(f"casino play error ({cg}): {e}")
             try:
@@ -197,7 +197,9 @@ async def handle_callback(query, context, data, user_id):
         # برای سادگی، ماموریت‌ها را در پایان ثبت می‌کنیم (is_win از آخرین شاخه مشخص است).
         # نکته: is_win برای dice/coin/card/etc در _play_casino_branch محاسبه می‌شود؛
         # آن را از طریق attribute موقت روی query نگه می‌داریم.
-        is_win = getattr(query, "_casino_is_win", False)
+        # None یعنی بازی اجرا نشده و پول برگشته (خطای dice / بازی ناشناخته)
+        if is_win is None:
+            return
 
         # ✅ ثبت ماموریت‌ها (برای همه بازی‌های کازینو)
         await _record_casino_missions(context, chat_id, user_id, is_win)
@@ -230,7 +232,7 @@ async def _play_casino_branch(cg, parts, entry, user_id, chat_id, query, context
             await _safe_add_balance(user_id, entry, "dice-refund")
             await utils.safe_edit(query, "❌ خطا در ارتباط با تلگرام. پول شما برگشت داده شد.", casino_back_kb())
             await utils.safe_answer(query)
-            return
+            return None
 
         # 🔧 رفع باگ: اگر dice_msg یا dice_msg.dice None باشد، مقدار تصادفی بگیر
         try:
@@ -265,7 +267,7 @@ async def _play_casino_branch(cg, parts, entry, user_id, chat_id, query, context
             text = _lose_text(header, entry)
         await utils.safe_edit(query, text, casino_back_kb())
         await utils.safe_answer(query)
-        query._casino_is_win = is_win
+        return is_win
 
     elif cg == "coin":
         res = random.choice(["heads", "tails"])
@@ -280,7 +282,7 @@ async def _play_casino_branch(cg, parts, entry, user_id, chat_id, query, context
             text = _lose_text(header, entry)
         await utils.safe_edit(query, text, casino_back_kb())
         await utils.safe_answer(query)
-        query._casino_is_win = is_win
+        return is_win
 
     elif cg == "card":
         res = random.choice(list(config.CARD_SUITS.keys()))
@@ -295,7 +297,7 @@ async def _play_casino_branch(cg, parts, entry, user_id, chat_id, query, context
             text = _lose_text(header, entry)
         await utils.safe_edit(query, text, casino_back_kb())
         await utils.safe_answer(query)
-        query._casino_is_win = is_win
+        return is_win
 
     elif cg == "roulette":
         res = random.randint(0, 36)
@@ -323,7 +325,7 @@ async def _play_casino_branch(cg, parts, entry, user_id, chat_id, query, context
             text = _lose_text(header, entry)
         await utils.safe_edit(query, text, casino_back_kb())
         await utils.safe_answer(query)
-        query._casino_is_win = is_win
+        return is_win
 
     elif cg == "mines":
         gems = set(random.sample(range(1, 6), config.MINES_GEMS))
@@ -348,7 +350,7 @@ async def _play_casino_branch(cg, parts, entry, user_id, chat_id, query, context
             text = _lose_text(header, entry)
         await utils.safe_edit(query, text, casino_back_kb())
         await utils.safe_answer(query)
-        query._casino_is_win = is_win
+        return is_win
 
     elif cg == "wheel":
         res = random.randint(1, config.WHEEL_SEGMENTS)
@@ -364,10 +366,11 @@ async def _play_casino_branch(cg, parts, entry, user_id, chat_id, query, context
             text = _lose_text(header, entry)
         await utils.safe_edit(query, text, casino_back_kb())
         await utils.safe_answer(query)
-        query._casino_is_win = is_win
+        return is_win
 
     else:
         logger.error(f"⚠️ بازی ناشناخته: {cg}")
         await _safe_add_balance(user_id, entry, f"unknown-{cg}-refund")
         await utils.safe_edit(query, "❌ بازی ناشناخته — پول برگشت.", casino_back_kb())
         await utils.safe_answer(query)
+        return None
