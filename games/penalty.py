@@ -1,64 +1,34 @@
+# -*- coding: utf-8 -*-
+"""
+⚽ پنالتی — نسخه مینی‌اپ (تک‌نفره)
+یکی از ۳ گوشه را انتخاب کن؛ اگر دروازه‌بان جای دیگری شیرجه بزند گل است (احتمال ۲/۳، جایزه ×۱٫۴۵)
+"""
 import random
-from telegram import InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.constants import ParseMode
-import utils, db, config
 
-def kb():
-    # 🔧 رفع باگ: دکمه لغو اضافه شد — قبلاً کاربر اگر شوت نمی‌کرد، entry برای همیشه
-    # در حافظه گیر می‌ماند و پولش گم می‌شد
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("⚽ شوت!", callback_data="pen:shoot")],
-        [InlineKeyboardButton("❌ لغو و بازگشت پول", callback_data="pen:cancel")],
-    ])
+from games.casino import legacy_notice
 
-async def start_game(update, amount, context):
-    user_id = update.effective_user.id
-    utils.penalty_games[user_id] = {"entry": amount, "chat_id": update.effective_chat.id}
-    msg = await update.message.reply_text(f"⚽ <b>پنالتی</b>\n💰 ورودی: {utils.fmt(amount)}\n\nآماده‌ای؟ شوت کن!", parse_mode=ParseMode.HTML, reply_markup=kb())
-    utils.remember_owner(msg, user_id)
+rng = random.SystemRandom()
+DIRECTIONS = ("left", "center", "right")
+GOAL_MULT = 1.45
 
-async def handle_callback(query, context, data, user_id):
-    # 🔧 اضافه شدن شاخه لغو — entry را برگردان
-    if data == "pen:cancel":
-        game = utils.penalty_games.pop(user_id, None)
-        if game:
-            await db.add_balance(user_id, game["entry"])
-            await utils.safe_edit(query, f"❌ بازی لغو شد و {utils.fmt(game['entry'])} زرکوین برگشت.", utils.BACK_GAMES_KB)
-        else:
-            await utils.safe_answer(query, "❌ بازی فعالی نداری", show_alert=True)
-            return
-        await utils.safe_answer(query)
-        return
 
-    if data != "pen:shoot":
-        await utils.safe_answer(query); return
-    game = utils.penalty_games.pop(user_id, None)
-    if not game:
-        await utils.safe_answer(query, "❌ بازی فعالی نداری", show_alert=True); return
+def miniapp_play(body: dict) -> dict:
+    shot = body.get("dir")
+    if shot not in DIRECTIONS:
+        raise ValueError("جهت شوت را انتخاب کن")
+    keeper = rng.choice(DIRECTIONS)
+    goal = keeper != shot
+    return {"dir": shot, "keeper": keeper, "goal": goal, "won": goal, "mult": GOAL_MULT if goal else 0}
 
-    is_goal = random.random() < 0.5
-    chat_id = game["chat_id"]
 
-    if is_goal:
-        full = game["entry"] * 2
-        prize, comm = utils.apply_commission(full, config.COMMISSION_RATE)
-        await db.add_balance(user_id, prize)
-        text = f"⚽ <b>گل!!!</b> 🎉\n\n💰 جایزه: {utils.fmt(full)}\n💵 کارمزد 10%: {utils.fmt(comm)}\n✅ دریافتی: <b>{utils.fmt(prize)}</b> زرکوین"
-    else:
-        text = f"⚽ <b>دروازه‌بان گرفت!</b> 😢\n\n💸 متأسفانه {utils.fmt(game['entry'])} زرکوین از دست رفت."
+SOLO_INSTANT = {"penalty": miniapp_play}
 
-    await utils.safe_edit(query, text, utils.BACK_GAMES_KB)
-    await utils.safe_answer(query)
+# ─── سازگاری با کد قدیمی bot.py ───
+handle_callback = legacy_notice
+start_game = legacy_notice
 
-    # ✅ ثبت ماموریت‌ها
-    r_p = await db.progress_mission(user_id, "play_penalty", 1, base_xp=config.BASE_XP_PLAY_GAME)
-    await utils.notify_mission(context, chat_id, r_p)
 
-    r_any = await db.progress_mission(user_id, "play_any_game", 1, base_xp=0)
-    await utils.notify_mission(context, chat_id, r_any)
-
-    if is_goal:
-        r_win = await db.progress_mission(user_id, "win_penalty", 1, base_xp=config.BASE_XP_WIN_GAME)
-        await utils.notify_mission(context, chat_id, r_win)
-        r_any_win = await db.progress_mission(user_id, "win_any_game", 1, base_xp=0)
-        await utils.notify_mission(context, chat_id, r_any_win)
+def __getattr__(name):
+    if name.startswith("__"):
+        raise AttributeError(name)
+    return legacy_notice
