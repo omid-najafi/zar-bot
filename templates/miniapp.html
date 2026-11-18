@@ -272,6 +272,27 @@ input{font-family:inherit}
 .confetti{position:fixed;top:-10px;width:9px;height:14px;z-index:70;border-radius:2px;animation:fall linear forwards;pointer-events:none}
 @keyframes fall{to{transform:translateY(110vh) rotate(720deg)}}
 .section-t{font-size:13px;color:var(--muted);margin:4px 2px 10px;font-weight:700}
+/* ── penalty ── */
+.pitch{width:100%;border-radius:18px;padding:16px 10px 70px;background:repeating-linear-gradient(180deg,#15803d 0 26px,#166534 26px 52px);position:relative;direction:ltr}
+.goal{position:relative;height:120px;border:5px solid #fff;border-bottom:0;border-radius:6px 6px 0 0;display:grid;grid-template-columns:repeat(3,1fr);
+  background:repeating-linear-gradient(90deg,rgba(255,255,255,.18) 0 2px,transparent 2px 14px),repeating-linear-gradient(0deg,rgba(255,255,255,.18) 0 2px,transparent 2px 14px)}
+.zone{display:grid;place-items:center;font-size:12px;color:rgba(255,255,255,.65)}
+.keeper{position:absolute;bottom:0;left:50%;font-size:46px;transform:translateX(-50%);transition:left .45s cubic-bezier(.3,1.4,.5,1)}
+.pball{position:absolute;bottom:14px;left:50%;font-size:30px;transform:translateX(-50%);transition:all .5s ease-out}
+/* ── roulette ── */
+.rl-ball{width:130px;height:130px;border-radius:50%;display:grid;place-items:center;font-size:48px;font-weight:900;color:#fff;box-shadow:inset 0 -8px 20px rgba(0,0,0,.4),0 12px 30px rgba(0,0,0,.5);border:6px solid #3b2410;direction:ltr}
+.rl-ball.red{background:radial-gradient(circle at 35% 30%,#ff7a93,#be123c)}.rl-ball.black{background:radial-gradient(circle at 35% 30%,#555,#111)}.rl-ball.green{background:radial-gradient(circle at 35% 30%,#4ade80,#047857)}
+.rl-hist{display:flex;gap:5px;margin-top:12px;flex-wrap:wrap;justify-content:center;direction:ltr}
+.rl-hist span{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;font-size:11px;font-weight:800}
+.rl-hist .red{background:#be123c}.rl-hist .black{background:#222}.rl-hist .green{background:#047857}
+/* ── quiz ── */
+.qcard{padding:16px;border-radius:18px;background:linear-gradient(180deg,#1d1d2e,#131320);border:1px solid var(--line);margin-bottom:10px}
+.qcard h4{margin:0 0 12px;font-size:16px;line-height:1.9}
+.qopt{display:block;width:100%;text-align:right;padding:13px 14px;margin-bottom:8px;border-radius:14px;background:rgba(255,255,255,.05);border:1px solid var(--line);font-weight:700;font-size:14px}
+.qopt.on{border-color:var(--gold);background:rgba(245,196,81,.14)}
+.qopt.right{border-color:rgba(16,185,129,.6);background:rgba(16,185,129,.14)}
+.qopt.wrong{border-color:rgba(225,29,72,.6);background:rgba(225,29,72,.12)}
+.qlast{font-size:12.5px;color:var(--muted);padding:10px 12px;border-radius:12px;background:rgba(255,255,255,.04);margin-bottom:10px;line-height:1.9}
 </style>
 </head>
 <body>
@@ -357,7 +378,8 @@ const S = {
 const GRAD = {
   wheel: ['#f59e0b', '#9a3412'], crash: ['#818cf8', '#312e81'], mines: ['#10b981', '#064e3b'], hilo: ['#ec4899', '#831843'],
   coin: ['#eab308', '#713f12'], holdem: ['#e11d48', '#4c0519'], hokm: ['#a855f7', '#3b0764'], blackjack: ['#0ea5e9', '#0c4a6e'],
-  connect4: ['#ef4444', '#1e3a8a'], rps: ['#fb923c', '#7c2d12'], ttt: ['#2dd4bf', '#134e4a']
+  connect4: ['#ef4444', '#1e3a8a'], rps: ['#fb923c', '#7c2d12'], ttt: ['#2dd4bf', '#134e4a'],
+  card: ['#f43f5e', '#1e1b4b'], roulette: ['#16a34a', '#14532d'], penalty: ['#22c55e', '#166534'], quiz: ['#6366f1', '#1e1b4b']
 };
 const RANK = { 11: 'J', 12: 'Q', 13: 'K', 14: 'A' };
 const SUIT = { S: '♠', H: '♥', D: '♦', C: '♣' };
@@ -557,7 +579,8 @@ function openSolo(key, session) {
   if (session !== undefined) S.solo = session;
   $('#solo-title').textContent = g.emoji + ' ' + g.name;
   show('solo');
-  ({ wheel: renderWheel, crash: renderCrash, coin: renderCoin, mines: renderMines, hilo: renderHilo }[key] || (() => {}))();
+  ({ wheel: renderWheel, crash: renderCrash, coin: renderCoin, mines: renderMines, hilo: renderHilo,
+     card: renderCardGame, roulette: renderRoulette, penalty: renderPenalty }[key] || (() => {}))();
 }
 function soloResult(win, bet) {
   const profit = win - bet;
@@ -792,6 +815,88 @@ async function hiloCashout() {
   S.busy = false;
 }
 
+/* ── کارت شانس ── */
+function renderCardGame() {
+  $('#solo-body').innerHTML = `<div class="stage"><div id="cg-card">${cardHtml(null, 'lg')}</div><div id="cg-res"></div></div>
+    ${betControl('card', 'bet-solo')}
+    <div class="row2"><button class="btn btn-red" data-cp="red">🔴 قرمز ×۱٫۹</button><button class="btn btn-ghost" data-cp="black" style="background:#111">⚫ مشکی ×۱٫۹</button></div>
+    <div class="suitbtns">${['S', 'H', 'D', 'C'].map(x => `<button data-cp="${x}" class="${x === 'H' || x === 'D' ? 'red' : ''}">${SUIT[x]}<div style="font-size:11px;font-weight:800">×۳٫۸</div></button>`).join('')}</div>`;
+  bindBet('card', 'bet-solo');
+  document.querySelectorAll('[data-cp]').forEach(b => b.onclick = () => playCardGame(b.dataset.cp));
+}
+async function playCardGame(pick) {
+  if (S.busy) return; const bet = readBet('card', 'bet-solo'); if (!bet) return;
+  S.busy = true; document.querySelectorAll('[data-cp]').forEach(b => b.disabled = true); $('#cg-res').innerHTML = ''; haptic('medium');
+  $('#cg-card').innerHTML = cardHtml(null, 'lg deal');
+  try {
+    const d = await api('solo/card', { bet, pick }, { deferBalance: true });
+    await sleep(700);
+    $('#cg-card').innerHTML = cardHtml(d.card, 'lg deal');
+    setBalance(d.balance); $('#cg-res').innerHTML = soloResult(d.win, bet);
+  } catch (e) { errToast(e); }
+  S.busy = false; document.querySelectorAll('[data-cp]').forEach(b => b.disabled = false);
+}
+
+/* ── رولت ── */
+const RL_RED = new Set([1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36]);
+const rlColor = n => n === 0 ? 'green' : RL_RED.has(n) ? 'red' : 'black';
+const RL_TYPES = [['red', '🔴 قرمز', 2], ['black', '⚫ مشکی', 2], ['even', 'زوج', 2], ['odd', 'فرد', 2], ['low', '۱–۱۸', 2], ['high', '۱۹–۳۶', 2],
+  ['dozen1', '۱–۱۲', 3], ['dozen2', '۱۳–۲۴', 3], ['dozen3', '۲۵–۳۶', 3], ['number', '🎯 عدد', 36]];
+function renderRoulette() {
+  S.rlType = S.rlType || 'red'; S.rlHist = S.rlHist || [];
+  $('#solo-body').innerHTML = `<div class="stage"><div class="rl-ball green" id="rl-ball">?</div>
+      <div class="rl-hist">${S.rlHist.map(n => `<span class="${rlColor(n)}">${n}</span>`).join('')}</div><div id="rl-res"></div></div>
+    <div class="panel"><span class="label">🎯 نوع شرط</span><div class="chips">${RL_TYPES.map(([k, l, m]) => `<button class="chip ${S.rlType === k ? 'on' : ''}" data-rl="${k}">${l} <small>×${m}</small></button>`).join('')}</div>
+      <div id="rl-numbox" class="${S.rlType === 'number' ? '' : 'hidden'}" style="margin-top:10px"><div class="betrow"><input id="rl-num" inputmode="numeric" value="${S.rlNum != null ? S.rlNum : 7}" placeholder="۰ تا ۳۶"></div></div></div>
+    ${betControl('roulette', 'bet-solo')}<button class="btn btn-gold" id="rl-go">🎯 بچرخون!</button>`;
+  bindBet('roulette', 'bet-solo');
+  document.querySelectorAll('[data-rl]').forEach(b => b.onclick = () => { S.rlType = b.dataset.rl; document.querySelectorAll('[data-rl]').forEach(x => x.classList.toggle('on', x === b)); $('#rl-numbox').classList.toggle('hidden', S.rlType !== 'number'); haptic(); });
+  $('#rl-go').onclick = spinRoulette;
+}
+async function spinRoulette() {
+  if (S.busy) return; const bet = readBet('roulette', 'bet-solo'); if (!bet) return;
+  const body = { bet, type: S.rlType };
+  if (S.rlType === 'number') { const n = parseNum($('#rl-num').value); if (n < 0 || n > 36 || $('#rl-num').value.trim() === '') { toast('عدد بین ۰ تا ۳۶', 'err'); return; } body.number = n; S.rlNum = n; }
+  S.busy = true; $('#rl-go').disabled = true; $('#rl-res').innerHTML = ''; haptic('medium');
+  try {
+    const d = await api('solo/roulette', body, { deferBalance: true });
+    const ball = $('#rl-ball'), t0 = performance.now();
+    while (performance.now() - t0 < 1900) { const n = Math.floor(Math.random() * 37); ball.className = 'rl-ball ' + rlColor(n); ball.textContent = n; await sleep(70 + (performance.now() - t0) / 25); }
+    ball.className = 'rl-ball ' + d.color; ball.textContent = d.number;
+    S.rlHist = [d.number].concat(S.rlHist).slice(0, 12);
+    $('#solo-body .rl-hist').innerHTML = S.rlHist.map(n => `<span class="${rlColor(n)}">${n}</span>`).join('');
+    setBalance(d.balance); $('#rl-res').innerHTML = soloResult(d.win, bet);
+  } catch (e) { errToast(e); }
+  S.busy = false; const b = $('#rl-go'); if (b) b.disabled = false;
+}
+
+/* ── پنالتی ── */
+const PEN_X = { left: '17%', center: '50%', right: '83%' };
+function renderPenalty() {
+  $('#solo-body').innerHTML = `<div class="stage" style="padding:10px"><div class="pitch"><div class="goal"><div class="zone">چپ</div><div class="zone">وسط</div><div class="zone">راست</div>
+      <div class="keeper" id="pen-keeper">🧤</div></div><div class="pball" id="pen-ball">⚽</div></div><div id="pen-res"></div></div>
+    ${betControl('penalty', 'bet-solo')}
+    <div class="row3" style="direction:ltr"><button class="btn btn-gold" data-pen="left">⬅️ چپ</button><button class="btn btn-gold" data-pen="center">⬆️ وسط</button><button class="btn btn-gold" data-pen="right">➡️ راست</button></div>
+    <p class="hint" style="text-align:center">گل = ×۱٫۴۵ شرط — دروازه‌بان تصادفی شیرجه می‌زند</p>`;
+  bindBet('penalty', 'bet-solo');
+  document.querySelectorAll('[data-pen]').forEach(b => b.onclick = () => shootPenalty(b.dataset.pen));
+}
+async function shootPenalty(dir) {
+  if (S.busy) return; const bet = readBet('penalty', 'bet-solo'); if (!bet) return;
+  S.busy = true; document.querySelectorAll('[data-pen]').forEach(b => b.disabled = true); $('#pen-res').innerHTML = '';
+  const ball = $('#pen-ball'), kp = $('#pen-keeper');
+  ball.style.left = '50%'; ball.style.bottom = '14px'; ball.style.fontSize = '30px'; kp.style.left = '50%';
+  try {
+    const d = await api('solo/penalty', { bet, dir }, { deferBalance: true });
+    haptic('heavy'); await sleep(60);
+    kp.style.left = PEN_X[d.keeper]; ball.style.left = PEN_X[d.dir]; ball.style.bottom = '150px'; ball.style.fontSize = '22px';
+    await sleep(700);
+    setBalance(d.balance);
+    $('#pen-res').innerHTML = (d.goal ? '<div class="hint" style="font-size:18px;font-weight:900;color:#34d399">⚽ گـــل!</div>' : '<div class="hint" style="font-size:18px;font-weight:900;color:#fb7185">🧤 مهار شد!</div>') + soloResult(d.win, bet);
+  } catch (e) { errToast(e); }
+  S.busy = false; document.querySelectorAll('[data-pen]').forEach(b => b.disabled = false);
+}
+
 /* ════════════ شیت شرط دونفره ════════════ */
 function openSheet(key) {
   const g = S.games[key]; if (!g) return;
@@ -888,6 +993,7 @@ function statusText(g) {
   if (g.finished) return esc(g.reason);
   const s = g.state || {};
   if (g.game_key === 'rps') return s.my_pick ? (s.opp_picked ? '...' : '⏳ منتظر انتخاب حریف') : '🟢 انتخاب کن! (دست ' + fmt(s.round) + ')';
+  if (g.game_key === 'quiz') return s.my_answer != null ? '⏳ منتظر جواب حریف' : '🟢 جواب بده!';
   if (g.game_key === 'blackjack') return s.my_done ? '⏳ منتظر حریف' : '🟢 کارت بگیر یا بایست';
   if (g.game_key === 'hokm' && s.phase === 'trump') return s.i_am_hakem ? '👑 تو حاکمی — حکم را انتخاب کن' : '⏳ حریف حاکم است و حکم را انتخاب می‌کند';
   return g.your_turn ? '🟢 نوبت توئه' : '⏳ نوبت حریف';
@@ -941,11 +1047,24 @@ async function sendAction(payload) {
   catch (e) { errToast(e); if (e.data && e.data.game) renderGame(e.data.game); }
   S.acting = false;
 }
+$('#screen-game').addEventListener('input', e => { if (e.target.id === 'raise-amt') S.raiseVal = parseNum(e.target.value); });
 $('#screen-game').addEventListener('click', e => {
+  const ra = e.target.closest('[data-ra]');
+  if (ra && S.raiseBounds) {
+    const B = S.raiseBounds, pot = B.pot || 0;
+    let v = { min: B.min, half: Math.floor(pot / 2), pot: pot, double: pot * 2, max: B.max }[ra.dataset.ra] || B.min;
+    v = Math.max(B.min, Math.min(B.max, v)); S.raiseVal = v;
+    const inp = $('#raise-amt'); if (inp) inp.value = fmtPlain(v); haptic(); return;
+  }
   const b = e.target.closest('[data-act]');
   if (!b || b.disabled || b.classList.contains('unplayable')) return;
   const a = b.dataset.act, v = b.dataset.v;
-  const map = { cell: { cell: Number(v) }, col: { col: Number(v) }, pick: { pick: v }, bj: { action: v }, trump: { suit: v }, card: { card: v }, poker: { action: v } };
+  if (a === 'poker' && v === 'raise') {
+    const amt = parseNum(($('#raise-amt') || {}).value);
+    if (!amt) { toast('مبلغ رِیز را وارد کن', 'err'); return; }
+    sendAction({ action: 'raise', amount: amt }); S.raiseVal = 0; return;
+  }
+  const map = { cell: { cell: Number(v) }, col: { col: Number(v) }, pick: { pick: v }, bj: { action: v }, trump: { suit: v }, card: { card: v }, poker: { action: v }, answer: { answer: Number(v) } };
   if (map[a]) sendAction(map[a]);
 });
 
@@ -1028,11 +1147,34 @@ const RENDER = {
       <div class="val">دست تو: ${esc(s.my_hand)} — گذاشته: ${fmt(s.my_contrib)}</div></div>
       <div class="log">${s.log.map(esc).join('<br>')}</div>`;
     if (g.finished) { $('#g-actions').innerHTML = ''; return; }
-    $('#g-actions').innerHTML = `<div class="row3">
+    const mn = s.min_raise || 0, mx = s.max_raise || 0;
+    let rv = S.raiseVal || mn; rv = Math.max(mn, Math.min(mx, rv));
+    S.raiseBounds = { min: mn, max: mx, pot: g.pot };
+    $('#g-actions').innerHTML = `
+      ${s.can_raise ? `<div class="panel" style="margin:0"><span class="label">⬆️ مبلغ رِیز (از ${fmt(mn)} تا ${fmt(mx)}) — موجودی تو: ${fmt(s.my_balance)}</span>
+        <div class="betrow"><input id="raise-amt" inputmode="numeric" value="${fmtPlain(rv)}" ${can ? '' : 'disabled'}></div>
+        <div class="chips"><button class="chip" data-ra="min">حداقل</button><button class="chip" data-ra="half">½ پات</button><button class="chip" data-ra="pot">پات</button><button class="chip" data-ra="double">۲× پات</button><button class="chip" data-ra="max">🔥 آل‌این</button></div></div>` : ''}
+      <div class="row3">
       <button class="btn btn-ghost" data-act="poker" data-v="fold" ${can ? '' : 'disabled'}>🏳️ فولد</button>
       ${s.can_check ? `<button class="btn btn-green" data-act="poker" data-v="check" ${can ? '' : 'disabled'}>✔️ چک</button>`
         : `<button class="btn btn-green" data-act="poker" data-v="call" ${can ? '' : 'disabled'} style="font-size:13px">📞 کال ${short(s.call_amount)}</button>`}
-      <button class="btn btn-gold" data-act="poker" data-v="raise" ${can && s.can_raise ? '' : 'disabled'} style="font-size:13px">⬆️ رِیز ${short(s.raise_amount)}</button></div>`;
+      <button class="btn btn-gold" data-act="poker" data-v="raise" ${can && s.can_raise ? '' : 'disabled'} style="font-size:13px">⬆️ رِیز</button></div>`;
+  },
+  quiz(g) {
+    const s = g.state, can = !g.finished && s.my_answer == null && s.question;
+    let last = '';
+    if (s.last) {
+      const ok = s.last.mine === s.last.correct, ook = s.last.opp === s.last.correct;
+      last = `<div class="qlast">سوال قبل: ${esc(s.last.q)}<br>✅ جواب: <b style="color:#34d399">${esc(s.last.opts[s.last.correct])}</b><br>
+        تو: ${ok ? '✅ درست' : '❌ ' + (s.last.mine != null ? esc(s.last.opts[s.last.mine]) : 'بی‌جواب')} — حریف: ${ook ? '✅ درست' : '❌ اشتباه'}</div>`;
+    }
+    const q = s.question;
+    $('#g-board').innerHTML = `<div class="score"><div>${fmt(s.score_me)}<small>تو</small></div><span style="color:var(--muted);font-size:20px">:</span><div>${fmt(s.score_opp)}<small>حریف</small></div></div>
+      ${last}
+      ${q ? `<div class="qcard"><div class="hint" style="margin:0 0 6px">${s.sudden ? '⚡ مرگ ناگهانی — ' : ''}سوال ${fmt(s.idx + 1)} از ${fmt(s.total)}</div><h4>${esc(q.q)}</h4>
+        ${q.opts.map((o, i) => `<button class="qopt ${s.my_answer === i ? 'on' : ''}" data-act="answer" data-v="${i}" ${can ? '' : 'disabled'}>${esc(o)}</button>`).join('')}</div>
+        <p class="hint" style="text-align:center">${s.opp_answered ? '✅ حریف جواب داده' : '⏳ حریف هنوز جواب نداده'}</p>` : ''}`;
+    $('#g-actions').innerHTML = '';
   }
 };
 
@@ -1044,7 +1186,8 @@ async function boot() {
     try { tg.disableVerticalSwipes && tg.disableVerticalSwipes(); } catch (e) {}
     try { tg.BackButton.onClick(handleBack); } catch (e) {}
   }
-  if (!AUTH.initData && !AUTH.token) { showAuthError(); return; }
+  // باز شدن دامنه در مرورگر (بدون تلگرام) → پنل مدیریت (نیاز به نام کاربری و رمز)
+  if (!AUTH.initData && !AUTH.token) { location.replace('/admin'); return; }
   try {
     const d = await api('me');
     applyMe(d); S.me.commission = d.commission;
