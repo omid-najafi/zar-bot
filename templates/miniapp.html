@@ -1289,17 +1289,49 @@ async function init() {
     await refreshProfile(true);
     await loadGames();
   } catch (e) {
-    // 🔧 نمایش خطای دقیق برای عیب‌یابی
+    // 🔧 نمایش خطای دقیق + دکمه دیاگنوستیک
     const status = e.status ? ` (HTTP ${e.status})` : "";
     document.getElementById("loadingScreen").innerHTML =
       `<div class="big-dice">⚠️</div><div style="text-align:center; padding: 20px; font-size: 14px;">`
       + `<b>خطا در بارگذاری</b>${status}<br>`
       + `<span style="color:#ff8888;">${e.message}</span><br><br>`
-      + `<span style="color:#888; font-size:12px;">اگر خطا 401 است: احراز هویت ناموفق<br>اگر خطا 500 است: خطای سرور — لاگ‌ها را بررسی کنید<br>اگر fetch error است: سرور در دسترس نیست</span>`
-      + `<br><button class="btn btn-primary" onclick="location.reload()" style="margin-top:14px;">تلاش دوباره</button></div>`;
+      + `<div id="diagResult" style="text-align:right; font-size:12px; color:#aaa; background:#1a1a1a; padding:10px; border-radius:8px; margin:10px 0; display:none;"></div>`
+      + `<button class="btn btn-primary" onclick="runDiagnostic()" style="margin-top:8px;">🔍 دیاگنوستیک</button> `
+      + `<button class="btn btn-primary" onclick="location.reload()" style="margin-top:8px;">تلاش دوباره</button></div>`;
+    // اگه 401 است، دیاگنوستیک خودکار اجرا کن
+    if (e.status === 401) {
+      setTimeout(runDiagnostic, 500);
+    }
     return;
   }
   document.getElementById("loadingScreen").style.display = "none";
+}
+
+async function runDiagnostic() {
+  const el = document.getElementById("diagResult");
+  if (el) {
+    el.style.display = "block";
+    el.innerHTML = "⏳ در حال بررسی...";
+  }
+  try {
+    const res = await fetch("/api/debug/auth", {
+      headers: App.initData ? {"X-Telegram-Init-Data": App.initData} : {}
+    });
+    const d = await res.json();
+    const data = d.data || d;
+    let html = "<b>نتیجه دیاگنوستیک:</b><br>";
+    html += `• BOT_TOKEN تنظیم شده: ${data.bot_token_set ? '✅' : '❌'}<br>`;
+    html += `• initData دریافت شد: ${data.has_init_data ? '✅' : '❌'} (طول: ${data.init_data_length})<br>`;
+    html += `• نتیجه احراز هویت: ${data.auth_result || 'نامشخص'}<br>`;
+    if (data.reason) html += `• دلیل: <span style="color:#ff8888;">${data.reason}</span><br>`;
+    if (data.user_id) html += `• شناسه کاربر: ${data.user_id}<br>`;
+    if (data.db_user_exists !== undefined) html += `• کاربر در DB: ${data.db_user_exists}<br>`;
+    if (data.db_error) html += `• خطای DB: <span style="color:#ff8888;">${data.db_error}</span><br>`;
+    html += `• URL سرور: ${data.request_host}<br>`;
+    if (el) el.innerHTML = html;
+  } catch (err) {
+    if (el) el.innerHTML = `<span style="color:#ff8888;">❌ دیاگنوستیک ناموفق: ${err.message}</span>`;
+  }
 }
 
 init();
