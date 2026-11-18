@@ -1505,6 +1505,85 @@ async def handle_health(request: web.Request):
     return json_ok(status)
 
 
+# ═══════════ API: دیاگنوستیک احراز هویت (بدون نیاز به احراز هویت) ═══════════
+async def handle_debug_auth(request: web.Request):
+    """عیب‌یابی احراز هویت — نشان می‌دهد چرا 401 رخ می‌دهد.
+    GET /api/debug/auth — بررسی هدرهای فعلی
+    POST /api/debug/auth {"init_data": "..."} — تست یک initData خاص
+    """
+    result = {
+        "bot_token_set": bool(config.BOT_TOKEN),
+        "bot_token_length": len(config.BOT_TOKEN) if config.BOT_TOKEN else 0,
+        "webapp_public_url": getattr(config, "WEBAPP_PUBLIC_URL", ""),
+        "webapp_deep_link": getattr(config, "WEBAPP_DEEP_LINK", ""),
+        "request_origin": request.headers.get("Origin", ""),
+        "request_host": request.host,
+    }
+
+    # دریافت initData از هدر، query یا body
+    init_data = request.headers.get("X-Telegram-Init-Data") or request.query.get("init_data") or ""
+    browser_token = request.headers.get("X-Browser-Token") or request.query.get("token") or ""
+
+    if not init_data and request.method == "POST":
+        try:
+            body = await request.json()
+            init_data = body.get("init_data", "")
+        except Exception:
+            pass
+
+    result["has_init_data"] = bool(init_data)
+    result["init_data_length"] = len(init_data)
+    result["has_browser_token"] = bool(browser_token)
+
+    if init_data:
+        # اعتبارسنجی و نمایش جزئیات
+        try:
+            # پارس دستی برای نمایش جزئیات
+            pairs = {}
+            received_hash = None
+            for chunk in init_data.split("&"):
+                if "=" not in chunk:
+                    continue
+                k, _, v = chunk.partition("=")
+                if k == "hash":
+                    received_hash = v
+                else:
+                    pairs[k] = v
+            result["init_data_keys"] = list(pairs.keys())
+            result["has_hash"] = bool(received_hash)
+
+            # اعتبارسنجی کامل
+            tg_user = validate_init_data(init_data)
+            if tg_user:
+                result["auth_result"] = "✅ معتبر"
+                result["user_id"] = tg_user.get("id")
+                result["user_first_name"] = tg_user.get("first_name", "")
+                # بررسی DB
+                try:
+                    db_user = await db.get_user(int(tg_user.get("id")))
+                    result["db_user_exists"] = db_user is not None
+                    if db_user:
+                        result["db_balance"] = db_user.get("balance", 0)
+                except Exception as e:
+                    result["db_error"] = str(e)
+                    result["db_user_exists"] = "error"
+            else:
+                result["auth_result"] = "❌ نامعتبر"
+                # نمایش دلیل احتمالی
+                if not config.BOT_TOKEN:
+                    result["reason"] = "BOT_TOKEN تنظیم نشده"
+                elif not received_hash:
+                    result["reason"] = "هش در initData نیست"
+                else:
+                    result["reason"] = "هش مطابقت ندارد — BOT_TOKEN سرور با ربات یکی نیست یا initData دستکاری شده"
+        except Exception as e:
+            result["auth_result"] = f"❌ خطا در اعتبارسنجی: {e}"
+    else:
+        result["auth_result"] = "⚠️ initData ارسال نشده"
+
+    return json_ok(result)
+
+
 # ═══════════ ساخت و اجرای اپ ═══════════
 @web.middleware
 async def security_headers_middleware(request: web.Request, handler):
@@ -1537,6 +1616,8 @@ def create_app() -> web.Application:
     app.router.add_get("/", handle_index)
     app.router.add_get("/index.html", handle_index)
     app.router.add_get("/api/health", handle_health)
+    app.router.add_get("/api/debug/auth", handle_debug_auth)
+    app.router.add_post("/api/debug/auth", handle_debug_auth)
     app.router.add_get("/api/profile", handle_profile)
     app.router.add_get("/api/games", handle_games)
     app.router.add_post("/api/match/join", handle_match_join)
