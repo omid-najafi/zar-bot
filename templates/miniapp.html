@@ -1,1340 +1,1066 @@
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="color-scheme" content="dark">
 <title>🎲 قمارخانه زر</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css">
 <style>
-  :root {
-    --red: #e10600;
-    --red-dark: #8a0000;
-    --red-glow: #ff2525;
-    --black: #0a0a0a;
-    --black-2: #1a1a1a;
-    --black-3: #242424;
-    --gold: #d4af37;
-    --text: #f5f5f5;
-    --text-dim: #a0a0a0;
-    --green: #00d96b;
-    --shadow-red: 0 0 18px rgba(225, 6, 0, 0.55);
-  }
-  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
-  html, body {
-    height: 100%;
-    background: var(--black);
-    color: var(--text);
-    font-family: 'Tahoma', 'Vazirmatn', 'Segoe UI', sans-serif;
-    overflow-x: hidden;
-  }
-  body {
-    background:
-      radial-gradient(ellipse at top left, rgba(225, 6, 0, 0.18), transparent 50%),
-      radial-gradient(ellipse at bottom right, rgba(225, 6, 0, 0.10), transparent 60%),
-      linear-gradient(180deg, #0a0a0a 0%, #1a0606 100%);
-    min-height: 100vh;
-    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
-  }
-  /* ═══════ هدر بالای صفحه ═══════ */
-  .header {
-    position: sticky;
-    top: 0;
-    z-index: 50;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 10px 14px;
-    background: linear-gradient(90deg, rgba(10,10,10,0.97), rgba(40,5,5,0.97));
-    border-bottom: 2px solid var(--red);
-    box-shadow: 0 4px 14px rgba(0,0,0,0.6), inset 0 -1px 0 var(--red-glow);
-    backdrop-filter: blur(6px);
-  }
-  .brand {
-    display: flex; align-items: center; gap: 8px;
-    font-weight: 800; font-size: 18px;
-    background: linear-gradient(90deg, var(--gold), #ffcf5c, var(--gold));
-    -webkit-background-clip: text; background-clip: text; color: transparent;
-    text-shadow: 0 0 12px rgba(212,175,55,0.3);
-  }
-  .brand .dice { font-size: 22px; filter: drop-shadow(0 0 6px var(--red)); }
-  .user-chip {
-    display: flex; align-items: center; gap: 8px;
-    background: rgba(225, 6, 0, 0.12);
-    border: 1px solid var(--red-dark);
-    border-radius: 999px;
-    padding: 4px 10px 4px 4px;
-    box-shadow: inset 0 0 6px rgba(225,6,0,0.2);
-  }
-  .avatar {
-    width: 30px; height: 30px;
-    border-radius: 50%;
-    background: linear-gradient(135deg, var(--red), var(--red-dark));
-    display: flex; align-items: center; justify-content: center;
-    font-weight: 700; font-size: 14px; color: white;
-    border: 2px solid var(--gold);
-    overflow: hidden;
-  }
-  .avatar img { width: 100%; height: 100%; object-fit: cover; }
-  .user-info { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.1; }
-  .user-name { font-size: 12px; font-weight: 700; max-width: 90px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .user-balance { font-size: 13px; color: var(--gold); font-weight: 800; }
-  .level-badge {
-    background: linear-gradient(90deg, var(--red), #ff5050);
-    color: white; font-weight: 800; font-size: 10px;
-    padding: 1px 6px; border-radius: 4px; margin-right: 4px;
-  }
-  /* ═══════ محتوای اصلی ═══════ */
-  .container {
-    max-width: 480px;
-    margin: 0 auto;
-    padding: 14px;
-    padding-bottom: 80px;
-  }
-  .hero {
-    background: linear-gradient(135deg, rgba(225,6,0,0.18), rgba(0,0,0,0.4));
-    border: 1px solid var(--red-dark);
-    border-radius: 14px;
-    padding: 18px 16px;
-    margin-bottom: 14px;
-    position: relative; overflow: hidden;
-  }
-  .hero::before {
-    content: ""; position: absolute; top: -20px; right: -20px;
-    width: 80px; height: 80px; border-radius: 50%;
-    background: radial-gradient(circle, var(--red-glow), transparent 70%);
-    filter: blur(8px);
-  }
-  .hero h1 {
-    font-size: 22px; font-weight: 900; color: var(--red-glow);
-    text-shadow: 0 0 14px rgba(225,6,0,0.6); margin-bottom: 4px;
-  }
-  .hero p { color: var(--text-dim); font-size: 13px; line-height: 1.6; }
-  .hero .balance-big {
-    margin-top: 10px;
-    font-size: 26px; font-weight: 900; color: var(--gold);
-    text-shadow: 0 0 10px rgba(212,175,55,0.4);
-  }
-  /* ═══════ کارت‌های بازی ═══════ */
-  .section-title {
-    display: flex; align-items: center; gap: 6px;
-    font-size: 14px; font-weight: 800; color: var(--text-dim);
-    margin: 14px 0 10px; text-transform: uppercase;
-    letter-spacing: 1px;
-  }
-  .section-title::before, .section-title::after {
-    content: ""; flex: 1; height: 1px;
-    background: linear-gradient(90deg, transparent, var(--red-dark), transparent);
-  }
-  .games-grid {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 10px;
-  }
-  .game-card {
-    background: linear-gradient(160deg, var(--black-3), var(--black-2));
-    border: 1px solid #333;
-    border-radius: 12px;
-    padding: 14px 10px;
-    text-align: center;
-    cursor: pointer;
-    transition: all 0.18s ease;
-    position: relative; overflow: hidden;
-  }
-  .game-card::after {
-    content: ""; position: absolute; top: 0; left: 0; right: 0; height: 2px;
-    background: linear-gradient(90deg, transparent, var(--red), transparent);
-    opacity: 0; transition: opacity 0.2s;
-  }
-  .game-card:active { transform: scale(0.96); border-color: var(--red); }
-  .game-card:hover { border-color: var(--red-dark); }
-  .game-card:hover::after { opacity: 1; }
-  .game-emoji { font-size: 32px; display: block; margin-bottom: 4px; filter: drop-shadow(0 0 6px rgba(225,6,0,0.4)); }
-  .game-name { font-size: 13px; font-weight: 800; color: var(--text); }
-  .game-type {
-    display: inline-block; margin-top: 4px;
-    font-size: 10px; padding: 1px 6px; border-radius: 4px;
-    background: rgba(225,6,0,0.18); color: var(--red-glow);
-    font-weight: 700;
-  }
-  .game-desc { font-size: 11px; color: var(--text-dim); margin-top: 4px; line-height: 1.4; }
-  /* ═══════ مودال شرط ═══════ */
-  .modal-overlay {
-    position: fixed; inset: 0;
-    background: rgba(0,0,0,0.85);
-    backdrop-filter: blur(4px);
-    display: none; align-items: center; justify-content: center;
-    z-index: 100; padding: 14px;
-  }
-  .modal-overlay.active { display: flex; }
-  .modal {
-    background: linear-gradient(180deg, var(--black-3), var(--black));
-    border: 1px solid var(--red);
-    border-radius: 16px;
-    padding: 20px 16px;
-    width: 100%; max-width: 380px;
-    box-shadow: 0 0 30px rgba(225,6,0,0.4);
-    animation: slideUp 0.25s ease;
-  }
-  @keyframes slideUp {
-    from { transform: translateY(40px); opacity: 0; }
-    to { transform: translateY(0); opacity: 1; }
-  }
-  .modal h2 {
-    color: var(--red-glow); font-size: 18px; font-weight: 900;
-    margin-bottom: 4px; text-align: center;
-  }
-  .modal .subtitle { color: var(--text-dim); font-size: 12px; text-align: center; margin-bottom: 14px; }
-  .bet-input-row {
-    display: flex; gap: 6px; margin-bottom: 10px;
-  }
-  .bet-input {
-    flex: 1; background: var(--black);
-    border: 1px solid var(--red-dark);
-    border-radius: 8px; padding: 10px;
-    color: var(--gold); font-size: 16px; font-weight: 800;
-    text-align: center; font-family: monospace;
-  }
-  .bet-input:focus { outline: none; border-color: var(--red); box-shadow: 0 0 8px rgba(225,6,0,0.4); }
-  .bet-quick { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
-  .quick-btn {
-    flex: 1; min-width: 60px;
-    background: var(--black-2); border: 1px solid #333;
-    color: var(--text-dim); font-size: 11px; font-weight: 700;
-    padding: 6px 4px; border-radius: 6px; cursor: pointer;
-  }
-  .quick-btn:active { background: var(--red-dark); color: white; }
-  /* ═══════ دکمه‌ها ═══════ */
-  .btn {
-    width: 100%; padding: 12px;
-    border: none; border-radius: 10px;
-    font-size: 15px; font-weight: 800;
-    cursor: pointer; transition: all 0.15s;
-    font-family: inherit;
-  }
-  .btn-primary {
-    background: linear-gradient(90deg, var(--red), var(--red-dark));
-    color: white;
-    box-shadow: 0 4px 14px rgba(225,6,0,0.4), inset 0 1px 0 rgba(255,255,255,0.15);
-  }
-  .btn-primary:active { transform: scale(0.97); }
-  .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
-  .btn-secondary {
-    background: var(--black-2); color: var(--text);
-    border: 1px solid #333;
-  }
-  .btn-secondary:active { transform: scale(0.97); background: var(--black-3); }
-  .btn-danger {
-    background: linear-gradient(90deg, #6a0000, #3a0000); color: #ff7777;
-    border: 1px solid #5a0000;
-  }
-  .btn-row { display: flex; gap: 8px; }
-  .btn-row .btn { flex: 1; }
-  /* ═══════ صفحه مچ‌میکینگ ═══════ */
-  .matchmaking {
-    text-align: center;
-    padding: 30px 16px;
-  }
-  .pulse-loader {
-    width: 90px; height: 90px;
-    margin: 0 auto 16px;
-    border-radius: 50%;
-    background: radial-gradient(circle, var(--red-glow) 10%, transparent 70%);
-    position: relative;
-    animation: pulse 1.6s infinite ease-in-out;
-  }
-  .pulse-loader::before {
-    content: "🎲"; position: absolute; inset: 0;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 38px;
-  }
-  @keyframes pulse {
-    0%, 100% { transform: scale(1); opacity: 1; }
-    50% { transform: scale(1.15); opacity: 0.7; }
-  }
-  .countdown-ring {
-    display: inline-block;
-    width: 56px; height: 56px;
-    border-radius: 50%;
-    border: 3px solid var(--red-dark);
-    border-top-color: var(--red-glow);
-    display: flex; align-items: center; justify-content: center;
-    font-size: 22px; font-weight: 900; color: var(--red-glow);
-    margin: 0 auto 10px;
-    animation: spin 1s linear infinite;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  .mm-status { color: var(--text); font-size: 14px; margin: 8px 0; }
-  .mm-queue { color: var(--text-dim); font-size: 12px; }
-  /* ═══════ صفحه بازی ═══════ */
-  .game-screen {
-    display: none;
-  }
-  .game-screen.active { display: block; }
-  .opponent-bar {
-    background: linear-gradient(90deg, var(--black-3), var(--black-2));
-    border: 1px solid var(--red-dark);
-    border-radius: 10px;
-    padding: 8px 12px;
-    display: flex; align-items: center; justify-content: space-between;
-    margin-bottom: 10px;
-  }
-  .vs-divider {
-    text-align: center; color: var(--red-glow);
-    font-size: 14px; font-weight: 900; margin: 6px 0;
-    text-shadow: 0 0 10px rgba(225,6,0,0.6);
-  }
-  .hand {
-    display: flex; gap: 6px; justify-content: center;
-    flex-wrap: wrap; margin: 10px 0;
-  }
-  .card {
-    background: linear-gradient(160deg, #fff, #e8e8e8);
-    color: #000;
-    border-radius: 8px;
-    padding: 10px 6px;
-    min-width: 50px;
-    text-align: center;
-    font-size: 18px; font-weight: 800;
-    box-shadow: 0 4px 10px rgba(0,0,0,0.4);
-    cursor: pointer; transition: all 0.15s;
-    border: 2px solid transparent;
-    user-select: none;
-  }
-  .card.playable:hover { border-color: var(--red-glow); transform: translateY(-4px); box-shadow: 0 8px 16px rgba(225,6,0,0.4); }
-  .card:active { transform: scale(0.95); }
-  .card.red { color: var(--red-dark); }
-  .card.hidden-card {
-    background: linear-gradient(135deg, var(--red-dark), #4a0000);
-    color: var(--gold);
-    border: 1px solid var(--red);
-    cursor: default;
-  }
-  .card.hidden-card::before { content: "?"; }
-  .card .rank { font-size: 14px; }
-  .card .suit { font-size: 18px; }
-  .community {
-    background: rgba(0,0,0,0.4);
-    border: 1px dashed var(--red-dark);
-    border-radius: 10px;
-    padding: 12px;
-    margin: 10px 0;
-    text-align: center;
-  }
-  .community-label {
-    font-size: 11px; color: var(--text-dim);
-    text-transform: uppercase; margin-bottom: 6px;
-  }
-  .turn-indicator {
-    text-align: center; padding: 8px;
-    background: rgba(225,6,0,0.12);
-    border-left: 3px solid var(--red);
-    border-radius: 6px;
-    margin: 10px 0;
-    font-weight: 700; font-size: 13px;
-  }
-  .turn-indicator.mine { color: var(--green); border-left-color: var(--green); background: rgba(0,217,107,0.1); }
-  .turn-indicator.opponent { color: var(--text-dim); }
-  .pot-display {
-    text-align: center;
-    color: var(--gold); font-weight: 900; font-size: 18px;
-    margin: 8px 0;
-    text-shadow: 0 0 8px rgba(212,175,55,0.4);
-  }
-  .actions-row {
-    display: flex; gap: 6px; margin: 12px 0;
-  }
-  .actions-row .btn { padding: 10px 6px; font-size: 13px; }
-  /* ═══════ نتیجه ═══════ */
-  .result-banner {
-    text-align: center;
-    padding: 20px 14px;
-    border-radius: 12px;
-    margin: 14px 0;
-    border: 2px solid;
-    font-weight: 900;
-  }
-  .result-banner.win { background: linear-gradient(135deg, rgba(0,217,107,0.15), transparent); border-color: var(--green); color: var(--green); }
-  .result-banner.lose { background: linear-gradient(135deg, rgba(225,6,0,0.15), transparent); border-color: var(--red); color: var(--red-glow); }
-  .result-banner.tie { background: linear-gradient(135deg, rgba(212,175,55,0.15), transparent); border-color: var(--gold); color: var(--gold); }
-  .result-banner h3 { font-size: 22px; margin-bottom: 4px; }
-  .result-banner .prize { font-size: 18px; color: var(--gold); }
-  /* ═══════ نوار پایین ═══════ */
-  .bottom-bar {
-    position: fixed; bottom: 0; left: 0; right: 0;
-    background: linear-gradient(180deg, var(--black-2), var(--black));
-    border-top: 2px solid var(--red);
-    padding: 8px 14px;
-    display: flex; justify-content: space-around;
-    z-index: 40;
-  }
-  .bottom-bar .nav-btn {
-    background: none; border: none; color: var(--text-dim);
-    font-size: 11px; padding: 4px 10px;
-    cursor: pointer; font-family: inherit;
-    display: flex; flex-direction: column; align-items: center; gap: 2px;
-  }
-  .bottom-bar .nav-btn.active { color: var(--red-glow); }
-  .bottom-bar .nav-btn .icon { font-size: 18px; }
-  /* ═══════ توست ═══════ */
-  .toast {
-    position: fixed; top: 70px; left: 50%; transform: translateX(-50%);
-    background: var(--black-3); border: 1px solid var(--red);
-    color: var(--text); padding: 10px 16px;
-    border-radius: 8px; font-size: 13px; font-weight: 700;
-    z-index: 200; opacity: 0; transition: opacity 0.25s;
-    pointer-events: none;
-    max-width: 90%; text-align: center;
-  }
-  .toast.show { opacity: 1; }
-  .toast.error { border-color: var(--red); color: #ff8888; }
-  .toast.success { border-color: var(--green); color: var(--green); }
-  /* ═══════ انیمیشن اسلات ═══════ */
-  .slots-reels {
-    display: flex; justify-content: center; gap: 10px;
-    margin: 16px 0;
-  }
-  .reel {
-    width: 70px; height: 70px;
-    background: white; color: var(--red-dark);
-    border-radius: 12px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 40px;
-    box-shadow: 0 4px 14px rgba(0,0,0,0.5);
-    border: 2px solid var(--gold);
-  }
-  .reel.spinning { animation: shake 0.1s linear infinite; }
-  @keyframes shake {
-    0% { transform: translateY(0); }
-    50% { transform: translateY(-3px); }
-    100% { transform: translateY(0); }
-  }
-  .hidden { display: none !important; }
-  .loading-screen {
-    position: fixed; inset: 0; background: var(--black);
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-    z-index: 300; color: var(--text-dim);
-  }
-  .loading-screen .big-dice { font-size: 60px; animation: pulse 1s infinite; margin-bottom: 14px; }
-  .form-row { margin-bottom: 12px; }
-  .form-label { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 4px; }
-  .form-select {
-    width: 100%; background: var(--black);
-    border: 1px solid var(--red-dark);
-    color: var(--text); padding: 10px;
-    border-radius: 8px; font-family: inherit; font-size: 14px;
-  }
+:root{
+  --bg:#07070c;--bg2:#0e0e17;--panel:rgba(255,255,255,.045);--panel2:rgba(255,255,255,.08);
+  --line:rgba(255,255,255,.08);--text:#f4f4f7;--muted:#9a9ab0;--gold:#f5c451;--gold2:#d99a1e;
+  --red:#e11d48;--red2:#9f1239;--green:#10b981;--blue:#38bdf8;--radius:18px;
+  --safe-b:env(safe-area-inset-bottom,0px);
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:Vazirmatn,Tahoma,sans-serif;min-height:100%;overscroll-behavior:none}
+body{background:
+  radial-gradient(1200px 500px at 100% -10%,rgba(225,29,72,.18),transparent 60%),
+  radial-gradient(900px 500px at -10% 0%,rgba(245,196,81,.12),transparent 55%),var(--bg);background-attachment:fixed}
+button{font-family:inherit;color:inherit;border:0;cursor:pointer;background:none}
+button:disabled{opacity:.45;cursor:not-allowed}
+input{font-family:inherit}
+.hidden{display:none!important}
+#app{max-width:560px;margin:0 auto;padding:12px 14px calc(24px + var(--safe-b))}
+
+/* ── top bar ── */
+.topbar{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 4px 14px;position:sticky;top:0;z-index:20;
+  background:linear-gradient(var(--bg) 70%,transparent)}
+.who{display:flex;align-items:center;gap:10px;min-width:0}
+.avatar{width:42px;height:42px;border-radius:14px;display:grid;place-items:center;font-weight:800;font-size:18px;flex:none;
+  background:linear-gradient(135deg,var(--gold),var(--red));color:#160b00;box-shadow:0 6px 20px rgba(225,29,72,.35)}
+.who-name{font-weight:700;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:170px}
+.who-lvl{font-size:11px;color:var(--gold);background:rgba(245,196,81,.12);border:1px solid rgba(245,196,81,.25);padding:1px 8px;border-radius:99px;display:inline-block;margin-top:2px}
+.bal{display:flex;align-items:center;gap:8px;padding:8px 14px;border-radius:99px;background:linear-gradient(135deg,rgba(245,196,81,.16),rgba(245,196,81,.05));
+  border:1px solid rgba(245,196,81,.35);font-weight:800;color:var(--gold);font-size:15px;white-space:nowrap}
+.bal .coin{width:20px;height:20px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#fff3c4,var(--gold) 45%,var(--gold2));box-shadow:0 0 12px rgba(245,196,81,.6)}
+.bal.bump{animation:bump .5s}
+@keyframes bump{40%{transform:scale(1.12)}}
+
+/* ── screens ── */
+.screen{display:none}
+.screen.active{display:block;animation:fadeUp .35s ease}
+@keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+
+/* ── hero ── */
+.hero{position:relative;overflow:hidden;border-radius:24px;padding:20px;margin-bottom:16px;
+  background:linear-gradient(135deg,#1a0a10 0%,#2a0d18 45%,#1b1408 100%);border:1px solid rgba(245,196,81,.18)}
+.hero::before{content:"";position:absolute;inset:-40%;background:conic-gradient(from 0deg,transparent,rgba(245,196,81,.12),transparent 30%);animation:spin 10s linear infinite}
+.hero>*{position:relative}
+.hero h1{margin:0 0 4px;font-size:21px;font-weight:900;background:linear-gradient(90deg,#fff,var(--gold));-webkit-background-clip:text;background-clip:text;color:transparent}
+.hero p{margin:0;color:#cfc6d6;font-size:13px;line-height:1.9}
+.hero .big{margin-top:14px;display:flex;align-items:flex-end;gap:8px}
+.hero .big b{font-size:30px;font-weight:900;color:var(--gold);letter-spacing:-.5px}
+.hero .big span{color:var(--muted);font-size:13px;padding-bottom:6px}
+.hero .suits{position:absolute;left:14px;top:12px;font-size:28px;opacity:.18;letter-spacing:4px}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+.resume{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 14px;border-radius:16px;margin-bottom:14px;
+  background:rgba(16,185,129,.1);border:1px solid rgba(16,185,129,.35);font-size:13px}
+.resume button{background:var(--green);color:#03140e;font-weight:800;padding:8px 14px;border-radius:12px}
+
+/* ── tabs ── */
+.tabs{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:5px;border-radius:16px;background:var(--panel);border:1px solid var(--line);margin-bottom:14px}
+.tab{padding:11px;border-radius:12px;font-weight:700;font-size:14px;color:var(--muted);transition:.25s}
+.tab.active{background:linear-gradient(135deg,var(--red),var(--red2));color:#fff;box-shadow:0 6px 18px rgba(225,29,72,.35)}
+
+/* ── game grid ── */
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.gcard{position:relative;text-align:right;padding:14px;border-radius:var(--radius);background:var(--panel);border:1px solid var(--line);overflow:hidden;
+  transition:transform .2s,border-color .2s;min-height:150px;display:flex;flex-direction:column}
+.gcard:active{transform:scale(.97)}
+.gcard::after{content:"";position:absolute;inset:auto -30% -60% auto;width:140px;height:140px;border-radius:50%;background:var(--g1);opacity:.18;filter:blur(30px)}
+.gicon{width:52px;height:52px;border-radius:16px;display:grid;place-items:center;font-size:28px;margin-bottom:10px;
+  background:linear-gradient(135deg,var(--g1),var(--g2));box-shadow:0 8px 22px -6px var(--g1)}
+.gname{font-weight:800;font-size:15px;margin-bottom:4px}
+.gdesc{font-size:11.5px;color:var(--muted);line-height:1.8;flex:1}
+.gmeta{margin-top:8px;font-size:11px;color:var(--gold);display:flex;justify-content:space-between;align-items:center}
+.badge2p{position:absolute;top:12px;left:12px;font-size:10px;padding:2px 8px;border-radius:99px;background:rgba(56,189,248,.14);color:var(--blue);border:1px solid rgba(56,189,248,.3)}
+
+/* ── common ui ── */
+.subhead{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+.iconbtn{width:40px;height:40px;border-radius:12px;background:var(--panel);border:1px solid var(--line);display:grid;place-items:center;font-size:18px;flex:none}
+.subhead h2{margin:0;font-size:18px;font-weight:800;flex:1}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px;margin-bottom:12px}
+.btn{width:100%;padding:15px;border-radius:16px;font-weight:800;font-size:16px;transition:transform .15s,filter .2s}
+.btn:active{transform:scale(.98)}
+.btn-gold{background:linear-gradient(135deg,#ffd978,var(--gold2));color:#1d1200;box-shadow:0 10px 26px -8px rgba(245,196,81,.7)}
+.btn-red{background:linear-gradient(135deg,#fb3b65,var(--red2));color:#fff;box-shadow:0 10px 26px -8px rgba(225,29,72,.7)}
+.btn-green{background:linear-gradient(135deg,#34d399,#047857);color:#02140d;box-shadow:0 10px 26px -8px rgba(16,185,129,.7)}
+.btn-ghost{background:var(--panel2);border:1px solid var(--line);color:var(--text)}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.row3{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.label{font-size:12px;color:var(--muted);margin-bottom:8px;display:block}
+.betrow{display:flex;gap:8px;align-items:center}
+.betrow input{flex:1;min-width:0;text-align:center;font-size:20px;font-weight:800;color:var(--gold);background:rgba(0,0,0,.35);border:1px solid rgba(245,196,81,.3);
+  border-radius:14px;padding:11px;outline:none;direction:ltr}
+.betrow input:focus{border-color:var(--gold);box-shadow:0 0 0 3px rgba(245,196,81,.15)}
+.betrow button{width:52px;height:50px;border-radius:14px;background:var(--panel2);border:1px solid var(--line);font-weight:800}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.chip{padding:7px 12px;border-radius:99px;font-size:12.5px;font-weight:700;background:rgba(255,255,255,.06);border:1px solid var(--line)}
+.chip.on,.chip:active{background:rgba(245,196,81,.18);border-color:rgba(245,196,81,.5);color:var(--gold)}
+.hint{font-size:11px;color:var(--muted);margin-top:8px}
+.stage{position:relative;border-radius:22px;padding:18px;margin-bottom:12px;min-height:240px;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  background:radial-gradient(circle at 50% 30%,rgba(255,255,255,.06),transparent 60%),linear-gradient(180deg,#12121d,#0b0b13);border:1px solid var(--line);overflow:hidden}
+.result-pill{margin-top:12px;padding:8px 18px;border-radius:99px;font-weight:800;font-size:15px;animation:pop .4s}
+.result-pill.win{background:rgba(16,185,129,.15);color:#34d399;border:1px solid rgba(16,185,129,.4)}
+.result-pill.lose{background:rgba(225,29,72,.13);color:#fb7185;border:1px solid rgba(225,29,72,.4)}
+@keyframes pop{0%{transform:scale(.6);opacity:0}70%{transform:scale(1.08)}100%{transform:none;opacity:1}}
+.stats{display:flex;justify-content:space-around;gap:8px;width:100%;margin-top:12px}
+.stat{text-align:center;flex:1;padding:8px;border-radius:12px;background:rgba(255,255,255,.04)}
+.stat small{display:block;color:var(--muted);font-size:11px}
+.stat b{font-size:15px;color:var(--gold)}
+
+/* ── wheel ── */
+.wheel-wrap{position:relative;width:min(78vw,300px);aspect-ratio:1}
+.wheel-wrap svg{width:100%;height:100%;transition:transform 4.2s cubic-bezier(.12,.75,.1,1);filter:drop-shadow(0 10px 30px rgba(0,0,0,.6))}
+.wheel-pointer{position:absolute;top:-6px;left:50%;transform:translateX(-50%);width:0;height:0;border-left:14px solid transparent;border-right:14px solid transparent;
+  border-top:26px solid var(--gold);filter:drop-shadow(0 3px 6px rgba(0,0,0,.6));z-index:2}
+.wheel-hub{position:absolute;inset:39%;border-radius:50%;background:radial-gradient(circle at 35% 30%,#fff3c4,var(--gold) 50%,var(--gold2));display:grid;place-items:center;
+  font-weight:900;color:#2a1800;font-size:13px;box-shadow:0 0 0 4px #1a1209,0 0 24px rgba(245,196,81,.5)}
+
+/* ── crash ── */
+.crash-num{font-size:58px;font-weight:900;letter-spacing:-1px;direction:ltr;transition:color .2s}
+.crash-num.passed{color:#34d399;text-shadow:0 0 30px rgba(16,185,129,.5)}
+.crash-num.dead{color:#fb7185;text-shadow:0 0 30px rgba(225,29,72,.5)}
+.rocket{font-size:46px;transition:transform .1s linear}
+.rocket.fly{animation:shake .15s infinite}
+@keyframes shake{50%{translate:1px -1px}}
+.crash-sky{position:absolute;inset:0;background-image:radial-gradient(1px 1px at 20% 30%,#fff8,transparent),radial-gradient(1px 1px at 70% 60%,#fff6,transparent),radial-gradient(1.5px 1.5px at 40% 80%,#fff5,transparent),radial-gradient(1px 1px at 85% 20%,#fff7,transparent);opacity:.6}
+.target-tag{font-size:13px;color:var(--muted);margin-top:4px}
+
+/* ── coin ── */
+.coin3d{width:150px;height:150px;position:relative;transform-style:preserve-3d;transition:transform 2.2s cubic-bezier(.2,.8,.2,1)}
+.face{position:absolute;inset:0;border-radius:50%;display:grid;place-items:center;font-size:62px;backface-visibility:hidden;
+  background:radial-gradient(circle at 35% 30%,#fff3c4,var(--gold) 45%,var(--gold2) 85%);box-shadow:inset 0 0 0 8px rgba(120,70,0,.35),0 14px 40px rgba(0,0,0,.6)}
+.face.back{transform:rotateY(180deg)}
+.coin-scene{perspective:800px;margin:10px 0}
+
+/* ── mines ── */
+.mgrid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;width:100%;max-width:340px}
+.mcell{aspect-ratio:1;border-radius:12px;background:linear-gradient(180deg,#232336,#191926);border:1px solid rgba(255,255,255,.07);font-size:24px;display:grid;place-items:center;
+  box-shadow:inset 0 -3px 0 rgba(0,0,0,.35);transition:transform .15s}
+.mcell:not(:disabled):active{transform:scale(.92)}
+.mcell.gem{background:linear-gradient(180deg,#0f3d30,#0a2a21);border-color:rgba(16,185,129,.5);animation:pop .3s}
+.mcell.mine{background:linear-gradient(180deg,#3d0f1a,#2a0a12);border-color:rgba(225,29,72,.5)}
+.mcell.boom{background:var(--red);animation:pop .3s}
+.mcell.dim{opacity:.5}
+
+/* ── cards ── */
+.card{width:54px;height:78px;border-radius:9px;background:linear-gradient(180deg,#fff,#eceff4);color:#111;position:relative;flex:none;
+  box-shadow:0 6px 16px rgba(0,0,0,.45);font-weight:800;display:inline-block;direction:ltr;transition:transform .2s}
+.card.red{color:#d10f3a}
+.card .cr{position:absolute;top:4px;left:6px;font-size:15px;line-height:1}
+.card .cs{position:absolute;top:20px;left:6px;font-size:12px;line-height:1}
+.card .cc{position:absolute;bottom:6px;right:7px;font-size:26px;line-height:1}
+.card.back{background:repeating-linear-gradient(45deg,#7f1d1d 0 6px,#991b1b 6px 12px);border:3px solid #fde68a}
+.card.lg{width:96px;height:138px;border-radius:14px}
+.card.lg .cr{font-size:26px;top:8px;left:10px}.card.lg .cs{font-size:20px;top:36px;left:10px}.card.lg .cc{font-size:52px;bottom:10px;right:12px}
+.card.sm{width:42px;height:60px}
+.card.sm .cr{font-size:13px}.card.sm .cs{top:17px;font-size:10px}.card.sm .cc{font-size:19px}
+.card.empty{background:rgba(255,255,255,.04);border:1.5px dashed rgba(255,255,255,.15);box-shadow:none}
+.card.deal{animation:deal .35s ease}
+@keyframes deal{from{transform:translateY(-20px) rotate(-8deg);opacity:0}}
+.cards{display:flex;gap:6px;justify-content:center;flex-wrap:wrap}
+.hand{display:flex;justify-content:center;padding:14px 4px 4px;overflow-x:auto}
+.hand .card{margin-inline-start:-18px}
+.hand .card:first-child{margin-inline-start:0}
+.hand .card.playable{transform:translateY(-12px);box-shadow:0 0 0 2px var(--gold),0 10px 20px rgba(0,0,0,.5);cursor:pointer}
+.hand .card.unplayable{filter:brightness(.55)}
+.opp-hand .card{margin-inline-start:-30px}
+.opp-hand .card:first-child{margin-inline-start:0}
+
+/* ── game screen ── */
+.ghead{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+.ghead h2{flex:1;margin:0;font-size:17px;font-weight:800}
+.potpill{padding:7px 12px;border-radius:99px;background:rgba(245,196,81,.12);border:1px solid rgba(245,196,81,.3);color:var(--gold);font-weight:800;font-size:13px;white-space:nowrap}
+.vs{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:8px;margin-bottom:10px}
+.pcard{display:flex;align-items:center;gap:8px;padding:10px;border-radius:16px;background:var(--panel);border:1px solid var(--line);min-width:0;transition:.25s}
+.pcard.turn{border-color:rgba(245,196,81,.6);box-shadow:0 0 0 3px rgba(245,196,81,.12);background:rgba(245,196,81,.06)}
+.pcard .avatar{width:34px;height:34px;font-size:14px;border-radius:11px}
+.pcard.oppc .avatar{background:linear-gradient(135deg,#38bdf8,#6366f1);box-shadow:none}
+.pcard b{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
+.pcard small{font-size:11px;color:var(--muted)}
+.vs-mid{font-weight:900;color:var(--red);font-size:14px}
+.timer{height:6px;border-radius:99px;background:rgba(255,255,255,.07);overflow:hidden;margin-bottom:8px}
+.timer i{display:block;height:100%;background:linear-gradient(90deg,var(--gold),var(--red));border-radius:99px;transition:width .25s linear}
+.timer.low i{background:var(--red)}
+.gstatus{text-align:center;font-weight:700;font-size:14px;margin:6px 0 12px;min-height:22px}
+.gstatus .t{color:var(--muted);font-weight:500;font-size:12px;margin-inline-start:6px}
+
+.tttg{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;max-width:320px;margin:0 auto}
+.tttc{aspect-ratio:1;border-radius:18px;background:linear-gradient(180deg,#1d1d2c,#141420);border:1px solid var(--line);font-size:48px;font-weight:900;display:grid;place-items:center}
+.tttc.x{color:#fb7185}.tttc.o{color:var(--gold)}
+.tttc.win{background:rgba(16,185,129,.18);border-color:rgba(16,185,129,.6)}
+.c4{display:grid;grid-template-columns:repeat(7,1fr);gap:5px;padding:10px;border-radius:18px;background:linear-gradient(180deg,#1e3a8a,#172554);box-shadow:inset 0 0 0 2px rgba(255,255,255,.08);direction:ltr}
+.c4col{display:grid;grid-template-rows:repeat(6,1fr);gap:5px;border-radius:10px;padding:2px}
+.c4col.can:active{background:rgba(255,255,255,.08)}
+.c4cell{aspect-ratio:1;border-radius:50%;background:#0b1020;box-shadow:inset 0 3px 6px rgba(0,0,0,.6)}
+.c4cell.p1{background:radial-gradient(circle at 35% 30%,#ff8fa3,#e11d48 60%,#9f1239)}
+.c4cell.p2{background:radial-gradient(circle at 35% 30%,#fff1b8,#f5c451 60%,#b7791f)}
+.c4cell.win{box-shadow:0 0 0 3px #fff,0 0 14px #fff}
+.c4cell.last{animation:drop .35s ease}
+@keyframes drop{from{transform:translateY(-120px)}}
+.rpsb{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.rpsb button{aspect-ratio:1;border-radius:20px;font-size:44px;background:linear-gradient(180deg,#1f1f30,#151522);border:1px solid var(--line);transition:.2s}
+.rpsb button.on{border-color:var(--gold);background:rgba(245,196,81,.14);transform:translateY(-4px)}
+.score{display:flex;justify-content:center;align-items:center;gap:18px;font-size:34px;font-weight:900;margin:6px 0 12px}
+.score small{display:block;font-size:11px;color:var(--muted);font-weight:500;text-align:center}
+.hist{display:flex;flex-direction:column;gap:6px;margin-top:12px}
+.hrow{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-radius:12px;background:rgba(255,255,255,.04);font-size:20px}
+.hrow span.r{font-size:12px;font-weight:700;padding:2px 10px;border-radius:99px}
+.r.win{background:rgba(16,185,129,.15);color:#34d399}.r.lose{background:rgba(225,29,72,.15);color:#fb7185}.r.draw{background:rgba(255,255,255,.08);color:var(--muted)}
+.felt{border-radius:28px;padding:16px 12px;background:radial-gradient(ellipse at center,#176c43 0%,#0d4a2d 60%,#082e1c 100%);border:6px solid #3b2410;box-shadow:inset 0 0 40px rgba(0,0,0,.5),0 14px 34px rgba(0,0,0,.5);text-align:center}
+.felt .lbl{font-size:12px;color:#c8f0d8;margin:4px 0}
+.felt .val{display:inline-block;padding:3px 10px;border-radius:99px;background:rgba(0,0,0,.3);font-size:12px;color:#fde68a;font-weight:700;margin:4px 0}
+.felt .pot{display:inline-flex;align-items:center;gap:6px;margin:10px 0;padding:6px 16px;border-radius:99px;background:rgba(0,0,0,.35);color:var(--gold);font-weight:900}
+.log{font-size:11.5px;color:var(--muted);margin-top:10px;line-height:1.9;text-align:center}
+.trump{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:99px;background:rgba(255,255,255,.08);font-weight:800;font-size:13px}
+.trump b{font-size:20px}
+.suitbtns{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:12px}
+.suitbtns button{padding:14px 0;border-radius:16px;font-size:34px;background:#fff;color:#111;box-shadow:0 6px 16px rgba(0,0,0,.4)}
+.suitbtns button.red{color:#d10f3a}
+.table-mid{min-height:120px;display:flex;align-items:center;justify-content:center;gap:16px;margin:10px 0;border-radius:20px;background:radial-gradient(ellipse,#14532d55,transparent 70%)}
+.played{display:flex;flex-direction:column;align-items:center;gap:4px;font-size:11px;color:var(--muted)}
+.actions{display:grid;gap:8px;margin-top:12px}
+.leave{margin-top:16px;width:100%;padding:11px;border-radius:14px;background:transparent;border:1px solid rgba(225,29,72,.35);color:#fb7185;font-weight:700;font-size:13px}
+
+/* ── queue ── */
+.radar{position:relative;width:210px;height:210px;margin:20px auto;border-radius:50%;
+  background:radial-gradient(circle,rgba(225,29,72,.18) 0 30%,transparent 31%),radial-gradient(circle,transparent 0 55%,rgba(255,255,255,.06) 56% 57%,transparent 58%),radial-gradient(circle,transparent 0 80%,rgba(255,255,255,.06) 81% 82%,transparent 83%);border:1px solid rgba(255,255,255,.08)}
+.radar::before{content:"";position:absolute;inset:0;border-radius:50%;background:conic-gradient(from 0deg,rgba(245,196,81,.45),transparent 25%);animation:spin 2s linear infinite}
+.radar .c{position:absolute;inset:0;display:grid;place-items:center;text-align:center}
+.radar .c b{font-size:44px;font-weight:900;color:var(--gold);display:block;line-height:1}
+.radar .c small{color:var(--muted);font-size:12px}
+.qinfo{text-align:center;margin-bottom:18px}
+.qinfo h3{margin:0 0 6px;font-size:20px}
+.qinfo p{margin:0;color:var(--muted);font-size:13px;line-height:1.9}
+
+/* ── sheet / modal / toast ── */
+.backdrop{position:fixed;inset:0;background:rgba(0,0,0,.6);backdrop-filter:blur(4px);z-index:50;opacity:0;pointer-events:none;transition:.25s}
+.backdrop.show{opacity:1;pointer-events:auto}
+.sheet{position:fixed;left:0;right:0;bottom:0;z-index:51;max-width:560px;margin:0 auto;padding:18px 16px calc(18px + var(--safe-b));border-radius:26px 26px 0 0;
+  background:linear-gradient(180deg,#181824,#0e0e17);border-top:1px solid rgba(245,196,81,.25);transform:translateY(105%);transition:transform .3s cubic-bezier(.2,.9,.3,1)}
+.sheet.show{transform:none}
+.sheet .grip{width:44px;height:5px;border-radius:9px;background:rgba(255,255,255,.18);margin:-6px auto 14px}
+.sheet-head{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+.sheet-head .gicon{margin:0}
+.sheet-head h3{margin:0;font-size:18px}
+.sheet-head p{margin:2px 0 0;font-size:12px;color:var(--muted)}
+.modal{position:fixed;inset:0;z-index:60;display:grid;place-items:center;padding:20px;pointer-events:none}
+.modal-box{width:100%;max-width:360px;border-radius:26px;padding:24px 20px;text-align:center;background:linear-gradient(180deg,#1c1c2a,#11111a);border:1px solid rgba(255,255,255,.1);
+  transform:scale(.85);opacity:0;transition:.25s;pointer-events:auto;box-shadow:0 30px 60px rgba(0,0,0,.6)}
+.modal.show .modal-box{transform:none;opacity:1}
+.modal:not(.show) .modal-box{pointer-events:none}
+.modal-emoji{font-size:64px;line-height:1;margin-bottom:8px}
+.modal-box h3{margin:0 0 6px;font-size:22px}
+.modal-box p{margin:0 0 16px;color:var(--muted);font-size:13.5px;line-height:1.9}
+.modal-amt{font-size:26px;font-weight:900;margin-bottom:16px}
+.toast{position:fixed;top:14px;left:50%;transform:translate(-50%,-140%);z-index:80;padding:12px 18px;border-radius:14px;font-size:13.5px;font-weight:700;
+  background:#1e1e2d;border:1px solid var(--line);box-shadow:0 14px 30px rgba(0,0,0,.5);transition:transform .3s;max-width:92vw;text-align:center}
+.toast.show{transform:translate(-50%,0)}
+.toast.err{border-color:rgba(225,29,72,.5);color:#fecdd3}
+.toast.ok{border-color:rgba(16,185,129,.5);color:#bbf7d0}
+.splash{position:fixed;inset:0;z-index:90;display:grid;place-items:center;background:var(--bg);transition:opacity .4s}
+.splash.out{opacity:0;pointer-events:none}
+.splash .logo{font-size:64px;animation:bump 1.2s infinite}
+.splash p{color:var(--muted);text-align:center;margin-top:8px}
+.fatal{text-align:center;padding:40px 20px}
+.fatal .e{font-size:60px}
+.confetti{position:fixed;top:-10px;width:9px;height:14px;z-index:70;border-radius:2px;animation:fall linear forwards;pointer-events:none}
+@keyframes fall{to{transform:translateY(110vh) rotate(720deg)}}
+.section-t{font-size:13px;color:var(--muted);margin:4px 2px 10px;font-weight:700}
 </style>
 </head>
 <body>
+<div class="splash" id="splash"><div><div class="logo">🎲</div><p>قمارخانه زر<br><small>در حال اتصال...</small></p></div></div>
 
-<!-- لودینگ اولیه -->
-<div class="loading-screen" id="loadingScreen">
-  <div class="big-dice">🎲</div>
-  <div>در حال بارگذاری قمارخانه...</div>
-</div>
-
-<!-- هدر -->
-<div class="header">
-  <div class="brand">
-    <span class="dice">🎲</span>
-    <span>قمارخانه زر</span>
-  </div>
-  <div class="user-chip">
-    <div class="avatar" id="userAvatar">؟</div>
-    <div class="user-info">
-      <div class="user-name"><span class="level-badge" id="userLevel">L1</span><span id="userName">میهمان</span></div>
-      <div class="user-balance"><span id="userBalance">0</span> 🪙</div>
+<div id="app">
+  <header class="topbar">
+    <div class="who">
+      <div class="avatar" id="me-avatar">؟</div>
+      <div><div class="who-name" id="me-name">...</div><span class="who-lvl" id="me-lvl">لول ۱</span></div>
     </div>
-  </div>
-</div>
+    <div class="bal" id="bal"><span class="coin"></span><span id="bal-v">0</span></div>
+  </header>
 
-<!-- صفحه اصلی -->
-<div class="container">
-  <div id="homeView">
+  <!-- HOME -->
+  <section class="screen active" id="screen-home">
     <div class="hero">
-      <h1>🎰 خوش آمدی!</h1>
-      <p>قمارخانه زرکوین — جایی که ثروت یا ورشکستی در یک تاس نهفته است. بازی‌های تک‌نفره فوری یا بازی‌های دونفره با حریف زنده.</p>
-      <div class="balance-big"><span id="heroBalance">0</span> 🪙 زرکوین</div>
+      <div class="suits">♠♥♣♦</div>
+      <h1>به قمارخانه زر خوش اومدی</h1>
+      <p>بازی‌های سریع تک‌نفره یا رقابت زنده با حریف واقعی. همه‌چیز سمت سرور و منصفانه حساب می‌شه.</p>
+      <div class="big"><b id="hero-bal">0</b><span>زرکوین</span></div>
     </div>
-
-    <div class="section-title">🎮 بازی‌های دونفره</div>
-    <div class="games-grid" id="games2pGrid"></div>
-
-    <div class="section-title">🎰 بازی‌های تک‌نفره</div>
-    <div class="games-grid" id="games1pGrid"></div>
-  </div>
-
-  <!-- صفحه مچ‌میکینگ -->
-  <div id="matchmakingView" class="hidden">
-    <div class="matchmaking">
-      <div class="pulse-loader"></div>
-      <h2 style="color: var(--red-glow); margin-bottom: 8px;">در جستجوی حریف...</h2>
-      <div class="mm-status" id="mmStatus">منتظر بمان...</div>
-      <div class="mm-queue" id="mmQueue"></div>
-      <div class="countdown-ring" id="mmCountdown">60</div>
-      <div style="margin-top: 14px;">
-        <button class="btn btn-danger" onclick="cancelMatchmaking()">❌ لغو</button>
-      </div>
+    <div id="resume-box"></div>
+    <div class="tabs">
+      <button class="tab active" data-tab="1p">🎯 تک‌نفره</button>
+      <button class="tab" data-tab="2p">⚔️ دونفره</button>
     </div>
-  </div>
+    <div class="grid" id="game-grid"></div>
+  </section>
 
-  <!-- صفحه بازی -->
-  <div id="gameView" class="game-screen">
-    <div id="gameContent"></div>
-  </div>
+  <!-- SOLO -->
+  <section class="screen" id="screen-solo">
+    <div class="subhead"><button class="iconbtn" data-nav="home">→</button><h2 id="solo-title"></h2></div>
+    <div id="solo-body"></div>
+  </section>
+
+  <!-- QUEUE -->
+  <section class="screen" id="screen-queue">
+    <div class="subhead"><button class="iconbtn" id="q-back">→</button><h2>یافتن حریف</h2></div>
+    <div class="radar"><div class="c"><div><b id="q-count">60</b><small>ثانیه</small></div></div></div>
+    <div class="qinfo"><h3 id="q-title"></h3><p id="q-desc"></p></div>
+    <button class="btn btn-ghost" id="q-cancel">❌ لغو و برگشت پول</button>
+  </section>
+
+  <!-- GAME -->
+  <section class="screen" id="screen-game">
+    <div class="ghead"><h2 id="g-title"></h2><div class="potpill">💰 <span id="g-pot">0</span></div></div>
+    <div class="vs">
+      <div class="pcard" id="g-me"><div class="avatar" id="g-me-av"></div><div style="min-width:0"><b id="g-me-name"></b><small>تو</small></div></div>
+      <div class="vs-mid">VS</div>
+      <div class="pcard oppc" id="g-opp"><div class="avatar" id="g-opp-av"></div><div style="min-width:0"><b id="g-opp-name"></b><small>حریف</small></div></div>
+    </div>
+    <div class="timer" id="g-timer"><i id="g-timer-bar" style="width:100%"></i></div>
+    <div class="gstatus" id="g-status"></div>
+    <div id="g-board"></div>
+    <div id="g-actions" class="actions"></div>
+    <button class="leave" id="g-leave">🏳️ تسلیم و ترک بازی</button>
+  </section>
 </div>
 
-<!-- نوار پایین -->
-<div class="bottom-bar">
-  <button class="nav-btn active" id="navHome" onclick="showHome()">
-    <span class="icon">🏠</span>
-    <span>خانه</span>
-  </button>
-  <button class="nav-btn" id="navRefresh" onclick="refreshProfile()">
-    <span class="icon">🔄</span>
-    <span>رفرش</span>
-  </button>
-  <button class="nav-btn" id="navExit" onclick="exitApp()">
-    <span class="icon">🚪</span>
-    <span>خروج</span>
-  </button>
-</div>
-
-<!-- مودال شرط -->
-<div class="modal-overlay" id="betModal">
-  <div class="modal">
-    <h2 id="betModalTitle">🎰 شرط بگذار</h2>
-    <div class="subtitle" id="betModalSubtitle"></div>
-    <div class="bet-input-row">
-      <input type="number" class="bet-input" id="betInput" placeholder="مبلغ شرط" min="0" inputmode="numeric">
-    </div>
-    <div class="bet-quick" id="betQuickBtns"></div>
-    <div id="diceOptions" class="hidden">
-      <div class="form-row">
-        <label class="form-label">پیش‌بینی مجموع تاس:</label>
-        <select class="form-select" id="dicePrediction">
-          <option value="under">زیر ۷ (×۲)</option>
-          <option value="over">بالای ۷ (×۲)</option>
-          <option value="equal">مساوی ۷ (×۴)</option>
-        </select>
-      </div>
-    </div>
-    <div class="btn-row">
-      <button class="btn btn-secondary" onclick="closeBetModal()">انصراف</button>
-      <button class="btn btn-primary" id="betConfirmBtn">شروع بازی</button>
-    </div>
-  </div>
-</div>
-
-<!-- 🔧 مودال raise پوکر — جایگزین window.prompt که در WebApp کار نمی‌کند -->
-<div class="modal-overlay" id="raiseModal">
-  <div class="modal">
-    <h2>⬆️ ریز (Raise)</h2>
-    <div class="subtitle" id="raiseModalSubtitle">مبلغ raise را وارد کن</div>
-    <div class="bet-input-row">
-      <input type="number" class="bet-input" id="raiseInput" placeholder="مبلغ raise" min="0" inputmode="numeric">
-    </div>
-    <div class="btn-row">
-      <button class="btn btn-secondary" onclick="closeRaiseModal()">انصراف</button>
-      <button class="btn btn-primary" id="raiseConfirmBtn">⬆️ ریز کن</button>
-    </div>
-  </div>
-</div>
-
-<!-- توست -->
+<div class="backdrop" id="backdrop"></div>
+<div class="sheet" id="sheet"></div>
+<div class="modal" id="modal"><div class="modal-box" id="modal-box"></div></div>
 <div class="toast" id="toast"></div>
 
 <script>
-// ═══════════════════════════════════════════
-// _State: وضعیت برنامه
-// ═══════════════════════════════════════════
-const App = {
-  initData: null,
-  browserToken: null,
-  user: null,
-  games: [],
-  pendingGame: null,        // {key, name, emoji, type, min_bet, max_bet}
-  pendingBet: 0,
-  matchmakingTimer: null,
-  gamePollTimer: null,
-  currentGameId: null,
-  currentGameState: null,
-  isExiting: false,
+'use strict';
+/* ════════════ پایه ════════════ */
+const tg = (window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp : null;
+const $ = s => document.querySelector(s);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const qsp = new URLSearchParams(location.search);
+const hsp = new URLSearchParams(location.hash.replace(/^#/, ''));
+const AUTH = { initData: (tg && tg.initData) || '', token: qsp.get('token') || hsp.get('token') || '' };
+try { if (AUTH.token) sessionStorage.setItem('zar_token', AUTH.token); else AUTH.token = sessionStorage.getItem('zar_token') || ''; } catch (e) {}
+
+const S = {
+  me: null, games: {}, list: [], wheel: [], tab: '1p', screen: 'home', bet: {},
+  solo: null, soloKey: null, busy: false,
+  queue: null, queueEnd: 0, gameId: null, game: null, lastGameKey: '', deadlineAt: 0, turnTimeout: 45,
+  resultShown: null, acting: false, authFailed: false, timers: {}
 };
+const GRAD = {
+  wheel: ['#f59e0b', '#9a3412'], crash: ['#818cf8', '#312e81'], mines: ['#10b981', '#064e3b'], hilo: ['#ec4899', '#831843'],
+  coin: ['#eab308', '#713f12'], holdem: ['#e11d48', '#4c0519'], hokm: ['#a855f7', '#3b0764'], blackjack: ['#0ea5e9', '#0c4a6e'],
+  connect4: ['#ef4444', '#1e3a8a'], rps: ['#fb923c', '#7c2d12'], ttt: ['#2dd4bf', '#134e4a']
+};
+const RANK = { 11: 'J', 12: 'Q', 13: 'K', 14: 'A' };
+const SUIT = { S: '♠', H: '♥', D: '♦', C: '♣' };
+const SUIT_FA = { S: 'پیک', H: 'دل', D: 'خشت', C: 'گشنیز' };
+const RPS_E = { rock: '✊', paper: '✋', scissors: '✌️' };
 
-// ═══════════════════════════════════════════
-// Telegram SDK
-// ═══════════════════════════════════════════
-function setupTelegram() {
-  // 🔧 توکن مرورگر: از URL خوانده می‌شود (دکمه «🌐 بازی در مرورگر» توکن را در URL می‌گذارد)
-  App.browserToken = new URLSearchParams(window.location.search).get("token") || "";
-  if (window.Telegram && Telegram.WebApp) {
-    Telegram.WebApp.ready();
-    Telegram.WebApp.expand();
-    Telegram.WebApp.setHeaderColor('#0a0a0a');
-    Telegram.WebApp.setBackgroundColor('#0a0a0a');
-    Telegram.WebApp.enableClosingConfirmation();
-    // 🔧 رفع باگ بحرانی: فقط از initData (رشته‌ی sign شده) استفاده کن.
-    // initDataUnsafe یک آبجکت parse شده و غیر sign شده است — استفاده از آن به‌عنوان
-    // credential، احراز هویت HMAC را دور می‌زد و هر کاربر می‌توانست خودش را جای
-    // دیگری جا بزند. initDataUnsafe فقط برای نمایش اسم استفاده شود.
-    App.initData = Telegram.WebApp.initData || "";
-    // برای تست روی دسکتاپ، initData ممکن است خالی باشد — از query param بگیر
-    if (!App.initData) {
-      App.initData = new URLSearchParams(window.location.search).get("init_data") || "";
-    }
-  } else {
-    App.initData = new URLSearchParams(window.location.search).get("init_data") || "";
-  }
-}
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const fmt = n => Number(n || 0).toLocaleString('fa-IR');
+const fmtPlain = n => Number(n || 0).toLocaleString('en-US');
+const toEn = s => String(s || '').replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d)).replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d));
+const parseNum = s => { const v = parseInt(toEn(s).replace(/[^\d]/g, ''), 10); return isNaN(v) ? 0 : v; };
+const short = n => n >= 1e6 ? (n / 1e6).toLocaleString('fa-IR', { maximumFractionDigits: 1 }) + 'M' : n >= 1e3 ? (n / 1e3).toLocaleString('fa-IR', { maximumFractionDigits: 1 }) + 'K' : fmt(n);
+const initial = name => (String(name || '?').trim()[0] || '?').toUpperCase();
+function haptic(type) { try { if (!tg || !tg.HapticFeedback) return; if (type === 'ok' || type === 'err' || type === 'warn') tg.HapticFeedback.notificationOccurred(type === 'ok' ? 'success' : type === 'err' ? 'error' : 'warning'); else tg.HapticFeedback.impactOccurred(type || 'light'); } catch (e) {} }
 
-// 🔧 تابع escape برای جلوگیری از XSS وقتی رشته‌های server-controlled در innerHTML می‌روند
-function escHtml(s) {
-  s = String(s == null ? "" : s);
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-          .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-}
-
-// ═══════════════════════════════════════════
-// API helpers
-// ═══════════════════════════════════════════
-async function api(method, path, body) {
-  const opts = { method, headers: {} };
-  if (App.initData) opts.headers["X-Telegram-Init-Data"] = App.initData;
-  if (App.browserToken) opts.headers["X-Browser-Token"] = App.browserToken;
-  if (body !== undefined && body !== null) {
-    opts.headers["Content-Type"] = "application/json";
-    opts.body = JSON.stringify(body);
-  }
+/* ════════════ API ════════════ */
+async function api(path, body, opts) {
+  opts = opts || {};
+  if (S.authFailed) { const e = new Error('auth'); e.auth = true; throw e; }
+  let res;
   try {
-    const res = await fetch(path, opts);
-    const data = await res.json();
-    if (!data.ok) {
-      // 🔧 اضافه کردن status code به error برای تشخیص 401 (توقف polling)
-      const err = new Error(data.error || "خطای ناشناخته");
-      err.status = res.status;
-      err.code = data.code;
-      throw err;
-    }
-    return data.data;
-  } catch (e) {
-    console.error("API error:", path, e);
-    throw e;
-  }
-}
-
-// ═══════════════════════════════════════════
-//  Toast
-// ═══════════════════════════════════════════
-let toastTimer = null;
-function toast(msg, type = "") {
-  const el = document.getElementById("toast");
-  el.textContent = msg;
-  el.className = "toast show " + type;
-  if (toastTimer) clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.className = "toast", 2200);
-}
-
-// ═══════════════════════════════════════════
-// نمایش‌گرها
-// ═══════════════════════════════════════════
-function showHome() {
-  document.getElementById("homeView").classList.remove("hidden");
-  document.getElementById("matchmakingView").classList.add("hidden");
-  document.getElementById("gameView").classList.remove("active");
-  document.querySelectorAll(".nav-btn").forEach(b => b.classList.remove("active"));
-  document.getElementById("navHome").classList.add("active");
-  stopMatchmaking();
-  stopGamePolling();
-}
-
-function showMatchmaking() {
-  document.getElementById("homeView").classList.add("hidden");
-  document.getElementById("matchmakingView").classList.remove("hidden");
-  document.getElementById("gameView").classList.remove("active");
-  document.querySelectorAll(".nav-btn").forEach(b => b.classList.remove("active"));
-}
-
-function showGame() {
-  document.getElementById("homeView").classList.add("hidden");
-  document.getElementById("matchmakingView").classList.add("hidden");
-  document.getElementById("gameView").classList.add("active");
-  document.querySelectorAll(".nav-btn").forEach(b => b.classList.remove("active"));
-}
-
-// ═══════════════════════════════════════════
-// رندر هدر / پروفایل
-// ═══════════════════════════════════════════
-function renderUser() {
-  if (!App.user) return;
-  const u = App.user;
-  const name = (u.first_name || u.username || "بی‌نام").slice(0, 18);
-  document.getElementById("userName").textContent = name;
-  document.getElementById("userLevel").textContent = "L" + u.level;
-  document.getElementById("userBalance").textContent = fmtNum(u.balance);
-  document.getElementById("heroBalance").textContent = fmtNum(u.balance);
-  const avatar = document.getElementById("userAvatar");
-  if (u.avatar_url) {
-    avatar.innerHTML = `<img src="${u.avatar_url}" alt="">`;
-  } else {
-    avatar.textContent = (name[0] || "؟").toUpperCase();
-  }
-}
-
-function fmtNum(n) {
-  return (n || 0).toLocaleString("fa-IR");
-}
-
-// ═══════════════════════════════════════════
-// رندر لیست بازی‌ها
-// ═══════════════════════════════════════════
-function renderGames() {
-  const grid2 = document.getElementById("games2pGrid");
-  const grid1 = document.getElementById("games1pGrid");
-  grid2.innerHTML = "";
-  grid1.innerHTML = "";
-  for (const g of App.games) {
-    const card = document.createElement("div");
-    card.className = "game-card";
-    const typeLabel = g.type === "1p" ? "تک‌نفره" : g.type === "2p" ? "دونفره" : "چندنفره";
-    card.innerHTML = `
-      <span class="game-emoji">${g.emoji}</span>
-      <div class="game-name">${g.name}</div>
-      <span class="game-type">${typeLabel}</span>
-      <div class="game-desc">${g.desc}</div>
-    `;
-    card.onclick = () => openBetModal(g);
-    (g.type === "1p" ? grid1 : grid2).appendChild(card);
-  }
-}
-
-// ═══════════════════════════════════════════
-// مودال شرط
-// ═══════════════════════════════════════════
-function openBetModal(game) {
-  App.pendingGame = game;
-  document.getElementById("betModalTitle").textContent = `${game.emoji} ${game.name}`;
-  document.getElementById("betModalSubtitle").textContent = `حداقل: ${fmtNum(game.min_bet)} | حداکثر: ${fmtNum(game.max_bet)}`;
-  document.getElementById("betInput").value = game.min_bet;
-  document.getElementById("betInput").min = game.min_bet;
-  document.getElementById("betInput").max = game.max_bet;
-  // دکمه‌های سریع
-  const quickDiv = document.getElementById("betQuickBtns");
-  quickDiv.innerHTML = "";
-  const presets = [game.min_bet, game.min_bet * 5, game.min_bet * 10, Math.min(game.max_bet, game.min_bet * 50)];
-  for (const v of presets) {
-    const b = document.createElement("button");
-    b.className = "quick-btn";
-    b.textContent = fmtNum(v);
-    b.onclick = () => { document.getElementById("betInput").value = v; };
-    quickDiv.appendChild(b);
-  }
-  // نمایش گزینه تاس فقط برای بازی dice
-  document.getElementById("diceOptions").classList.toggle("hidden", game.key !== "dice");
-  // متن دکمه
-  const btn = document.getElementById("betConfirmBtn");
-  btn.textContent = game.type === "1p" ? "🎲 بازی کن" : "🔍 پیدا کن حریف";
-  btn.onclick = confirmBet;
-  document.getElementById("betModal").classList.add("active");
-}
-
-function closeBetModal() {
-  document.getElementById("betModal").classList.remove("active");
-  App.pendingGame = null;
-}
-
-async function confirmBet() {
-  const g = App.pendingGame;
-  if (!g) return;
-  const betVal = parseInt(document.getElementById("betInput").value, 10);
-  if (!betVal || betVal < g.min_bet) {
-    toast(`حداقل شرط ${fmtNum(g.min_bet)} است`, "error");
-    return;
-  }
-  if (betVal > g.max_bet) {
-    toast(`حداکثر شرط ${fmtNum(g.max_bet)} است`, "error");
-    return;
-  }
-  if (App.user && betVal > App.user.balance) {
-    toast("موجودی کافی نیست", "error");
-    return;
-  }
-  App.pendingBet = betVal;
-  closeBetModal();
-  if (g.type === "1p") {
-    await playSingle(g, betVal);
-  } else {
-    await startMatchmaking(g, betVal);
-  }
-}
-
-// ═══════════════════════════════════════════
-//  بازی تک‌نفره
-// ═══════════════════════════════════════════
-async function playSingle(game, bet) {
-  const payload = {};
-  if (game.key === "dice") {
-    payload.prediction = document.getElementById("dicePrediction").value;
-  }
-  try {
-    toast("🎲 در حال بازی...", "");
-    const result = await api("POST", "/api/play/single", {
-      game_key: game.key, bet, payload,
+    res = await fetch('/api/' + path, {
+      method: 'POST', cache: 'no-store',
+      headers: { 'Content-Type': 'application/json', 'X-Telegram-Init-Data': AUTH.initData, 'X-Browser-Token': AUTH.token },
+      body: JSON.stringify(body || {})
     });
-    await refreshProfile(true);
-    renderResultSingle(game, bet, result);
-  } catch (e) {
-    toast(e.message, "error");
-  }
+  } catch (e) { const er = new Error('اتصال به سرور برقرار نشد'); er.network = true; throw er; }
+  let data = null;
+  try { data = await res.json(); } catch (e) {}
+  if (res.status === 401) { S.authFailed = true; stopAllTimers(); showAuthError(); const er = new Error('auth'); er.auth = true; throw er; }
+  if (!data) throw new Error('پاسخ نامعتبر از سرور');
+  if (data.balance !== undefined && !opts.deferBalance) setBalance(data.balance);
+  if (!data.ok) { const er = new Error(data.error || 'خطا'); er.data = data; throw er; }
+  return data;
 }
 
-function renderResultSingle(game, bet, result) {
-  const view = document.getElementById("gameView");
-  showGame();
-  const win = result.win || 0;
-  const isWin = win > bet;
-  const isTie = win === bet;
-  const bannerClass = isWin ? "win" : (isTie ? "tie" : "lose");
-  const bannerText = isWin ? "🎉 بردی!" : (isTie ? "🤝 مساوی" : "💸 باختی");
-  let extra = "";
-  if (game.key === "slots") {
-    // 🔧 رفع باگ: از آرایه reels که سرور جداگانه می‌فرستد استفاده کن، نه regex
-    // پارس کردن outcome (که با "🎉 جکپات!" یا "≈ تقریباً!" شروع می‌شد و reels اشتباه می‌داد)
-    const reels = Array.isArray(result.reels) ? result.reels : ["❓","❓","❓"];
-    extra = `<div class="slots-reels">${reels.map(s => `<div class="reel">${s}</div>`).join("")}</div>`;
-  } else {
-    extra = `<div style="text-align:center; font-size:18px; margin:14px 0; color:var(--gold); font-weight:800;">${escHtml(result.outcome)}</div>`;
-  }
-  view.querySelector("#gameContent").innerHTML = `
-    <h2 style="text-align:center; color:var(--red-glow); margin-bottom:10px;">${game.emoji} ${game.name}</h2>
-    ${extra}
-    <div class="result-banner ${bannerClass}">
-      <h3>${bannerText}</h3>
-      <div class="prize">شرط: ${fmtNum(bet)} | برنده: ${fmtNum(win)} 🪙</div>
-    </div>
-    <div class="btn-row">
-      <button class="btn btn-secondary" onclick="showHome()">🔙 خانه</button>
-      <button class="btn btn-primary" onclick="openBetModal(App.games.find(g=>g.key==='${game.key}'))">🔄 دوباره</button>
-    </div>
-  `;
+/* ════════════ UI helpers ════════════ */
+let toastT = null;
+function toast(msg, kind) {
+  const t = $('#toast'); t.textContent = msg; t.className = 'toast show ' + (kind || '');
+  clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 2800);
+  if (kind === 'err') haptic('err');
 }
-
-// ═══════════════════════════════════════════
-//  مچ‌میکینگ
-// ═══════════════════════════════════════════
-async function startMatchmaking(game, bet) {
-  showMatchmaking();
-  document.getElementById("mmStatus").textContent = `جستجوی حریف برای ${game.name}...`;
-  document.getElementById("mmQueue").textContent = `شرط: ${fmtNum(bet)} 🪙`;
-  document.getElementById("mmCountdown").textContent = "60";
-  try {
-    const r = await api("POST", "/api/match/join", { game_key: game.key, bet });
-    if (r.matched) {
-      // بلافاصله حریف پیدا شد
-      await enterGame(r.game_id, r.game_key);
-    } else {
-      // شروع polling
-      startMatchPolling();
-    }
-  } catch (e) {
-    toast(e.message, "error");
-    showHome();
-  }
-}
-
-let mmCountdown = 60;
-function startMatchPolling() {
-  mmCountdown = 60;
-  stopMatchmaking();
-  App.matchmakingTimer = setInterval(async () => {
-    mmCountdown--;
-    document.getElementById("mmCountdown").textContent = mmCountdown;
-    if (mmCountdown <= 0) {
-      // 🔧 رفع باگ: قبل از showHome، صف را در سرور لغو کن تا escrow برگردد
-      // و کاربر در صف سرور گیر نکند
-      stopMatchmaking();
-      try { await api("POST", "/api/match/cancel"); } catch (e) {}
-      toast("⏱ حریفی پیدا نشد", "error");
-      showHome();
-      return;
-    }
-    try {
-      const s = await api("GET", "/api/match/status");
-      if (s.status === "matched") {
-        stopMatchmaking();
-        await enterGame(s.game_id, s.game_key);
-      } else if (s.status === "timeout") {
-        stopMatchmaking();
-        toast("⏱ حریفی پیدا نشد", "error");
-        showHome();
-      } else if (s.status === "waiting") {
-        // 🔧 countdown را از زمان باقی‌مانده سرور sync کن (بدون drift)
-        if (typeof s.remaining === "number" && s.remaining >= 0) {
-          mmCountdown = s.remaining;
-          document.getElementById("mmCountdown").textContent = mmCountdown;
-        }
-        document.getElementById("mmQueue").textContent =
-          `در صف: ${s.queue_size || 1} نفر | زمان باقی‌مانده: ${s.remaining}s`;
-      } else if (s.status === "idle") {
-        // خارج شده از صف — احتمالاً توسط کاربر
-        stopMatchmaking();
-        showHome();
-      }
-    } catch (e) {
-      console.error("match status error:", e);
-    }
-  }, 1000);
-}
-
-function stopMatchmaking() {
-  if (App.matchmakingTimer) {
-    clearInterval(App.matchmakingTimer);
-    App.matchmakingTimer = null;
-  }
-}
-
-async function cancelMatchmaking() {
-  stopMatchmaking();
-  try { await api("POST", "/api/match/cancel"); } catch (e) {}
-  showHome();
-}
-
-// ═══════════════════════════════════════════
-//  صفحه بازی دونفره
-// ═══════════════════════════════════════════
-async function enterGame(gameId, gameKey) {
-  App.currentGameId = gameId;
-  showGame();
-  await fetchGameState();
-  startGamePolling();
-}
-
-async function fetchGameState() {
-  if (!App.currentGameId) return;
-  try {
-    const s = await api("GET", `/api/game/state?game_id=${App.currentGameId}`);
-    App.currentGameState = s;
-    App.gameFetchErrors = 0;  // 🔧 ریست شمارنده خطا
-    renderGameState(s);
-  } catch (e) {
-    console.error("game state error:", e);
-    App.gameFetchErrors = (App.gameFetchErrors || 0) + 1;
-    // 🔧 رفع باگ: روی 401 (احراز هویت ناموفق) یا خطای مکرر، polling را متوقف کن
-    // تا toast هر ۲.۵ ثانیه spam نشود
-    if (e.status === 401 || App.gameFetchErrors >= 3) {
-      stopGamePolling();
-      toast(e.status === 401 ? "احراز هویت ناموفق — دوباره وارد شو" : "ارتباط با بازی قطع شد", "error");
-      // اگر بازی تمام شده ولی خطا داشتیم، به صفحه نتیجه نرو
-      if (e.status !== 401 && App.currentGameState && App.currentGameState.finished) {
-        renderGameState(App.currentGameState);
-      } else if (e.status === 401) {
-        showHome();
-      }
-    } else if (App.gameFetchErrors === 1) {
-      // فقط اولین خطا را toast کن (نه هر بار)
-      toast(e.message, "error");
-    }
-  }
-}
-
-function startGamePolling() {
-  stopGamePolling();
-  App.gamePollTimer = setInterval(async () => {
-    if (!App.currentGameId) return;
-    await fetchGameState();
-    if (App.currentGameState && App.currentGameState.finished) {
-      stopGamePolling();
-    }
-  }, 2500);
-}
-
-function stopGamePolling() {
-  if (App.gamePollTimer) {
-    clearInterval(App.gamePollTimer);
-    App.gamePollTimer = null;
-  }
-}
-
-function renderGameState(s) {
-  const view = document.getElementById("gameView");
-  const game = App.games.find(g => g.key === s.game_key);
-  const myIdx = s.my_index;
-  const oppIdx = myIdx === 0 ? 1 : 0;
-  const me = s.players[myIdx];
-  const opp = s.players[oppIdx];
-  const isMyTurn = s.turn_idx === myIdx && !s.finished;
-  let body = "";
-
-  // نوار حریف
-  // 🔧 رفع باگ XSS: اسم حریف از Telegram first_name می‌آید و می‌توانست حاوی
-  // <img onerror=...> باشد — با escHtml پاک شود
-  const oppNameSafe = escHtml(opp.name);
-  body += `
-    <div class="opponent-bar">
-      <div style="display:flex; align-items:center; gap:8px;">
-        <div class="avatar" style="width:28px; height:28px; font-size:12px;">${escHtml((opp.name[0] || "؟").toUpperCase())}</div>
-        <div>
-          <div style="font-size:13px; font-weight:700;">${oppNameSafe}</div>
-          <div style="font-size:11px; color:var(--text-dim);">حریف</div>
-        </div>
-      </div>
-      <div style="color:var(--gold); font-weight:800;">${fmtNum(s.bet)} 🪙</div>
-    </div>
-  `;
-
-  // دست حریف (پنهان)
-  if (s.data && s.data.hands) {
-    const oppHand = s.data.hands[oppIdx];
-    body += `<div class="hand">`;
-    if (oppHand) {
-      for (const c of oppHand) {
-        body += `<div class="card hidden-card"></div>`;
-      }
-    }
-    body += `</div>`;
-  }
-
-  // متن VS
-  body += `<div class="vs-divider">⚔️ VS ⚔️</div>`;
-
-  // community cards (پوکر)
-  if (s.data && s.data.community && s.data.community.length) {
-    body += `<div class="community">
-      <div class="community-label">Community</div>
-      <div class="hand">${s.data.community.map(c => cardHtml(c)).join("")}</div>
-    </div>`;
-  }
-
-  // معلومات خاص بازی
-  if (s.game_key === "hokm") {
-    if (s.data.trump_suit) {
-      body += `<div class="turn-indicator">حکم: <b style="color:var(--gold); font-size:18px;">${s.data.trump_suit}</b></div>`;
-    }
-    if (s.data.tricks_won) {
-      body += `<div class="pot-display">برد دورها — شما: ${s.data.tricks_won[myIdx]} | حریف: ${s.data.tricks_won[oppIdx]}</div>`;
-    }
-    if (s.data.current_trick && s.data.current_trick.length) {
-      body += `<div class="community">
-        <div class="community-label">دور فعلی</div>
-        <div class="hand">${s.data.current_trick.map(t => cardHtml(t.card)).join("")}</div>
-      </div>`;
-    }
-  } else if (s.game_key === "poker") {
-    body += `<div class="pot-display"> پات: ${fmtNum(s.pot)} 🪙</div>`;
-    if (s.data.phase) {
-      body += `<div class="turn-indicator">مرحله: <b>${phaseLabel(s.data.phase)}</b></div>`;
-    }
-  } else if (s.game_key === "blackjack") {
-    if (s.data.totals) {
-      body += `<div class="turn-indicator">مجموع شما: <b style="color:var(--green);">${s.data.totals[myIdx]}</b> | حریف: ?</div>`;
-    }
-  }
-
-  // نوبت
-  if (!s.finished) {
-    body += `<div class="turn-indicator ${isMyTurn ? 'mine' : 'opponent'}">
-      ${isMyTurn ? '✅ نوبت شماست!' : '⏳ نوبت حریف...'}
-    </div>`;
-  }
-
-  // دست من
-  if (s.data && s.data.hands) {
-    const myHand = s.data.hands[myIdx];
-    body += `<div class="hand">`;
-    if (myHand) {
-      for (let i = 0; i < myHand.length; i++) {
-        const c = myHand[i];
-        // 🔧 رفع باگ: فقط hokm کارت‌ها playable هستند (با کلیک روی کارت می‌توانی play کنی).
-        // blackjack فقط hit/stand دارد — کلیک روی کارت در blackjack قبلاً action "play_card"
-        // می‌فرستاد که در سرور نامعتبر بود و خطای "game_error" می‌داد.
-        const playable = isMyTurn && s.game_key === "hokm";
-        // 🔧 برای hokm، بررسی follow-suit (اگر باید به رنگ lead پاسخ دهد و این کارت lead نیست، غیرقابل کلیک)
-        let canPlay = playable;
-        if (playable && s.game_key === "hokm" && s.data.lead_suit) {
-          const hasLead = myHand.some(cc => cc.suit === s.data.lead_suit);
-          if (hasLead && c.suit !== s.data.lead_suit) canPlay = false;
-        }
-        body += `<div class="card ${cardColor(c)} ${canPlay ? 'playable' : ''}" ${canPlay ? `onclick="playCard(${i})"` : ''}>${cardHtmlInner(c)}</div>`;
-      }
-    }
-    body += `</div>`;
-  }
-
-  // اکشن‌های بازی
-  if (!s.finished && isMyTurn) {
-    body += `<div class="actions-row">`;
-    if (s.game_key === "hokm" && s.data.phase === "choose_trump") {
-      body += `<button class="btn btn-primary" onclick="chooseTrump('♠')">♠</button>`;
-      body += `<button class="btn btn-primary" onclick="chooseTrump('♥')">♥</button>`;
-      body += `<button class="btn btn-primary" onclick="chooseTrump('♦')">♦</button>`;
-      body += `<button class="btn btn-primary" onclick="chooseTrump('♣')">♣</button>`;
-    }
-    if (s.game_key === "poker") {
-      // 🔧 اضافه شدن دکمه Call (وقتی outstanding raise هست)
-      const myContribution = (s.data.pot_per_player && s.data.pot_per_player[myIdx]) || 0;
-      const oppContribution = (s.data.pot_per_player && s.data.pot_per_player[oppIdx]) || 0;
-      const callNeeded = (s.data.current_bet || 0) - myContribution;
-      if (callNeeded > 0) {
-        body += `<button class="btn btn-primary" onclick="pokerAction('call')">📞 کال (${fmtNum(callNeeded)})</button>`;
-      } else {
-        body += `<button class="btn btn-secondary" onclick="pokerAction('check')">✅ چک</button>`;
-      }
-      body += `<button class="btn btn-primary" onclick="pokerRaise()">⬆️ ریز</button>`;
-      body += `<button class="btn btn-danger" onclick="pokerAction('fold')">🏳️ فولد</button>`;
-    }
-    if (s.game_key === "blackjack") {
-      body += `<button class="btn btn-primary" onclick="blackjackAction('hit')">➕ هیت</button>`;
-      body += `<button class="btn btn-secondary" onclick="blackjackAction('stand')">✋ استند</button>`;
-    }
-    body += `</div>`;
-  }
-
-  // تسلیم
-  if (!s.finished) {
-    body += `<button class="btn btn-danger" style="margin-top:6px;" onclick="leaveGame()">🏳️ تسلیم شو</button>`;
-  }
-
-  // نتیجه نهایی
-  if (s.finished) {
-    const isWin = s.winner === me.user_id;
-    const isTie = s.winner === null;
-    const bannerClass = isWin ? "win" : (isTie ? "tie" : "lose");
-    const bannerText = isWin ? "🎉 بردی!" : (isTie ? "🤝 مساوی" : "💸 باختی");
-    const prize = s.data.winner_prize || (s.data.prize_each ? s.data.prize_each : 0);
-    body += `<div class="result-banner ${bannerClass}">
-      <h3>${bannerText}</h3>
-      <div class="prize">${isWin ? `جایزه: ${fmtNum(prize)} 🪙` : (isTie ? `بازگشت: ${fmtNum(prize)} 🪙` : "شرط را از دست دادی")}</div>
-    </div>`;
-    body += `<button class="btn btn-primary" onclick="exitToHome()">🔙 بازگشت به خانه</button>`;
-  }
-
-  view.querySelector("#gameContent").innerHTML = `
-    <h2 style="text-align:center; color:var(--red-glow); margin-bottom:10px;">${game ? game.emoji : ""} ${game ? game.name : ""}</h2>
-    ${body}
-  `;
-}
-
-function cardHtml(c) {
-  return `<div class="card ${cardColor(c)}">${cardHtmlInner(c)}</div>`;
-}
-function cardColor(c) {
-  if (!c) return "";
-  return (c.suit === "♥" || c.suit === "♦") ? "red" : "";
-}
-function cardHtmlInner(c) {
-  if (!c) return "?";
-  if (c.hidden) return "?";
-  return `<div class="rank">${c.rank}</div><div class="suit">${c.suit}</div>`;
-}
-function phaseLabel(p) {
-  return ({
-    preflop: "پیش‌فلاپ", flop: "فلاپ", turn: "ترن", river: "ریور", showdown: "شو‌داون",
-    play: "بازی", choose_trump: "انتخاب حکم", finished: "پایان",
-  })[p] || p;
-}
-
-// ═══════════════════════════════════════════
-// اکشن‌های بازی
-// ═══════════════════════════════════════════
-async function playCard(idx) {
-  if (!App.currentGameId) return;
-  try {
-    await api("POST", "/api/game/action", {
-      game_id: App.currentGameId, action: "play_card",
-      payload: { card_index: idx },
-    });
-    await fetchGameState();
-  } catch (e) { toast(e.message, "error"); }
-}
-
-async function chooseTrump(suit) {
-  if (!App.currentGameId) return;
-  try {
-    await api("POST", "/api/game/action", {
-      game_id: App.currentGameId, action: "choose_trump",
-      payload: { suit },
-    });
-    await fetchGameState();
-  } catch (e) { toast(e.message, "error"); }
-}
-
-async function pokerAction(action, payload = {}) {
-  if (!App.currentGameId) return;
-  try {
-    await api("POST", "/api/game/action", {
-      game_id: App.currentGameId, action, payload,
-    });
-    await fetchGameState();
-  } catch (e) { toast(e.message, "error"); }
-}
-
-// 🔧 رفع باگ: pokerRaise از یک مودال سفارشی استفاده می‌کند (window.prompt
-// در WebApp تلگرام کار نمی‌کند و null برمی‌گرداند که NaN می‌شد)
-async function pokerRaise() {
-  const modal = document.getElementById("raiseModal");
-  const input = document.getElementById("raiseInput");
-  const myBalance = App.user ? App.user.balance : 0;
-  input.min = 1;
-  input.max = myBalance;
-  input.value = Math.min(10000, myBalance);
-  modal.classList.add("active");
-  // callback را روی دکمه confirm تنظیم کن
-  document.getElementById("raiseConfirmBtn").onclick = async () => {
-    const amount = parseInt(input.value, 10);
-    closeRaiseModal();
-    if (!amount || amount <= 0) {
-      toast("مبلغ نامعتبر", "error");
-      return;
-    }
-    try {
-      await pokerAction("raise", { amount });
-    } catch (e) { toast(e.message, "error"); }
+function errToast(e) { if (e && e.auth) return; toast((e && e.message) || 'خطا', 'err'); }
+let balShown = 0;
+function setBalance(v) {
+  v = Number(v) || 0;
+  if (S.me) S.me.balance = v;
+  const el = $('#bal-v'), hero = $('#hero-bal');
+  const from = balShown, to = v, t0 = performance.now(), dur = 600;
+  if (from !== to) { $('#bal').classList.remove('bump'); void $('#bal').offsetWidth; $('#bal').classList.add('bump'); }
+  const step = now => {
+    const k = Math.min(1, (now - t0) / dur), val = Math.round(from + (to - from) * (1 - Math.pow(1 - k, 3)));
+    el.textContent = fmt(val); hero.textContent = fmt(val);
+    if (k < 1) requestAnimationFrame(step);
   };
+  balShown = to; requestAnimationFrame(step);
 }
-
-function closeRaiseModal() {
-  document.getElementById("raiseModal").classList.remove("active");
-}
-
-async function blackjackAction(action) {
-  if (!App.currentGameId) return;
-  try {
-    await api("POST", "/api/game/action", {
-      game_id: App.currentGameId, action, payload: {},
-    });
-    await fetchGameState();
-  } catch (e) { toast(e.message, "error"); }
-}
-
-// 🔧 رفع باگ: leaveGame از Telegram.WebApp.showConfirm استفاده می‌کند
-// (window.confirm در WebApp کار نمی‌کند و undefined برمی‌گرداند)
-async function leaveGame() {
-  if (!App.currentGameId) return;
-  const doLeave = async () => {
-    try {
-      await api("POST", "/api/game/leave", {});
-      await fetchGameState();
-    } catch (e) { toast(e.message, "error"); }
-  };
-  if (window.Telegram && Telegram.WebApp && Telegram.WebApp.showConfirm) {
-    Telegram.WebApp.showConfirm("مطمئنی می‌خوای تسلیم بشی؟ شرط را از دست می‌دهی.", (ok) => {
-      if (ok) doLeave();
-    });
-  } else {
-    // fallback برای تست دسکتاپ
-    if (confirm("مطمئنی می‌خوای تسلیم بشی؟ شرط را از دست می‌دهی.")) doLeave();
+function confetti() {
+  const colors = ['#f5c451', '#e11d48', '#10b981', '#38bdf8', '#fff'];
+  for (let i = 0; i < 40; i++) {
+    const c = document.createElement('div'); c.className = 'confetti';
+    c.style.left = Math.random() * 100 + 'vw'; c.style.background = colors[i % colors.length];
+    c.style.animationDuration = (1.6 + Math.random() * 1.6) + 's'; c.style.animationDelay = (Math.random() * .3) + 's';
+    document.body.appendChild(c); setTimeout(() => c.remove(), 3600);
   }
 }
-
-function exitToHome() {
-  App.currentGameId = null;
-  App.currentGameState = null;
-  stopGamePolling();
-  showHome();
-  refreshProfile(true);
+function openBackdrop(onClose) { const b = $('#backdrop'); b.classList.add('show'); b.onclick = onClose || null; }
+function closeBackdrop() { $('#backdrop').classList.remove('show'); $('#backdrop').onclick = null; }
+function modal(html, onBackdrop) {
+  $('#modal-box').innerHTML = html; $('#modal').classList.add('show'); openBackdrop(onBackdrop);
+}
+function closeModal() { $('#modal').classList.remove('show'); if (!$('#sheet').classList.contains('show')) closeBackdrop(); }
+function confirmBox(title, text, okLabel) {
+  return new Promise(resolve => {
+    modal(`<div class="modal-emoji">⚠️</div><h3>${esc(title)}</h3><p>${esc(text)}</p>
+      <div class="row2"><button class="btn btn-ghost" id="cf-no">انصراف</button><button class="btn btn-red" id="cf-yes">${esc(okLabel || 'تأیید')}</button></div>`,
+      () => { closeModal(); resolve(false); });
+    $('#cf-no').onclick = () => { closeModal(); resolve(false); };
+    $('#cf-yes').onclick = () => { closeModal(); resolve(true); };
+  });
+}
+function showAuthError() {
+  hideSplash();
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  $('#screen-home').classList.add('active');
+  $('#screen-home').innerHTML = `<div class="fatal"><div class="e">🔒</div><h3>احراز هویت ناموفق</h3>
+    <p style="color:var(--muted);line-height:2">مینی‌اپ را از دکمه «🎲 قمارخانه زنده» داخل ربات باز کن.<br>اگر از قبل باز بود، یک بار ببند و دوباره باز کن.</p></div>`;
+}
+function hideSplash() { const s = $('#splash'); if (s) { s.classList.add('out'); setTimeout(() => s.remove(), 450); } }
+function cardHtml(c, cls, attrs) {
+  cls = cls || ''; attrs = attrs || '';
+  if (!c) return `<div class="card back ${cls}" ${attrs}></div>`;
+  const red = c.s === 'H' || c.s === 'D', r = RANK[c.r] || c.r;
+  return `<div class="card ${red ? 'red' : ''} ${cls}" ${attrs}><span class="cr">${r}</span><span class="cs">${SUIT[c.s]}</span><span class="cc">${SUIT[c.s]}</span></div>`;
 }
 
-// ═══════════════════════════════════════════
-// رفرش پروفایل
-// ═══════════════════════════════════════════
-async function refreshProfile(silent = false) {
-  try {
-    const u = await api("GET", "/api/profile");
-    App.user = u;
-    renderUser();
-    if (!silent) toast("✅ به‌روز شد", "success");
-  } catch (e) {
-    if (!silent) toast("احراز هویت ناموفق — لطفاً از تلگرام وارد شو", "error");
-  }
+/* ════════════ ناوبری ════════════ */
+function stopAllTimers() { Object.keys(S.timers).forEach(k => { clearInterval(S.timers[k]); clearTimeout(S.timers[k]); delete S.timers[k]; }); }
+function stopTimer(k) { if (S.timers[k]) { clearInterval(S.timers[k]); clearTimeout(S.timers[k]); delete S.timers[k]; } }
+function show(screen) {
+  S.screen = screen;
+  document.querySelectorAll('.screen').forEach(s => s.classList.toggle('active', s.id === 'screen-' + screen));
+  window.scrollTo(0, 0);
+  if (tg && tg.BackButton) { try { screen === 'home' ? tg.BackButton.hide() : tg.BackButton.show(); } catch (e) {} }
+  if (screen !== 'queue') { stopTimer('qpoll'); stopTimer('qtick'); }
+  if (screen !== 'game') { stopTimer('gpoll'); stopTimer('gtick'); }
+  if (screen === 'home') { renderHome(); refreshMe(); }
+}
+async function handleBack() {
+  if ($('#modal').classList.contains('show')) { closeModal(); return; }
+  if ($('#sheet').classList.contains('show')) { closeSheet(); return; }
+  if (S.screen === 'solo') { if (S.busy) return; show('home'); }
+  else if (S.screen === 'queue') cancelQueue();
+  else if (S.screen === 'game') leaveGame();
 }
 
-async function loadGames() {
-  // 🔧 اگر خطا دهد، به init پاس می‌دهیم تا صفحه خطا نمایش داده شود
-  const data = await api("GET", "/api/games");
-  App.games = data.games;
-  App.user = App.user || {};
-  App.user.balance = data.balance;
-  renderGames();
-  renderUser();
+/* ════════════ خانه ════════════ */
+function applyMe(d) {
+  S.me = d.user; S.list = d.games || []; S.games = {}; S.list.forEach(g => S.games[g.key] = g);
+  S.wheel = d.wheel_segments || []; S.solo = d.solo || null; S.turnTimeout = d.turn_timeout || 45;
+  S.me.commission = (typeof d.commission === 'number') ? d.commission : 0.05;
+  $('#me-name').textContent = S.me.name; $('#me-avatar').textContent = initial(S.me.name);
+  $('#me-lvl').textContent = 'لول ' + fmt(S.me.level || 1);
+  setBalance(S.me.balance);
 }
-
-// ═══════════════════════════════════════════
-// خروج
-// ═══════════════════════════════════════════
-function exitApp() {
-  if (window.Telegram && Telegram.WebApp) {
-    Telegram.WebApp.close();
-  } else {
-    window.close();
-  }
+async function refreshMe() {
+  try { const d = await api('me'); applyMe(d); if (S.screen === 'home') renderHome(); } catch (e) {}
 }
-
-// بستن مودال با کلیک روی پس‌زمینه
-document.getElementById("betModal").addEventListener("click", (e) => {
-  if (e.target.id === "betModal") closeBetModal();
+function renderHome() {
+  if (!S.me) return;
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === S.tab));
+  const box = $('#resume-box');
+  if (S.solo && S.games[S.solo.type]) {
+    const g = S.games[S.solo.type];
+    box.innerHTML = `<div class="resume"><span>${g.emoji} یک دست <b>${esc(g.name)}</b> نیمه‌تمام داری</span><button data-resume="${S.solo.type}">ادامه</button></div>`;
+  } else box.innerHTML = '';
+  const items = S.list.filter(g => g.type === S.tab);
+  $('#game-grid').innerHTML = items.map(g => {
+    const gr = GRAD[g.key] || ['#e11d48', '#4c0519'];
+    return `<button class="gcard" data-game="${g.key}" style="--g1:${gr[0]};--g2:${gr[1]}">
+      ${g.type === '2p' ? '<span class="badge2p">آنلاین</span>' : ''}
+      <div class="gicon">${g.emoji}</div><div class="gname">${esc(g.name)}</div><div class="gdesc">${esc(g.desc)}</div>
+      <div class="gmeta"><span>از ${short(g.min_bet)}</span><span>←</span></div></button>`;
+  }).join('');
+}
+document.addEventListener('click', e => {
+  const tab = e.target.closest('[data-tab]'); if (tab) { S.tab = tab.dataset.tab; haptic(); renderHome(); return; }
+  const gc = e.target.closest('[data-game]');
+  if (gc) { haptic(); const g = S.games[gc.dataset.game]; if (!g) return; g.type === '1p' ? openSolo(g.key) : openSheet(g.key); return; }
+  const rs = e.target.closest('[data-resume]'); if (rs) { openSolo(rs.dataset.resume); return; }
+  const nav = e.target.closest('[data-nav]'); if (nav) { if (!S.busy) show(nav.dataset.nav); return; }
 });
 
-// ═══════════════════════════════════════════
-// راه‌اندازی
-// ═══════════════════════════════════════════
-async function init() {
-  setupTelegram();
-  // 🔧 دو مسیر احراز هویت: initData (داخل تلگرام) یا browserToken (مرورگر خارجی)
-  if (!App.initData && !App.browserToken) {
-    document.getElementById("loadingScreen").innerHTML =
-      `<div class="big-dice">⚠️</div><div style="text-align:center; padding: 20px;">برای ورود باید از دکمه قمارخانه در ربات استفاده کنید.<br>دکمه «🎲 قمارخانه زنده» لینک اختصاصی شما را باز می‌کند.</div>`;
-    return;
-  }
-  try {
-    await refreshProfile(true);
-    await loadGames();
-  } catch (e) {
-    // 🔧 نمایش خطای دقیق + دکمه دیاگنوستیک
-    const status = e.status ? ` (HTTP ${e.status})` : "";
-    document.getElementById("loadingScreen").innerHTML =
-      `<div class="big-dice">⚠️</div><div style="text-align:center; padding: 20px; font-size: 14px;">`
-      + `<b>خطا در بارگذاری</b>${status}<br>`
-      + `<span style="color:#ff8888;">${e.message}</span><br><br>`
-      + `<div id="diagResult" style="text-align:right; font-size:12px; color:#aaa; background:#1a1a1a; padding:10px; border-radius:8px; margin:10px 0; display:none;"></div>`
-      + `<button class="btn btn-primary" onclick="runDiagnostic()" style="margin-top:8px;">🔍 دیاگنوستیک</button> `
-      + `<button class="btn btn-primary" onclick="location.reload()" style="margin-top:8px;">تلاش دوباره</button></div>`;
-    // اگه 401 است، دیاگنوستیک خودکار اجرا کن
-    if (e.status === 401) {
-      setTimeout(runDiagnostic, 500);
-    }
-    return;
-  }
-  document.getElementById("loadingScreen").style.display = "none";
+/* ════════════ کنترل شرط ════════════ */
+function chipsFor(g) {
+  const out = []; [1, 5, 10, 50, 100, 500].forEach(m => { const v = g.min_bet * m; if (v <= g.max_bet && out.length < 5) out.push(v); });
+  return out;
+}
+function betControl(key, id) {
+  const g = S.games[key]; const v = Math.max(g.min_bet, S.bet[key] || g.min_bet);
+  return `<div class="panel"><span class="label">💰 مبلغ شرط</span>
+    <div class="betrow"><button data-bk="${id}" data-op="half">½</button><input id="${id}" inputmode="numeric" autocomplete="off" value="${fmtPlain(v)}"><button data-bk="${id}" data-op="double">2×</button></div>
+    <div class="chips">${chipsFor(g).map(c => `<button class="chip" data-bk="${id}" data-op="set" data-v="${c}">${short(c)}</button>`).join('')}
+    <button class="chip" data-bk="${id}" data-op="max">حداکثر</button></div>
+    <div class="hint">حداقل ${fmt(g.min_bet)} — حداکثر ${fmt(g.max_bet)}</div></div>`;
+}
+function bindBet(key, id) {
+  const input = document.getElementById(id); if (!input) return;
+  const g = S.games[key];
+  const clamp = v => Math.max(g.min_bet, Math.min(g.max_bet, v));
+  input.addEventListener('blur', () => { const v = clamp(parseNum(input.value) || g.min_bet); input.value = fmtPlain(v); S.bet[key] = v; });
+  input.addEventListener('input', () => { S.bet[key] = parseNum(input.value); });
+  input.parentElement.parentElement.addEventListener('click', e => {
+    const b = e.target.closest('[data-bk]'); if (!b || b.dataset.bk !== id) return;
+    let v = parseNum(input.value) || g.min_bet;
+    if (b.dataset.op === 'half') v = Math.floor(v / 2);
+    else if (b.dataset.op === 'double') v = v * 2;
+    else if (b.dataset.op === 'set') v = Number(b.dataset.v);
+    else if (b.dataset.op === 'max') v = Math.min(g.max_bet, (S.me && S.me.balance) || g.min_bet);
+    v = clamp(v); input.value = fmtPlain(v); S.bet[key] = v; haptic();
+  });
+}
+function readBet(key, id) {
+  const g = S.games[key], el = document.getElementById(id);
+  const v = parseNum(el ? el.value : S.bet[key]);
+  if (!v || v < g.min_bet) { toast('حداقل شرط ' + fmt(g.min_bet) + ' است', 'err'); return 0; }
+  if (v > g.max_bet) { toast('حداکثر شرط ' + fmt(g.max_bet) + ' است', 'err'); return 0; }
+  if (S.me && v > S.me.balance) { toast('موجودی کافی نیست', 'err'); return 0; }
+  S.bet[key] = v; return v;
 }
 
-async function runDiagnostic() {
-  const el = document.getElementById("diagResult");
-  if (el) {
-    el.style.display = "block";
-    el.innerHTML = "⏳ در حال بررسی...";
-  }
+/* ════════════ تک‌نفره ════════════ */
+function openSolo(key, session) {
+  const g = S.games[key]; if (!g) return;
+  S.soloKey = key; S.busy = false;
+  if (session !== undefined) S.solo = session;
+  $('#solo-title').textContent = g.emoji + ' ' + g.name;
+  show('solo');
+  ({ wheel: renderWheel, crash: renderCrash, coin: renderCoin, mines: renderMines, hilo: renderHilo }[key] || (() => {}))();
+}
+function soloResult(win, bet) {
+  const profit = win - bet;
+  if (win > bet) { haptic('ok'); if (win >= bet * 3) confetti(); return `<div class="result-pill win">🎉 بردی! +${fmt(win)}</div>`; }
+  if (win > 0) return `<div class="result-pill lose">برگشت ${fmt(win)} (${fmt(profit)})</div>`;
+  haptic('err'); return `<div class="result-pill lose">💀 باختی −${fmt(bet)}</div>`;
+}
+
+/* ── چرخ شانس ── */
+let wheelRot = 0;
+const WCOL = m => m >= 5 ? ['#f5c451', '#2a1800'] : m >= 2 ? ['#ea580c', '#fff'] : m >= 1.5 ? ['#e11d48', '#fff'] : m > 0 ? ['#475569', '#fff'] : ['#16161f', '#6b6b80'];
+function wheelSvg() {
+  const n = S.wheel.length, seg = 360 / n, R = 100, cx = 100, cy = 100;
+  const pt = (a, r) => [cx + r * Math.sin(a * Math.PI / 180), cy - r * Math.cos(a * Math.PI / 180)];
+  let s = `<svg viewBox="0 0 200 200" id="wheel-svg" style="transform:rotate(${wheelRot}deg)"><circle cx="100" cy="100" r="100" fill="#3b2410"/>`;
+  S.wheel.forEach((m, i) => {
+    const a0 = i * seg, a1 = a0 + seg, [x0, y0] = pt(a0, R - 4), [x1, y1] = pt(a1, R - 4), [tx, ty] = pt(a0 + seg / 2, 68), c = WCOL(m);
+    s += `<path d="M100,100 L${x0},${y0} A${R - 4},${R - 4} 0 0,1 ${x1},${y1} Z" fill="${c[0]}" stroke="#0b0b12" stroke-width="1.2"/>`;
+    s += `<text x="${tx}" y="${ty}" fill="${c[1]}" font-size="12" font-weight="900" text-anchor="middle" dominant-baseline="middle" transform="rotate(${a0 + seg / 2},${tx},${ty})" font-family="Vazirmatn,sans-serif">${m ? '×' + m : '✕'}</text>`;
+  });
+  for (let i = 0; i < n; i++) { const [x, y] = pt(i * seg, 97); s += `<circle cx="${x}" cy="${y}" r="2.2" fill="#fde68a"/>`; }
+  return s + '</svg>';
+}
+function renderWheel() {
+  $('#solo-body').innerHTML = `<div class="stage"><div class="wheel-wrap"><div class="wheel-pointer"></div>${wheelSvg()}<div class="wheel-hub">زر</div></div><div id="w-res"></div></div>
+    ${betControl('wheel', 'bet-solo')}<button class="btn btn-gold" id="w-spin">🎡 بچرخون!</button>`;
+  bindBet('wheel', 'bet-solo');
+  $('#w-spin').onclick = spinWheel;
+}
+async function spinWheel() {
+  if (S.busy) return; const bet = readBet('wheel', 'bet-solo'); if (!bet) return;
+  S.busy = true; $('#w-spin').disabled = true; $('#w-res').innerHTML = ''; haptic('medium');
   try {
-    const res = await fetch("/api/debug/auth", {
-      headers: App.initData ? {"X-Telegram-Init-Data": App.initData} : {}
+    const d = await api('solo/wheel', { bet }, { deferBalance: true });
+    const n = S.wheel.length, seg = 360 / n, center = d.index * seg + seg / 2;
+    const base = wheelRot - (((wheelRot % 360) + 360) % 360);
+    wheelRot = base + 360 * 6 + (360 - center);
+    $('#wheel-svg').style.transform = `rotate(${wheelRot}deg)`;
+    await sleep(4300);
+    setBalance(d.balance);
+    $('#w-res').innerHTML = soloResult(d.win, bet);
+  } catch (e) { errToast(e); }
+  S.busy = false; const b = $('#w-spin'); if (b) b.disabled = false;
+}
+
+/* ── موشک ── */
+function renderCrash() {
+  const t = S.bet.crashTarget || 2;
+  $('#solo-body').innerHTML = `<div class="stage" style="min-height:260px"><div class="crash-sky"></div>
+      <div class="rocket" id="c-rocket">🚀</div><div class="crash-num" id="c-num">1.00×</div><div class="target-tag" id="c-tag">هدف: ×${t.toFixed(2)}</div><div id="c-res"></div></div>
+    <div class="panel"><span class="label">🎯 ضریب هدف (۱٫۰۱ تا ۱۰۰)</span>
+      <div class="betrow"><button id="c-minus">−</button><input id="c-target" inputmode="decimal" value="${t.toFixed(2)}"><button id="c-plus">+</button></div>
+      <div class="chips">${[1.5, 2, 3, 5, 10, 25].map(v => `<button class="chip" data-ct="${v}">×${v}</button>`).join('')}</div>
+      <div class="hint">احتمال برد ≈ <b id="c-prob"></b> — جایزه = شرط × ضریب هدف</div></div>
+    ${betControl('crash', 'bet-solo')}<button class="btn btn-gold" id="c-go">🚀 پرتاب!</button>`;
+  bindBet('crash', 'bet-solo');
+  const inp = $('#c-target');
+  const upd = v => { v = Math.max(1.01, Math.min(100, Math.round(v * 100) / 100)); inp.value = v.toFixed(2); S.bet.crashTarget = v; $('#c-tag').textContent = 'هدف: ×' + v.toFixed(2); $('#c-prob').textContent = (96 / v).toLocaleString('fa-IR', { maximumFractionDigits: 1 }) + '٪'; };
+  upd(t);
+  inp.addEventListener('blur', () => upd(parseFloat(toEn(inp.value).replace('٫', '.')) || 2));
+  $('#c-minus').onclick = () => upd((parseFloat(inp.value) || 2) - (parseFloat(inp.value) > 3 ? 0.5 : 0.1));
+  $('#c-plus').onclick = () => upd((parseFloat(inp.value) || 2) + (parseFloat(inp.value) >= 3 ? 0.5 : 0.1));
+  document.querySelectorAll('[data-ct]').forEach(b => b.onclick = () => { upd(Number(b.dataset.ct)); haptic(); });
+  $('#c-go').onclick = playCrash;
+}
+async function playCrash() {
+  if (S.busy) return; const bet = readBet('crash', 'bet-solo'); if (!bet) return;
+  const target = S.bet.crashTarget || 2;
+  S.busy = true; $('#c-go').disabled = true; $('#c-res').innerHTML = '';
+  const num = $('#c-num'), rk = $('#c-rocket'); num.className = 'crash-num'; rk.textContent = '🚀'; rk.style.transform = '';
+  try {
+    const d = await api('solo/crash', { bet, target }, { deferBalance: true });
+    rk.classList.add('fly'); haptic('medium');
+    const T = Math.min(4200, 1100 + Math.log(Math.max(1, d.crash)) * 900), t0 = performance.now();
+    await new Promise(res => {
+      const f = now => {
+        const k = Math.min(1, (now - t0) / T), m = Math.pow(d.crash, k);
+        num.textContent = m.toFixed(2) + '×';
+        if (m >= target) num.classList.add('passed');
+        rk.style.transform = `translateY(${-k * 40}px) rotate(${-k * 12}deg)`;
+        k < 1 ? requestAnimationFrame(f) : res();
+      };
+      requestAnimationFrame(f);
     });
-    const d = await res.json();
-    const data = d.data || d;
-    let html = "<b>نتیجه دیاگنوستیک:</b><br>";
-    html += `• BOT_TOKEN تنظیم شده: ${data.bot_token_set ? '✅' : '❌'}<br>`;
-    html += `• initData دریافت شد: ${data.has_init_data ? '✅' : '❌'} (طول: ${data.init_data_length})<br>`;
-    html += `• نتیجه احراز هویت: ${data.auth_result || 'نامشخص'}<br>`;
-    if (data.reason) html += `• دلیل: <span style="color:#ff8888;">${data.reason}</span><br>`;
-    if (data.user_id) html += `• شناسه کاربر: ${data.user_id}<br>`;
-    if (data.db_user_exists !== undefined) html += `• کاربر در DB: ${data.db_user_exists}<br>`;
-    if (data.db_error) html += `• خطای DB: <span style="color:#ff8888;">${data.db_error}</span><br>`;
-    html += `• URL سرور: ${data.request_host}<br>`;
-    if (el) el.innerHTML = html;
-  } catch (err) {
-    if (el) el.innerHTML = `<span style="color:#ff8888;">❌ دیاگنوستیک ناموفق: ${err.message}</span>`;
-  }
+    rk.classList.remove('fly'); rk.textContent = '💥'; num.textContent = d.crash.toFixed(2) + '×';
+    if (!d.won) num.classList.add('dead');
+    setBalance(d.balance);
+    $('#c-res').innerHTML = soloResult(d.win, bet);
+  } catch (e) { errToast(e); }
+  S.busy = false; const b = $('#c-go'); if (b) b.disabled = false;
 }
 
-init();
+/* ── شیر یا خط ── */
+let coinRot = 0;
+function renderCoin() {
+  $('#solo-body').innerHTML = `<div class="stage"><div class="coin-scene"><div class="coin3d" id="coin" style="transform:rotateY(${coinRot}deg)">
+      <div class="face">🦁</div><div class="face back">✍️</div></div></div><div id="co-res"></div></div>
+    ${betControl('coin', 'bet-solo')}
+    <div class="row2"><button class="btn btn-gold" data-side="heads">🦁 شیر</button><button class="btn btn-red" data-side="tails">✍️ خط</button></div>
+    <div class="hint" style="text-align:center;margin-top:10px">برد = ۱٫۹ برابر شرط</div>`;
+  bindBet('coin', 'bet-solo');
+  document.querySelectorAll('[data-side]').forEach(b => b.onclick = () => flipCoin(b.dataset.side));
+}
+async function flipCoin(side) {
+  if (S.busy) return; const bet = readBet('coin', 'bet-solo'); if (!bet) return;
+  S.busy = true; document.querySelectorAll('[data-side]').forEach(b => b.disabled = true); $('#co-res').innerHTML = ''; haptic('medium');
+  try {
+    const d = await api('solo/coin', { bet, side }, { deferBalance: true });
+    const base = coinRot - (((coinRot % 360) + 360) % 360);
+    coinRot = base + 360 * 5 + (d.result === 'tails' ? 180 : 0);
+    $('#coin').style.transform = `rotateY(${coinRot}deg)`;
+    await sleep(2300);
+    setBalance(d.balance);
+    $('#co-res').innerHTML = `<div class="hint" style="font-size:14px">نتیجه: <b>${d.result === 'heads' ? '🦁 شیر' : '✍️ خط'}</b></div>` + soloResult(d.win, bet);
+  } catch (e) { errToast(e); }
+  S.busy = false; document.querySelectorAll('[data-side]').forEach(b => b.disabled = false);
+}
+
+/* ── مین‌یاب ── */
+function renderMines(lastResult) {
+  const s = S.solo && S.solo.type === 'mines' ? S.solo : null;
+  const active = s && !s.finished;
+  const mines = new Set((s && s.mines) || []), rev = new Set((s && s.revealed) || []);
+  let cells = '';
+  for (let i = 0; i < 25; i++) {
+    let cls = '', txt = '';
+    if (rev.has(i)) { cls = 'gem'; txt = '💎'; }
+    else if (s && s.boom === i) { cls = 'boom'; txt = '💥'; }
+    else if (mines.has(i)) { cls = 'mine'; txt = '💣'; }
+    else if (s && s.finished) { cls = 'dim'; txt = '💎'; }
+    cells += `<button class="mcell ${cls}" data-cell="${i}" ${active && !rev.has(i) ? '' : 'disabled'}>${txt}</button>`;
+  }
+  const cnt = S.bet.minesCount || 3;
+  let html = `<div class="stage"><div class="mgrid">${cells}</div>`;
+  if (s) html += `<div class="stats"><div class="stat"><small>ضریب فعلی</small><b>×${Number(s.mult).toFixed(2)}</b></div><div class="stat"><small>بعدی</small><b>${s.next_mult ? '×' + Number(s.next_mult).toFixed(2) : '—'}</b></div><div class="stat"><small>برداشت</small><b>${short(s.potential || 0)}</b></div></div>`;
+  html += `<div id="m-res">${lastResult || ''}</div></div>`;
+  if (active) {
+    html += `<button class="btn btn-green" id="m-cash" ${s.revealed.length ? '' : 'disabled'}>💰 برداشت ${fmt(s.potential || 0)}</button>`;
+  } else {
+    html += `<div class="panel"><span class="label">💣 تعداد مین</span><div class="chips">${[1, 3, 5, 10, 15, 20].map(v => `<button class="chip ${v === cnt ? 'on' : ''}" data-mc="${v}">${fmt(v)}</button>`).join('')}</div></div>
+      ${betControl('mines', 'bet-solo')}<button class="btn btn-gold" id="m-start">💎 شروع بازی</button>`;
+  }
+  $('#solo-body').innerHTML = html;
+  if (active) {
+    $('#m-cash').onclick = minesCashout;
+    $('#solo-body .mgrid').onclick = e => { const c = e.target.closest('[data-cell]'); if (c && !c.disabled) minesReveal(Number(c.dataset.cell)); };
+  } else {
+    bindBet('mines', 'bet-solo');
+    document.querySelectorAll('[data-mc]').forEach(b => b.onclick = () => { S.bet.minesCount = Number(b.dataset.mc); document.querySelectorAll('[data-mc]').forEach(x => x.classList.toggle('on', x === b)); haptic(); });
+    $('#m-start').onclick = minesStart;
+  }
+}
+async function soloStart(path, body, key) {
+  try { const d = await api(path, body); S.solo = d.session; return true; }
+  catch (e) {
+    if (e.data && e.data.code === 'active_session' && e.data.session) { S.solo = e.data.session; toast('اول بازی نیمه‌تمامت را تمام کن', 'err'); openSolo(e.data.session.type); return false; }
+    errToast(e); return false;
+  }
+}
+async function minesStart() {
+  if (S.busy) return; const bet = readBet('mines', 'bet-solo'); if (!bet) return;
+  S.busy = true; haptic('medium');
+  if (await soloStart('solo/mines/start', { bet, mines: S.bet.minesCount || 3 }, 'mines')) renderMines();
+  S.busy = false;
+}
+async function minesReveal(idx) {
+  if (S.busy) return; S.busy = true;
+  try {
+    const d = await api('solo/mines/reveal', { idx });
+    S.solo = d.session;
+    if (d.result === 'lose') { renderMines(soloResult(0, d.session.bet)); S.solo = null; }
+    else if (d.result === 'win') { renderMines(soloResult(d.win, d.session.bet)); S.solo = null; }
+    else { haptic(); renderMines(); }
+  } catch (e) { errToast(e); if (e.data && e.data.code === 'no_session') { S.solo = null; renderMines(); } }
+  S.busy = false;
+}
+async function minesCashout() {
+  if (S.busy) return; S.busy = true;
+  try { const d = await api('solo/mines/cashout', {}); S.solo = d.session; renderMines(soloResult(d.win, d.session.bet)); S.solo = null; }
+  catch (e) { errToast(e); }
+  S.busy = false;
+}
+
+/* ── بالا پایین ── */
+function renderHilo(lastResult, lostCard) {
+  const s = S.solo && S.solo.type === 'hilo' ? S.solo : null;
+  const active = s && !s.finished;
+  let html = `<div class="stage">`;
+  if (s) {
+    html += `<div style="display:flex;gap:6px;justify-content:center;margin-bottom:12px;flex-wrap:wrap">${(s.history || []).slice(0, -1).map(c => cardHtml(c, 'sm')).join('')}</div>`;
+    html += cardHtml(s.card, 'lg deal');
+    html += `<div class="stats"><div class="stat"><small>ضریب</small><b>×${Number(s.mult).toFixed(2)}</b></div><div class="stat"><small>حدس درست</small><b>${fmt(s.steps)}</b></div><div class="stat"><small>برداشت</small><b>${short(s.potential || 0)}</b></div></div>`;
+  } else {
+    html += `<div style="display:flex;gap:10px">${cardHtml(null, 'lg')}${cardHtml({ r: 14, s: 'H' }, 'lg')}</div><p class="hint" style="text-align:center">آس بالاترین کارت است. کارت مساوی = باخت</p>`;
+  }
+  html += `<div id="h-res">${lastResult || ''}</div></div>`;
+  if (active) {
+    html += `<div class="row2"><button class="btn btn-green" data-hl="hi" ${s.hi_mult ? '' : 'disabled'}>⬆️ بالاتر ${s.hi_mult ? '×' + s.hi_mult : ''}</button>
+      <button class="btn btn-red" data-hl="lo" ${s.lo_mult ? '' : 'disabled'}>⬇️ پایین‌تر ${s.lo_mult ? '×' + s.lo_mult : ''}</button></div>
+      <button class="btn btn-gold" id="h-cash" style="margin-top:10px" ${s.steps ? '' : 'disabled'}>💰 برداشت ${fmt(s.potential || 0)}</button>`;
+  } else {
+    html += betControl('hilo', 'bet-solo') + `<button class="btn btn-gold" id="h-start">🎴 شروع</button>`;
+  }
+  $('#solo-body').innerHTML = html;
+  if (active) {
+    document.querySelectorAll('[data-hl]').forEach(b => b.onclick = () => hiloGuess(b.dataset.hl));
+    $('#h-cash').onclick = hiloCashout;
+  } else {
+    bindBet('hilo', 'bet-solo'); $('#h-start').onclick = hiloStart;
+  }
+}
+async function hiloStart() {
+  if (S.busy) return; const bet = readBet('hilo', 'bet-solo'); if (!bet) return;
+  S.busy = true; haptic('medium');
+  if (await soloStart('solo/hilo/start', { bet }, 'hilo')) renderHilo();
+  S.busy = false;
+}
+async function hiloGuess(dir) {
+  if (S.busy) return; S.busy = true; haptic();
+  try {
+    const d = await api('solo/hilo/guess', { dir });
+    S.solo = d.session;
+    if (d.result === 'lose') { renderHilo(soloResult(0, d.session.bet)); S.solo = null; }
+    else renderHilo();
+  } catch (e) { errToast(e); if (e.data && e.data.code === 'no_session') { S.solo = null; renderHilo(); } }
+  S.busy = false;
+}
+async function hiloCashout() {
+  if (S.busy) return; S.busy = true;
+  try { const d = await api('solo/hilo/cashout', {}); S.solo = d.session; renderHilo(soloResult(d.win, d.session.bet)); S.solo = null; }
+  catch (e) { errToast(e); }
+  S.busy = false;
+}
+
+/* ════════════ شیت شرط دونفره ════════════ */
+function openSheet(key) {
+  const g = S.games[key]; if (!g) return;
+  const gr = GRAD[key] || ['#e11d48', '#4c0519'];
+  $('#sheet').innerHTML = `<div class="grip"></div><div class="sheet-head"><div class="gicon" style="--g1:${gr[0]};--g2:${gr[1]}">${g.emoji}</div>
+    <div><h3>${esc(g.name)}</h3><p>${esc(g.desc)}</p></div></div>
+    ${betControl(key, 'bet-sheet')}
+    <p class="hint" style="margin:-4px 0 12px">⚖️ با حریفی که همین مبلغ را انتخاب کرده بازی می‌کنی. کارمزد برنده ${fmt(Math.round((S.me && S.me.commission || 0.05) * 100))}٪ — مساوی = برگشت کامل پول.</p>
+    <button class="btn btn-red" id="sh-go">⚔️ یافتن حریف</button>`;
+  bindBet(key, 'bet-sheet');
+  $('#sh-go').onclick = () => joinMatch(key);
+  $('#sheet').classList.add('show'); openBackdrop(closeSheet);
+  if (tg && tg.BackButton) try { tg.BackButton.show(); } catch (e) {}
+}
+function closeSheet() {
+  $('#sheet').classList.remove('show'); if (!$('#modal').classList.contains('show')) closeBackdrop();
+  if (tg && tg.BackButton && S.screen === 'home') try { tg.BackButton.hide(); } catch (e) {}
+}
+async function joinMatch(key) {
+  const bet = readBet(key, 'bet-sheet'); if (!bet) return;
+  const btn = $('#sh-go'); btn.disabled = true; haptic('medium');
+  try {
+    const d = await api('match/join', { game: key, bet });
+    closeSheet();
+    if (d.status === 'matched') openGame(d.game_id); else openQueue(d.queue);
+  } catch (e) {
+    if (e.data && e.data.code === 'in_game') { closeSheet(); openGame(e.data.game_id); }
+    else if (e.data && e.data.code === 'in_queue') { closeSheet(); openQueue(e.data.queue); }
+    else errToast(e);
+  }
+  if (btn) btn.disabled = false;
+}
+
+/* ════════════ صف ════════════ */
+function openQueue(q) {
+  if (!q) return;
+  S.queue = q; S.queueEnd = Date.now() + (q.remaining || 60) * 1000;
+  $('#q-title').textContent = (q.emoji || '') + ' ' + (q.title || '');
+  $('#q-desc').innerHTML = `شرط: <b style="color:var(--gold)">${fmt(q.bet)}</b> زرکوین<br>در حال جستجوی حریف با همین مبلغ...`;
+  show('queue');
+  const tick = () => { const left = Math.max(0, Math.ceil((S.queueEnd - Date.now()) / 1000)); $('#q-count').textContent = fmt(left); };
+  tick(); S.timers.qtick = setInterval(tick, 500);
+  let inflight = false;
+  S.timers.qpoll = setInterval(async () => {
+    if (inflight) return; inflight = true;
+    try {
+      const d = await api('match/status');
+      if (d.status === 'matched') { haptic('ok'); toast('🎯 حریف پیدا شد!', 'ok'); openGame(d.game_id); }
+      else if (d.status === 'timeout') { toast('⌛ حریفی پیدا نشد — ' + fmt(d.refunded) + ' برگشت داده شد'); show('home'); }
+      else if (d.status === 'idle') show('home');
+      else if (d.queue) S.queueEnd = Date.now() + d.queue.remaining * 1000;
+    } catch (e) { if (!e.network) errToast(e); }
+    inflight = false;
+  }, 1500);
+}
+async function cancelQueue() {
+  const b = $('#q-cancel'); b.disabled = true;
+  try {
+    const d = await api('match/cancel');
+    if (d.status === 'matched') openGame(d.game_id);
+    else { if (d.refunded) toast('↩️ ' + fmt(d.refunded) + ' برگشت داده شد', 'ok'); show('home'); }
+  } catch (e) { errToast(e); }
+  b.disabled = false;
+}
+$('#q-cancel').onclick = cancelQueue;
+$('#q-back').onclick = cancelQueue;
+
+/* ════════════ بازی دونفره ════════════ */
+function openGame(gid) {
+  S.gameId = gid; S.game = null; S.lastGameKey = ''; S.resultShown = null;
+  $('#g-board').innerHTML = '<div class="stage"><div class="splash-in">⏳</div></div>'; $('#g-actions').innerHTML = '';
+  show('game');
+  pollGame();
+  let inflight = false;
+  S.timers.gpoll = setInterval(async () => { if (inflight || S.acting) return; inflight = true; await pollGame(); inflight = false; }, 1200);
+  S.timers.gtick = setInterval(tickTimer, 250);
+}
+async function pollGame() {
+  try {
+    const d = await api('game/state', { game_id: S.gameId });
+    if (!d.game) { stopTimer('gpoll'); toast('بازی پیدا نشد یا تمام شده'); show('home'); return; }
+    renderGame(d.game);
+  } catch (e) { if (!e.network) errToast(e); }
+}
+function tickTimer() {
+  const g = S.game; if (!g) return;
+  const bar = $('#g-timer-bar'), wrap = $('#g-timer');
+  if (g.finished) { bar.style.width = '0%'; return; }
+  const left = Math.max(0, S.deadlineAt - Date.now()), pct = Math.min(100, left / ((g.turn_timeout || S.turnTimeout) * 1000) * 100);
+  bar.style.width = pct + '%'; wrap.classList.toggle('low', left < 10000);
+  const t = $('#g-status .t'); if (t) t.textContent = '(' + fmt(Math.ceil(left / 1000)) + ' ث)';
+}
+function statusText(g) {
+  if (g.finished) return esc(g.reason);
+  const s = g.state || {};
+  if (g.game_key === 'rps') return s.my_pick ? (s.opp_picked ? '...' : '⏳ منتظر انتخاب حریف') : '🟢 انتخاب کن! (دست ' + fmt(s.round) + ')';
+  if (g.game_key === 'blackjack') return s.my_done ? '⏳ منتظر حریف' : '🟢 کارت بگیر یا بایست';
+  if (g.game_key === 'hokm' && s.phase === 'trump') return s.i_am_hakem ? '👑 تو حاکمی — حکم را انتخاب کن' : '⏳ حریف حاکم است و حکم را انتخاب می‌کند';
+  return g.your_turn ? '🟢 نوبت توئه' : '⏳ نوبت حریف';
+}
+function renderGame(g) {
+  S.game = g;
+  S.deadlineAt = Date.now() + (g.deadline_in || 0) * 1000;
+  const key = JSON.stringify(Object.assign({}, g, { deadline_in: 0 }));
+  if (key === S.lastGameKey) return;
+  const prev = S.game && S.lastGameKey ? JSON.parse(S.lastGameKey) : null;
+  S.lastGameKey = key;
+  $('#g-title').textContent = g.emoji + ' ' + g.title;
+  $('#g-pot').textContent = fmt(g.pot);
+  $('#g-me-name').textContent = g.me.name; $('#g-me-av').textContent = initial(g.me.name);
+  $('#g-opp-name').textContent = g.opp.name; $('#g-opp-av').textContent = initial(g.opp.name);
+  $('#g-me').classList.toggle('turn', !g.finished && g.your_turn);
+  $('#g-opp').classList.toggle('turn', !g.finished && g.opp_turn);
+  $('#g-status').innerHTML = statusText(g) + (g.finished ? '' : '<span class="t"></span>');
+  $('#g-leave').classList.toggle('hidden', g.finished);
+  if (prev && !prev.your_turn && g.your_turn && !g.finished) haptic('medium');
+  (RENDER[g.game_key] || (() => {}))(g);
+  tickTimer();
+  if (g.finished && S.resultShown !== g.game_id) { S.resultShown = g.game_id; stopTimer('gpoll'); setTimeout(() => showResult(g), 900); }
+}
+function showResult(g) {
+  if (S.screen !== 'game') return;
+  const r = g.result;
+  const em = r === 'win' ? '🏆' : r === 'lose' ? '💀' : '🤝';
+  const title = r === 'win' ? 'بردی!' : r === 'lose' ? 'باختی' : 'مساوی';
+  const amt = r === 'win' ? `<div class="modal-amt" style="color:#34d399">+${fmt(g.payout)}</div>` : r === 'lose' ? `<div class="modal-amt" style="color:#fb7185">−${fmt(g.bet)}</div>` : `<div class="modal-amt" style="color:var(--muted)">↩️ ${fmt(g.bet)}</div>`;
+  if (r === 'win') { confetti(); haptic('ok'); } else if (r === 'lose') haptic('err');
+  modal(`<div class="modal-emoji">${em}</div><h3>${title}</h3><p>${esc(g.reason)}</p>${amt}
+    <div class="row2"><button class="btn btn-ghost" id="rs-home">🏠 خانه</button><button class="btn btn-gold" id="rs-again">🔁 دوباره</button></div>
+    <button class="btn btn-ghost" id="rs-view" style="margin-top:8px;padding:10px;font-size:13px">👀 دیدن صفحه بازی</button>`, () => closeModal());
+  $('#rs-home').onclick = () => { closeModal(); show('home'); };
+  $('#rs-again').onclick = () => { closeModal(); S.bet[g.game_key] = g.bet; show('home'); openSheet(g.game_key); };
+  $('#rs-view').onclick = () => { closeModal(); $('#g-actions').innerHTML = '<button class="btn btn-gold" data-nav="home">🏠 بازگشت به خانه</button>'; };
+}
+async function leaveGame() {
+  const g = S.game;
+  if (!g || g.finished) { show('home'); return; }
+  const ok = await confirmBox('ترک بازی؟', 'اگر بازی را ترک کنی، حریف برنده می‌شود و شرطت را از دست می‌دهی.', 'تسلیم');
+  if (!ok) return;
+  try { const d = await api('game/leave', { game_id: S.gameId }); if (d.game) renderGame(d.game); else show('home'); } catch (e) { errToast(e); }
+}
+$('#g-leave').onclick = leaveGame;
+async function sendAction(payload) {
+  if (S.acting || !S.game || S.game.finished) return;
+  S.acting = true; haptic();
+  try { const d = await api('game/action', Object.assign({ game_id: S.gameId }, payload)); renderGame(d.game); }
+  catch (e) { errToast(e); if (e.data && e.data.game) renderGame(e.data.game); }
+  S.acting = false;
+}
+$('#screen-game').addEventListener('click', e => {
+  const b = e.target.closest('[data-act]');
+  if (!b || b.disabled || b.classList.contains('unplayable')) return;
+  const a = b.dataset.act, v = b.dataset.v;
+  const map = { cell: { cell: Number(v) }, col: { col: Number(v) }, pick: { pick: v }, bj: { action: v }, trump: { suit: v }, card: { card: v }, poker: { action: v } };
+  if (map[a]) sendAction(map[a]);
+});
+
+/* ── رندر هر بازی ── */
+const RENDER = {
+  ttt(g) {
+    const s = g.state, line = new Set(s.line || []), can = g.your_turn && !g.finished;
+    $('#g-board').innerHTML = `<div class="tttg">${s.board.map((m, i) => `<button class="tttc ${m === 1 ? 'x' : m === 2 ? 'o' : ''} ${line.has(i) ? 'win' : ''}" data-act="cell" data-v="${i}" ${can && !m ? '' : 'disabled'}>${m === 1 ? '✕' : m === 2 ? '◯' : ''}</button>`).join('')}</div>
+      <p class="hint" style="text-align:center;margin-top:12px">علامت تو: <b style="font-size:18px;color:${s.my_mark === 1 ? '#fb7185' : 'var(--gold)'}">${s.my_mark === 1 ? '✕' : '◯'}</b></p>`;
+    $('#g-actions').innerHTML = '';
+  },
+  connect4(g) {
+    const s = g.state, line = new Set(s.line || []), can = g.your_turn && !g.finished;
+    let cols = '';
+    for (let c = 0; c < s.cols; c++) {
+      const full = s.board[c] !== 0;
+      let cells = '';
+      for (let r = 0; r < s.rows; r++) { const i = r * s.cols + c, v = s.board[i]; cells += `<div class="c4cell ${v ? 'p' + v : ''} ${line.has(i) ? 'win' : ''} ${s.last === i ? 'last' : ''}"></div>`; }
+      cols += `<div class="c4col ${can && !full ? 'can' : ''}" ${can && !full ? `data-act="col" data-v="${c}"` : ''}>${cells}</div>`;
+    }
+    $('#g-board').innerHTML = `<div class="c4">${cols}</div><p class="hint" style="text-align:center;margin-top:12px">مهره تو: <span class="c4cell p${s.my_disc}" style="display:inline-block;width:16px;height:16px;vertical-align:middle"></span> — روی ستون بزن</p>`;
+    $('#g-actions').innerHTML = '';
+  },
+  rps(g) {
+    const s = g.state, can = !g.finished && !s.my_pick;
+    const hist = s.history.slice().reverse().map((h, i) => `<div class="hrow" style="${i === 0 ? 'border:1px solid rgba(245,196,81,.3)' : ''}"><span>${RPS_E[h.me]}</span><span class="r ${h.result}">${h.result === 'win' ? 'بردی' : h.result === 'lose' ? 'باختی' : 'مساوی'}</span><span>${RPS_E[h.opp]}</span></div>`).join('');
+    $('#g-board').innerHTML = `<div class="score"><div>${fmt(s.score_me)}<small>تو</small></div><span style="color:var(--muted);font-size:20px">:</span><div>${fmt(s.score_opp)}<small>حریف</small></div></div>
+      <div class="rpsb">${['rock', 'paper', 'scissors'].map(p => `<button data-act="pick" data-v="${p}" class="${s.my_pick === p ? 'on' : ''}" ${can ? '' : 'disabled'}>${RPS_E[p]}</button>`).join('')}</div>
+      <p class="hint" style="text-align:center">${s.opp_picked && !g.finished ? '✅ حریف انتخابش را کرده' : ''}</p>
+      ${hist ? `<div class="hist"><div class="hrow" style="font-size:12px;color:var(--muted);background:none"><span>تو</span><span>نتیجه</span><span>حریف</span></div>${hist}</div>` : ''}`;
+    $('#g-actions').innerHTML = '';
+  },
+  blackjack(g) {
+    const s = g.state, can = !g.finished && !s.my_done;
+    $('#g-board').innerHTML = `<div class="felt">
+      <div class="lbl">${esc(g.opp.name)} ${s.opp_done && !g.finished ? '✅' : ''}</div>
+      <div class="cards">${s.opp_cards.map(c => cardHtml(c, 'deal')).join('')}</div>
+      <div class="val">${s.opp_value != null ? 'امتیاز: ' + fmt(s.opp_value) : 'امتیاز: ؟'}</div>
+      <div class="pot">💰 ${fmt(g.pot)}</div>
+      <div class="cards">${s.my_cards.map(c => cardHtml(c, 'deal')).join('')}</div>
+      <div class="val" style="${s.my_value > 21 ? 'color:#fb7185' : s.my_value === 21 ? 'color:#34d399' : ''}">امتیاز تو: ${fmt(s.my_value)} ${s.my_value > 21 ? '— سوختی!' : ''}</div></div>`;
+    $('#g-actions').innerHTML = g.finished ? '' : `<div class="row2"><button class="btn btn-gold" data-act="bj" data-v="hit" ${can ? '' : 'disabled'}>🃏 کارت بده</button><button class="btn btn-red" data-act="bj" data-v="stand" ${can ? '' : 'disabled'}>✋ بسه</button></div>`;
+  },
+  hokm(g) {
+    const s = g.state;
+    if (s.phase === 'trump') {
+      const can = s.i_am_hakem && g.your_turn && !g.finished;
+      $('#g-board').innerHTML = `<div class="stage" style="min-height:160px"><div style="font-size:40px">👑</div><p style="margin:6px 0 0;color:var(--muted);font-size:13px">${s.i_am_hakem ? 'با دیدن ۵ کارت اولت حکم را انتخاب کن' : 'حریف حاکم است...'}</p></div>
+        <div class="hand">${s.my_hand.map(c => cardHtml(c, 'deal')).join('')}</div>
+        ${can ? `<div class="suitbtns">${['S', 'H', 'D', 'C'].map(x => `<button data-act="trump" data-v="${x}" class="${x === 'H' || x === 'D' ? 'red' : ''}">${SUIT[x]}</button>`).join('')}</div>` : ''}`;
+      $('#g-actions').innerHTML = '';
+      return;
+    }
+    const tr = s.trump, trRed = tr === 'H' || tr === 'D';
+    let mid = '';
+    if (s.table.length) mid = s.table.map(t => `<div class="played">${cardHtml(t.card, 'deal')}<span>${t.mine ? 'تو' : 'حریف'}</span></div>`).join('');
+    else if (s.last_trick) mid = `<div style="text-align:center"><div class="cards" style="opacity:.85">${s.last_trick.cards.map(t => `<div class="played">${cardHtml(t.card, 'sm')}<span>${t.mine ? 'تو' : 'حریف'}</span></div>`).join('')}</div><div class="hint">${s.last_trick.i_won ? '✅ دست قبل را بردی' : '❌ دست قبل را حریف برد'}</div></div>`;
+    else mid = `<span class="hint">${g.your_turn ? 'اولین کارت را بازی کن' : 'منتظر کارت حریف...'}</span>`;
+    $('#g-board').innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <span class="trump">حکم: <b style="color:${trRed ? '#fb7185' : '#fff'}">${SUIT[tr]}</b> ${SUIT_FA[tr]}</span>
+        <span class="trump">🏆 تو ${fmt(s.tricks_me)} — ${fmt(s.tricks_opp)} حریف <small style="color:var(--muted)">(۷)</small></span></div>
+      <div class="hand opp-hand" style="padding-top:4px">${Array.from({ length: Math.min(s.opp_count, 13) }, () => cardHtml(null, 'sm')).join('')}</div>
+      <div class="table-mid">${mid}</div>
+      <div class="hand">${s.my_hand.map(c => cardHtml(c, c.playable ? 'playable' : (g.your_turn ? 'unplayable' : ''), c.playable ? `data-act="card" data-v="${c.id}"` : '')).join('')}</div>
+      ${s.i_am_hakem ? '<p class="hint" style="text-align:center">👑 تو حاکمی</p>' : ''}`;
+    $('#g-actions').innerHTML = '';
+  },
+  holdem(g) {
+    const s = g.state, can = g.your_turn && !g.finished;
+    const board = [0, 1, 2, 3, 4].map(i => s.board[i] ? cardHtml(s.board[i], 'sm deal') : '<div class="card sm empty"></div>').join('');
+    $('#g-board').innerHTML = `<div class="felt">
+      <div class="lbl">${esc(g.opp.name)} — گذاشته: ${fmt(s.opp_contrib)}</div>
+      <div class="cards">${s.opp_cards.map(c => cardHtml(c, 'sm')).join('')}</div>
+      ${s.opp_hand ? `<div class="val">${esc(s.opp_hand)}</div>` : ''}
+      <div class="lbl" style="margin-top:10px">${esc(s.street_name)}</div>
+      <div class="cards" style="gap:4px">${board}</div>
+      <div class="pot">💰 پات: ${fmt(g.pot)}</div>
+      <div class="cards">${s.my_cards.map(c => cardHtml(c, 'deal')).join('')}</div>
+      <div class="val">دست تو: ${esc(s.my_hand)} — گذاشته: ${fmt(s.my_contrib)}</div></div>
+      <div class="log">${s.log.map(esc).join('<br>')}</div>`;
+    if (g.finished) { $('#g-actions').innerHTML = ''; return; }
+    $('#g-actions').innerHTML = `<div class="row3">
+      <button class="btn btn-ghost" data-act="poker" data-v="fold" ${can ? '' : 'disabled'}>🏳️ فولد</button>
+      ${s.can_check ? `<button class="btn btn-green" data-act="poker" data-v="check" ${can ? '' : 'disabled'}>✔️ چک</button>`
+        : `<button class="btn btn-green" data-act="poker" data-v="call" ${can ? '' : 'disabled'} style="font-size:13px">📞 کال ${short(s.call_amount)}</button>`}
+      <button class="btn btn-gold" data-act="poker" data-v="raise" ${can && s.can_raise ? '' : 'disabled'} style="font-size:13px">⬆️ رِیز ${short(s.raise_amount)}</button></div>`;
+  }
+};
+
+/* ════════════ شروع ════════════ */
+async function boot() {
+  if (tg) {
+    try { tg.ready(); tg.expand(); } catch (e) {}
+    try { tg.setHeaderColor('#07070c'); tg.setBackgroundColor('#07070c'); } catch (e) {}
+    try { tg.disableVerticalSwipes && tg.disableVerticalSwipes(); } catch (e) {}
+    try { tg.BackButton.onClick(handleBack); } catch (e) {}
+  }
+  if (!AUTH.initData && !AUTH.token) { showAuthError(); return; }
+  try {
+    const d = await api('me');
+    applyMe(d); S.me.commission = d.commission;
+    renderHome(); hideSplash();
+    if (d.refunded) toast('↩️ ' + fmt(d.refunded) + ' زرکوین از صف قبلی برگشت داده شد', 'ok');
+    if (d.game_id) openGame(d.game_id);
+    else if (d.queue) openQueue(d.queue);
+  } catch (e) {
+    if (e.auth) return;
+    hideSplash();
+    $('#screen-home').innerHTML = `<div class="fatal"><div class="e">📡</div><h3>خطا در اتصال</h3><p style="color:var(--muted)">${esc(e.message)}</p><button class="btn btn-gold" onclick="location.reload()">🔄 تلاش دوباره</button></div>`;
+  }
+  setInterval(() => { if (S.screen === 'home' && !S.authFailed && document.visibilityState === 'visible') api('balance').catch(() => {}); }, 20000);
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && S.screen === 'game' && S.gameId && !(S.game && S.game.finished)) pollGame(); });
+boot();
 </script>
 </body>
 </html>
