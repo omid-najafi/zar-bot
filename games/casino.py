@@ -1,376 +1,710 @@
-import asyncio
-import random
+# -*- coding: utf-8 -*-
+"""
+🎰 کازینو زر — منطق سمت سرور بازی‌های مینی‌اپ
+─────────────────────────────────────────────
+تک‌نفره : چرخ شانس، موشک (کرش)، شیر یا خط، کارت شانس، رولت، مین‌یاب، بالا‌پایین
+دونفره  : پوکر تگزاس هولدم (رِیز آزاد + آل‌این)، حکم، بلک‌جک
+
+⚠️ منوی متنی کازینوی قدیم حذف شده — همه‌ی بازی‌ها داخل مینی‌اپ هستند.
+توابع قدیمی (handle_callback و ...) فقط پیام «منتقل شد» نشان می‌دهند تا هیچ جای ربات خطا ندهد.
+"""
+import itertools
 import logging
-from telegram import InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.constants import ParseMode
-import utils, db, config
+import math
+import random
 
-logger = logging.getLogger("zarcoin")
-DICE_FACES = {1: "1️⃣", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣", 5: "5️⃣", 6: "6️⃣"}
+import db
 
-def casino_menu_kb(user_id: int | None = None):
-    rows = [
-        [InlineKeyboardButton("🎰 اسلات", callback_data="casino:slots"), InlineKeyboardButton("🎲 تاس", callback_data="casino:dice")],
-        [InlineKeyboardButton("🪙 شیر یا خط", callback_data="casino:coin"), InlineKeyboardButton("🃏 کارت شانس", callback_data="casino:card")],
-        [InlineKeyboardButton("🎡 رولت", callback_data="casino:roulette"), InlineKeyboardButton("💣 مین‌یاب", callback_data="casino:mines")],
-        [InlineKeyboardButton("🎯 چرخ شانس", callback_data="casino:wheel")],
-    ]
-    # دکمه قمارخانه مینی‌اپ
-    # 🔧 اولویت ۱: لینک عمیق تلگرام (t.me/bot/app) — داخل وب‌ویو باز می‌شود، initData خودکار
-    # 🔧 اولویت ۲: URL مرورگر با توکن امضاشده (اگر لینک عمیق نباشد)
-    deep_link = getattr(config, "WEBAPP_DEEP_LINK", "").strip()
-    public_url = getattr(config, "WEBAPP_PUBLIC_URL", "")
-    if deep_link and deep_link.startswith("https://t.me/"):
-        rows.append([InlineKeyboardButton("🎲 قمارخانه زنده", url=deep_link)])
-    elif public_url and public_url.startswith("https://") and user_id:
-        token = utils.generate_browser_token(user_id)
-        browser_url = f"{public_url}/?token={token}"
-        rows.append([InlineKeyboardButton("🎲 قمارخانه زنده", url=browser_url)])
-    else:
-        rows.append([InlineKeyboardButton("🎲 قمارخانه زنده", callback_data="casino:webapp")])
-    rows.append([InlineKeyboardButton("🔙 بازگشت به بازی‌ها", callback_data="game:menu")])
+logger = logging.getLogger("zarcoin.casino")
+rng = random.SystemRandom()
+
+# ═══════════════════════════════════════════════
+# ═══════════ سازگاری با نسخه‌ی قدیمی ربات ═══════════
+# ═══════════════════════════════════════════════
+MOVED_TEXT = "🎰 همه‌ی بازی‌ها به «کازینو» (مینی‌اپ) منتقل شدند!\nاز منوی اصلی روی دکمه‌ی 🎰 کازینو بزن."
+
+
+def miniapp_keyboard(text: str = "🎰 ورود به کازینو", back: bool = True):
+    """کیبورد باز کردن مینی‌اپ (در گروه و پیوی کار می‌کند)"""
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    rows = [[miniapp_button(text)]]
+    if back:
+        rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="menu:main")])
     return InlineKeyboardMarkup(rows)
 
-def casino_back_kb(): return InlineKeyboardMarkup([[InlineKeyboardButton("🎰 بازگشت به کازینو", callback_data="game:casino")]])
 
-def casino_dice_kb():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("دقیقاً 1 (3x)", callback_data="casino:play:dice:exact:1"), InlineKeyboardButton("دقیقاً 2 (3x)", callback_data="casino:play:dice:exact:2"), InlineKeyboardButton("دقیقاً 3 (3x)", callback_data="casino:play:dice:exact:3")],
-        [InlineKeyboardButton("دقیقاً 4 (3x)", callback_data="casino:play:dice:exact:4"), InlineKeyboardButton("دقیقاً 5 (3x)", callback_data="casino:play:dice:exact:5"), InlineKeyboardButton("دقیقاً 6 (3x)", callback_data="casino:play:dice:exact:6")],
-        [InlineKeyboardButton("زوج (1.5x)", callback_data="casino:play:dice:parity:even"), InlineKeyboardButton("فرد (1.5x)", callback_data="casino:play:dice:parity:odd")],
-        [InlineKeyboardButton("❌ لغو و بازگشت پول", callback_data="casino:cancel")],
-    ])
-
-def casino_coin_kb():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🦁 شیر", callback_data="casino:play:coin:heads"), InlineKeyboardButton("✖️ خط", callback_data="casino:play:coin:tails")],
-        [InlineKeyboardButton("❌ لغو و بازگشت پول", callback_data="casino:cancel")],
-    ])
-
-def casino_card_kb():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("♥️ دل", callback_data="casino:play:card:hearts"), InlineKeyboardButton("♦️ خشت", callback_data="casino:play:card:diamonds")],
-        [InlineKeyboardButton("♠️ پیک", callback_data="casino:play:card:spades"), InlineKeyboardButton("♣️ گشنیز", callback_data="casino:play:card:clubs")],
-        [InlineKeyboardButton("❌ لغو و بازگشت پول", callback_data="casino:cancel")],
-    ])
-
-def casino_roulette_kb():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("قرمز (2x)", callback_data="casino:play:roulette:red"), InlineKeyboardButton("مشکی (2x)", callback_data="casino:play:roulette:black")],
-        [InlineKeyboardButton("صفر (36x)", callback_data="casino:play:roulette:green")],
-        [InlineKeyboardButton("❌ لغو و بازگشت پول", callback_data="casino:cancel")],
-    ])
-
-def casino_mines_kb():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🚪 در ۱", callback_data="casino:play:mines:1"), InlineKeyboardButton("🚪 در ۲", callback_data="casino:play:mines:2"), InlineKeyboardButton("🚪 در ۳", callback_data="casino:play:mines:3")],
-        [InlineKeyboardButton("🚪 در ۴", callback_data="casino:play:mines:4"), InlineKeyboardButton("🚪 در ۵", callback_data="casino:play:mines:5")],
-        [InlineKeyboardButton("❌ لغو و بازگشت پول", callback_data="casino:cancel")],
-    ])
-
-def casino_wheel_kb():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("1️⃣", callback_data="casino:play:wheel:1"), InlineKeyboardButton("2️⃣", callback_data="casino:play:wheel:2"), InlineKeyboardButton("3️⃣", callback_data="casino:play:wheel:3")],
-        [InlineKeyboardButton("4️⃣", callback_data="casino:play:wheel:4"), InlineKeyboardButton("5️⃣", callback_data="casino:play:wheel:5"), InlineKeyboardButton("6️⃣", callback_data="casino:play:wheel:6")],
-        [InlineKeyboardButton("❌ لغو و بازگشت پول", callback_data="casino:cancel")],
-    ])
-
-async def _record_casino_missions(context, chat_id, user_id, is_win: bool):
-    """ثبت ماموریت‌های کازینو"""
-    r_p = await db.progress_mission(user_id, "play_casino", 1, base_xp=config.BASE_XP_PLAY_GAME)
-    await utils.notify_mission(context, chat_id, r_p)
-    r_any = await db.progress_mission(user_id, "play_any_game", 1, base_xp=0)
-    await utils.notify_mission(context, chat_id, r_any)
-    if is_win:
-        r_win = await db.progress_mission(user_id, "win_casino", 1, base_xp=config.BASE_XP_WIN_GAME)
-        await utils.notify_mission(context, chat_id, r_win)
-        r_any_win = await db.progress_mission(user_id, "win_any_game", 1, base_xp=0)
-        await utils.notify_mission(context, chat_id, r_any_win)
-
-async def play_slots(update, user_id, amount, context):
-    reels = [random.choice(config.SLOT_SYMBOLS) for _ in range(3)]
-    reels_str = " | ".join(reels)
-    is_win = False
-    if reels[0] == reels[1] == reels[2]:
-        mult = 15 if reels[0] == "7️⃣" else (8 if reels[0] == "⭐" else 4)
-        is_win = True
-    elif reels[0] == reels[1] or reels[1] == reels[2] or reels[0] == reels[2]:
-        mult = 1.7
-        is_win = True
-    else:
-        mult = 0
-
-    if is_win:
-        full = int(amount * mult)
-        prize, comm = utils.apply_commission(full, config.COMMISSION_RATE)
-        await db.add_balance(user_id, prize)
-        text = f"🎰 <b>اسلات</b>\n━━━━━━━━━━━━━━━━━━\n<b>{reels_str}</b>\n\n🎉 <b>بردی!</b>\n💰 جایزه: {utils.fmt(full)}\n💵 کارمزد 10%: {utils.fmt(comm)}\n✅ دریافتی: <b>{utils.fmt(prize)}</b> زرکوین"
-    else:
-        text = f"🎰 <b>اسلات</b>\n━━━━━━━━━━━━━━━━━━\n<b>{reels_str}</b>\n\n😢 باختی! {utils.fmt(amount)} زرکوین از دست رفت."
-
-    msg = await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=casino_back_kb())
-    utils.remember_owner(msg, user_id)
-
-    # ✅ ثبت ماموریت‌ها
-    await _record_casino_missions(context, update.message.chat_id, user_id, is_win)
+def miniapp_button(text: str = "🎰 کازینو"):
+    """دکمه مینی‌اپ — اولویت با لینک عمیق t.me/bot/app (در گروه هم کار می‌کند)"""
+    from telegram import InlineKeyboardButton, WebAppInfo
+    import config
+    deep = (getattr(config, "WEBAPP_DEEP_LINK", "") or "").strip()
+    if deep:
+        return InlineKeyboardButton(text, url=deep)
+    url = (getattr(config, "WEBAPP_PUBLIC_URL", "") or "").strip()
+    if url:
+        return InlineKeyboardButton(text, web_app=WebAppInfo(url=url))
+    return InlineKeyboardButton(text, callback_data="menu:main")
 
 
-def _win_text(game_name: str, header: str, entry: int, mult: float) -> tuple[str, str, bool]:
-    """تولید متن برد — خروجی: (text, is_win)"""
-    full = int(entry * mult)
-    prize, comm = utils.apply_commission(full, config.COMMISSION_RATE)
-    text = header + f"🎉 <b>بردی!</b>\n💰 جایزه: {utils.fmt(full)}\n💵 کارمزد 10%: {utils.fmt(comm)}\n✅ دریافتی: <b>{utils.fmt(prize)}</b> زرکوین"
-    return text, prize, True
+def casino_menu_kb(user_id=None):
+    return miniapp_keyboard()
 
 
-def _lose_text(header: str, entry: int) -> str:
-    return header + f"😢 باختی! {utils.fmt(entry)} زرکوین از دست رفت."
-
-
-async def handle_callback(query, context, data, user_id):
-    # 🔧 اگر مینی‌اپ فعال نیست، پیام راهنما نشان بده
-    if data == "casino:webapp":
-        deep_link = getattr(config, "WEBAPP_DEEP_LINK", "").strip()
-        msg = (
-            f"❌ قمارخانه زنده فعال نیست!\n\n"
-            f"<b>راه‌حل ساده — لینک عمیق تلگرام:</b>\n\n"
-            f"۱. به @BotFather پیام دهید\n"
-            f"۲. <code>/newapp</code> → ربات را انتخاب کنید\n"
-            f"۳. نام، توضیح و عکس را وارد کنید\n"
-            f"۴. URL سرور مینی‌اپ را وارد کنید (HTTPS)\n"
-            f"۵. تلگرام لینک کوتاه می‌دهد: <code>t.me/zargametel_bot/Zar1</code>\n\n"
-            f"سپس این لینک را در متغیر <code>WEBAPP_DEEP_LINK</code> بگذارید:\n"
-            f"<code>WEBAPP_DEEP_LINK=https://t.me/zargametel_bot/Zar1</code>\n\n"
-            f"یا متغیر <code>WEBAPP_PUBLIC_URL</code> را روی URL سرور HTTPS تنظیم کنید."
-        )
-        await utils.safe_answer(query, msg, show_alert=True)
-        return
-
-    if data == "casino:cancel":
-        pending = utils.casino_pending.pop(user_id, None)
-        if pending:
-            await db.add_balance(user_id, pending["entry"])
-            await utils.safe_edit(query, f"❌ بازی لغو شد و {utils.fmt(pending['entry'])} زرکوین برگشت.", casino_menu_kb(user_id))
-        else:
-            await utils.safe_answer(query, "❌ بازی فعالی نداری", show_alert=True)
-            return
-        await utils.safe_answer(query)
-        return
-
-    if data.count(":") == 1:
-        cg = data.split(":")[1]
-        if cg in config.CASINO_GAMES:
-            g = config.CASINO_GAMES[cg]
-            utils.user_states[user_id] = {"action": "casino_entry", "game": cg}
-            msg = await utils.safe_edit(query, f"{g['emoji']} <b>{g['name']}</b>\n━━━━━━━━━━━━━━━━━━\n💰 حداقل ورودی: <b>{utils.fmt(g['min'])}</b> زرکوین\n💵 کارمزد: <b>10%</b> از جایزه\n\nمبلغ ورودی رو بفرست:", casino_back_kb())
-            if msg:
-                utils.remember_owner(msg, user_id)
-        await utils.safe_answer(query)
-        return
-
-    if data.startswith("casino:play:"):
-        parts = data.split(":")
-        cg = parts[2]
-        pending = utils.casino_pending.get(user_id)
-        if not pending or pending["game"] != cg:
-            await utils.safe_answer(query, "❌ بازی فعالی نداری", show_alert=True); return
-        utils.casino_pending.pop(user_id, None)
-        entry = pending["entry"]
-        chat_id = query.message.chat_id if query.message else query.from_user.id
-        is_win = False
-
-        # 🔧 رفع باگ: اگر هر شاخه بازی exception پرتاب کند، entry را برگردان.
-        # قبلاً pop قبل از اجرا بود، پس crash بعد از pop پول را گم می‌کرد.
-        try:
-            is_win = await _play_casino_branch(cg, parts, entry, user_id, chat_id, query, context)
-        except Exception as e:
-            logger.exception(f"casino play error ({cg}): {e}")
+async def legacy_notice(*args, **kwargs):
+    """جایگزین همه‌ی هندلرهای قدیمی بازی‌های متنی"""
+    for a in args:
+        if hasattr(a, "answer") and hasattr(a, "data") and hasattr(a, "from_user"):
             try:
-                await db.add_balance(user_id, entry)
-                await utils.safe_edit(query, "❌ خطا در اجرای بازی — پول شما برگشت داده شد.", casino_back_kb())
+                await a.answer(MOVED_TEXT, show_alert=True)
             except Exception:
                 pass
-            await utils.safe_answer(query)
             return
-        # تعیین is_win برای ثبت ماموریت — از query context نمی‌توان مستقیم گرفت،
-        # پس _record را داخل _play_casino_branch صدا نمی‌زنیم؛ در عوض از یک flag ساده استفاده می‌کنیم.
-        # برای سادگی، ماموریت‌ها را در پایان ثبت می‌کنیم (is_win از آخرین شاخه مشخص است).
-        # نکته: is_win برای dice/coin/card/etc در _play_casino_branch محاسبه می‌شود؛
-        # آن را از طریق attribute موقت روی query نگه می‌داریم.
-        # None یعنی بازی اجرا نشده و پول برگشته (خطای dice / بازی ناشناخته)
-        if is_win is None:
+    for a in args:
+        msg = getattr(a, "effective_message", None) or getattr(a, "message", None)
+        if msg is not None and hasattr(msg, "reply_text"):
+            try:
+                await msg.reply_text(MOVED_TEXT, reply_markup=miniapp_keyboard())
+            except Exception:
+                pass
             return
 
-        # ✅ ثبت ماموریت‌ها (برای همه بازی‌های کازینو)
-        await _record_casino_missions(context, chat_id, user_id, is_win)
+
+handle_callback = legacy_notice
 
 
-async def _safe_add_balance(user_id, amount, game_name):
-    """افزودن موجودی با مدیریت خطا — اگر DB خطا دهد، exception پرتاب نمی‌کند."""
+def __getattr__(name):
+    if name.startswith("__"):
+        raise AttributeError(name)
+    return legacy_notice
+
+
+# ═══════════ ابزار ═══════════
+def _to_float(v, default=None):
+    if isinstance(v, bool):
+        return default
     try:
-        await db.add_balance(user_id, amount)
-        return True
-    except Exception as e:
-        logger.exception(f"⚠️ db.add_balance ناموفق ({game_name}, user={user_id}, amount={amount}): {e}")
-        return False
+        if isinstance(v, str):
+            v = v.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")).replace("٫", ".").strip()
+        f = float(v)
+    except (TypeError, ValueError):
+        return default
+    if f != f or math.isinf(f):
+        return default
+    return f
 
 
-async def _play_casino_branch(cg, parts, entry, user_id, chat_id, query, context):
-    """اجرای یک شاخه بازی کازینو. اگر exception پرتاب کند، caller entry را برمی‌گرداند."""
-    logger.info(f"🎮 casino play: cg={cg}, parts={parts}, entry={entry}, user={user_id}")
+def _to_int(v, default=None):
+    f = _to_float(v, None)
+    if f is None or abs(f) > 1e15:
+        return default
+    return int(f)
 
-    if cg == "dice":
-        # 🔧 رفع باگ: query.message ممکن است None باشد
-        reply_to = query.message.message_id if query.message else None
-        try:
-            kwargs = dict(chat_id=chat_id, emoji="🎲", allow_sending_without_reply=True)
-            if reply_to:
-                kwargs["reply_to_message_id"] = reply_to
-            dice_msg = await context.bot.send_dice(**kwargs)
-        except Exception as e:
-            logger.error(f"Dice send error: {e}")
-            await _safe_add_balance(user_id, entry, "dice-refund")
-            await utils.safe_edit(query, "❌ خطا در ارتباط با تلگرام. پول شما برگشت داده شد.", casino_back_kb())
-            await utils.safe_answer(query)
-            return None
 
-        # 🔧 رفع باگ: اگر dice_msg یا dice_msg.dice None باشد، مقدار تصادفی بگیر
-        try:
-            await asyncio.sleep(4.5)
-            res = dice_msg.dice.value
-        except Exception as e:
-            logger.error(f"Dice value error: {e} — استفاده از مقدار تصادفی")
-            res = random.randint(1, 6)
-        face = DICE_FACES.get(res, "🎲")
+async def _balance(uid: int) -> int:
+    try:
+        u = await db.get_user(uid)
+        return int(u["balance"]) if u else 0
+    except Exception:
+        return 0
 
-        if parts[3] == "exact":
-            choice_text = f"دقیقاً {parts[4]}"
-            is_win = (res == int(parts[4]))
-            mult = 3.0
-        else:
-            if parts[4] == "even":
-                choice_text = "زوج"
-                is_win = (res % 2 == 0)
-            else:
-                choice_text = "فرد"
-                is_win = (res % 2 != 0)
-            mult = 1.5
 
-        header = f"🎲 <b>تاس</b>\n━━━━━━━━━━━━━━━━━━\n🎯 نتیجه: {face} <b>{res}</b>\nانتخاب تو: {choice_text}\n\n"
+def _fmt(n) -> str:
+    return f"{int(n):,}"
 
-        if is_win:
-            text, prize, _ = _win_text("تاس", header, entry, mult)
-            ok = await _safe_add_balance(user_id, prize, "dice-win")
-            if not ok:
-                text += "\n⚠️ به‌روزرسانی موجودی ناموفق — بعداً تلاش کنید."
-        else:
-            text = _lose_text(header, entry)
-        await utils.safe_edit(query, text, casino_back_kb())
-        await utils.safe_answer(query)
-        return is_win
 
-    elif cg == "coin":
-        res = random.choice(["heads", "tails"])
-        header = f"🪙 <b>شیر یا خط</b>\n━━━━━━━━━━━━━━━━━━\n🎯 نتیجه: <b>{'شیر 🦁' if res == 'heads' else 'خط ✖️'}</b>\nانتخاب تو: {'شیر 🦁' if parts[3] == 'heads' else 'خط ✖️'}\n\n"
-        is_win = (res == parts[3])
-        if is_win:
-            text, prize, _ = _win_text("شیر یا خط", header, entry, 2)
-            ok = await _safe_add_balance(user_id, prize, "coin-win")
-            if not ok:
-                text += "\n⚠️ به‌روزرسانی موجودی ناموفق — بعداً تلاش کنید."
-        else:
-            text = _lose_text(header, entry)
-        await utils.safe_edit(query, text, casino_back_kb())
-        await utils.safe_answer(query)
-        return is_win
+# ═══════════ کارت‌ها ═══════════
+SUITS = "SHDC"
+SUIT_SORT = "SHCD"
 
-    elif cg == "card":
-        res = random.choice(list(config.CARD_SUITS.keys()))
-        header = f"🃏 <b>کارت شانس</b>\n━━━━━━━━━━━━━━━━━━\n🎯 کارت: <b>{config.CARD_SUITS[res]}</b> ({config.CARD_SUITS_FA[res]})\nانتخاب تو: {config.CARD_SUITS[parts[3]]} ({config.CARD_SUITS_FA[parts[3]]})\n\n"
-        is_win = (res == parts[3])
-        if is_win:
-            text, prize, _ = _win_text("کارت شانس", header, entry, 4)
-            ok = await _safe_add_balance(user_id, prize, "card-win")
-            if not ok:
-                text += "\n⚠️ به‌روزرسانی موجودی ناموفق — بعداً تلاش کنید."
-        else:
-            text = _lose_text(header, entry)
-        await utils.safe_edit(query, text, casino_back_kb())
-        await utils.safe_answer(query)
-        return is_win
 
-    elif cg == "roulette":
-        res = random.randint(0, 36)
-        if res == 0:
-            color = "green"
-            face = "🟢"
-        elif res in config.ROULETTE_RED:
-            color = "red"
-            face = "🔴"
-        else:
-            color = "black"
-            face = "⚫"
+def new_deck() -> list:
+    d = [(r, s) for s in SUITS for r in range(2, 15)]
+    rng.shuffle(d)
+    return d
 
-        color_fa = {"red": "قرمز 🔴", "black": "مشکی ⚫", "green": "سبز 🟢"}
-        choice = parts[3]
-        header = f"🎡 <b>رولت</b>\n━━━━━━━━━━━━━━━━━━\n🎯 نتیجه: {face} <b>{res}</b> ({color_fa[color]})\nانتخاب تو: {color_fa.get(choice, choice)}\n\n"
-        is_win = (color == choice)
-        if is_win:
-            mult = 36 if choice == "green" else 2
-            text, prize, _ = _win_text("رولت", header, entry, mult)
-            ok = await _safe_add_balance(user_id, prize, "roulette-win")
-            if not ok:
-                text += "\n⚠️ به‌روزرسانی موجودی ناموفق — بعداً تلاش کنید."
-        else:
-            text = _lose_text(header, entry)
-        await utils.safe_edit(query, text, casino_back_kb())
-        await utils.safe_answer(query)
-        return is_win
 
-    elif cg == "mines":
-        gems = set(random.sample(range(1, 6), config.MINES_GEMS))
-        choice = int(parts[3])
-        is_win = choice in gems
-        doors_display = ""
-        for i in range(1, 6):
-            if i in gems:
-                doors_display += f"در {i}: 💎 جواهر"
-            else:
-                doors_display += f"در {i}: 💣 مین"
-            if i == choice:
-                doors_display += " ← انتخاب تو"
-            doors_display += "\n"
-        header = f"💣 <b>مین‌یاب</b>\n━━━━━━━━━━━━━━━━━━\n🎯 نتیجه:\n{doors_display}\n"
-        if is_win:
-            text, prize, _ = _win_text("مین‌یاب", header, entry, 1.7)
-            ok = await _safe_add_balance(user_id, prize, "mines-win")
-            if not ok:
-                text += "\n⚠️ به‌روزرسانی موجودی ناموفق — بعداً تلاش کنید."
-        else:
-            text = _lose_text(header, entry)
-        await utils.safe_edit(query, text, casino_back_kb())
-        await utils.safe_answer(query)
-        return is_win
+def cj(c) -> dict:
+    return {"r": c[0], "s": c[1], "id": f"{c[0]}{c[1]}"}
 
-    elif cg == "wheel":
-        res = random.randint(1, config.WHEEL_SEGMENTS)
-        choice = int(parts[3])
-        header = f"🎯 <b>چرخ شانس</b>\n━━━━━━━━━━━━━━━━━━\n🎯 چرخ روی عدد <b>{res}</b> متوقف شد!\nانتخاب تو: <b>{choice}</b>\n\n"
-        is_win = (res == choice)
-        if is_win:
-            text, prize, _ = _win_text("چرخ شانس", header, entry, 6)
-            ok = await _safe_add_balance(user_id, prize, "wheel-win")
-            if not ok:
-                text += "\n⚠️ به‌روزرسانی موجودی ناموفق — بعداً تلاش کنید."
-        else:
-            text = _lose_text(header, entry)
-        await utils.safe_edit(query, text, casino_back_kb())
-        await utils.safe_answer(query)
-        return is_win
 
+def rand_card():
+    return (rng.randint(2, 14), rng.choice(SUITS))
+
+
+# ═══════════════════════════════════════════════
+# ═══════════ تک‌نفره‌ی آنی ═══════════
+# هر تابع: body → dict شامل mult (ضریب پرداخت روی کل شرط)
+# پارامتر نامعتبر → ValueError
+# ═══════════════════════════════════════════════
+WHEEL_SEGMENTS = [0, 1.5, 0, 2, 0.5, 0, 5, 0, 1.5, 0.5, 0, 0.5]  # EV ≈ 0.96
+
+
+def play_wheel(body: dict) -> dict:
+    idx = rng.randrange(len(WHEEL_SEGMENTS))
+    return {"index": idx, "mult": WHEEL_SEGMENTS[idx]}
+
+
+def play_crash(body: dict) -> dict:
+    t = _to_float(body.get("target"))
+    if t is None or t < 1.01 or t > 100:
+        raise ValueError("ضریب هدف باید بین ۱٫۰۱ تا ۱۰۰ باشد")
+    t = round(t, 2)
+    r = rng.random()
+    crash = max(1.0, min(math.floor((0.96 / (1.0 - r)) * 100) / 100, 1000.0))
+    won = crash >= t
+    return {"crash": crash, "target": t, "won": won, "mult": t if won else 0}
+
+
+def play_coin(body: dict) -> dict:
+    side = body.get("side")
+    if side not in ("heads", "tails"):
+        raise ValueError("شیر یا خط را انتخاب کن")
+    result = rng.choice(("heads", "tails"))
+    won = result == side
+    return {"result": result, "won": won, "mult": 1.9 if won else 0}
+
+
+def play_card(body: dict) -> dict:
+    """کارت شانس: رنگ (×۱٫۹) یا خال (×۳٫۸)"""
+    pick = body.get("pick")
+    if pick not in ("red", "black", "S", "H", "D", "C"):
+        raise ValueError("رنگ یا خال را انتخاب کن")
+    c = rand_card()
+    red = c[1] in "HD"
+    if pick in ("red", "black"):
+        won = (pick == "red") == red
+        mult = 1.9 if won else 0
     else:
-        logger.error(f"⚠️ بازی ناشناخته: {cg}")
-        await _safe_add_balance(user_id, entry, f"unknown-{cg}-refund")
-        await utils.safe_edit(query, "❌ بازی ناشناخته — پول برگشت.", casino_back_kb())
-        await utils.safe_answer(query)
+        won = c[1] == pick
+        mult = 3.8 if won else 0
+    return {"card": cj(c), "won": won, "mult": mult}
+
+
+ROULETTE_RED = {1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36}
+ROULETTE_BETS = {"red": 2, "black": 2, "even": 2, "odd": 2, "low": 2, "high": 2,
+                 "dozen1": 3, "dozen2": 3, "dozen3": 3, "number": 36}
+
+
+def play_roulette(body: dict) -> dict:
+    bt = body.get("type")
+    if bt not in ROULETTE_BETS:
+        raise ValueError("نوع شرط رولت نامعتبر است")
+    num = None
+    if bt == "number":
+        num = _to_int(body.get("number"), -1)
+        if not 0 <= num <= 36:
+            raise ValueError("عدد باید بین ۰ تا ۳۶ باشد")
+    n = rng.randint(0, 36)
+    color = "green" if n == 0 else ("red" if n in ROULETTE_RED else "black")
+    won = {
+        "red": color == "red", "black": color == "black",
+        "even": n != 0 and n % 2 == 0, "odd": n % 2 == 1,
+        "low": 1 <= n <= 18, "high": 19 <= n <= 36,
+        "dozen1": 1 <= n <= 12, "dozen2": 13 <= n <= 24, "dozen3": 25 <= n <= 36,
+        "number": n == num,
+    }[bt]
+    return {"number": n, "color": color, "won": won, "mult": ROULETTE_BETS[bt] if won else 0}
+
+
+# ═══════════ مین‌یاب ═══════════
+MINES_CELLS = 25
+MINES_EDGE = 0.97
+MINES_COUNTS = (1, 3, 5, 10, 15, 20)
+
+
+def mines_mult(k: int, m: int) -> float:
+    if k <= 0:
+        return 1.0
+    p = 1.0
+    for i in range(k):
+        p *= (MINES_CELLS - i) / (MINES_CELLS - m - i)
+    return round(p * MINES_EDGE, 4)
+
+
+def mines_start(bet: int, count: int) -> dict:
+    if count not in MINES_COUNTS:
+        raise ValueError("تعداد مین نامعتبر است")
+    return {"type": "mines", "bet": bet, "count": count,
+            "mines": set(rng.sample(range(MINES_CELLS), count)), "revealed": []}
+
+
+def mines_reveal(s: dict, idx: int):
+    """خروجی: 'lose' | 'win' (همه‌ی خانه‌ها باز شد) | None"""
+    if not 0 <= idx < MINES_CELLS or idx in s["revealed"]:
+        raise ValueError("خانه نامعتبر است")
+    if idx in s["mines"]:
+        s["finished"] = True
+        s["boom"] = idx
+        return "lose"
+    s["revealed"].append(idx)
+    if len(s["revealed"]) >= MINES_CELLS - s["count"]:
+        return "win"
+    return None
+
+
+def mines_payout(s: dict) -> int:
+    return int(s["bet"] * mines_mult(len(s["revealed"]), s["count"]))
+
+
+def mines_view(s: dict, reveal: bool = False) -> dict:
+    k = len(s["revealed"])
+    safe_left = MINES_CELLS - s["count"] - k
+    v = {"type": "mines", "bet": s["bet"], "count": s["count"], "revealed": list(s["revealed"]),
+         "mult": mines_mult(k, s["count"]),
+         "next_mult": mines_mult(k + 1, s["count"]) if safe_left > 0 else None,
+         "potential": mines_payout(s) if k else 0, "finished": s.get("finished", False)}
+    if reveal or s.get("finished"):
+        v["mines"] = sorted(s["mines"])
+        if "boom" in s:
+            v["boom"] = s["boom"]
+    return v
+
+
+# ═══════════ بالا پایین ═══════════
+def hilo_start(bet: int) -> dict:
+    c = rand_card()
+    return {"type": "hilo", "bet": bet, "card": c, "mult": 1.0, "steps": 0, "history": [c]}
+
+
+def hilo_guess(s: dict, direction: str):
+    """خروجی: (won: bool, next_card)"""
+    if direction not in ("hi", "lo"):
+        raise ValueError("حدس نامعتبر است")
+    r = s["card"][0]
+    p = (14 - r) / 13 if direction == "hi" else (r - 2) / 13
+    if p <= 0:
+        raise ValueError("این حدس ممکن نیست")
+    nxt = rand_card()
+    won = nxt[0] > r if direction == "hi" else nxt[0] < r
+    s["history"].append(nxt)
+    s["card"] = nxt
+    if won:
+        s["mult"] = min(s["mult"] * 0.97 / p, 1000.0)
+        s["steps"] += 1
+    else:
+        s["finished"] = True
+    return won, nxt
+
+
+def hilo_payout(s: dict) -> int:
+    return int(s["bet"] * s["mult"])
+
+
+def hilo_view(s: dict, reveal: bool = False) -> dict:
+    r = s["card"][0]
+    p_hi, p_lo = (14 - r) / 13, (r - 2) / 13
+    return {"type": "hilo", "bet": s["bet"], "card": cj(s["card"]), "mult": round(s["mult"], 4),
+            "steps": s["steps"],
+            "hi_mult": round(s["mult"] * 0.97 / p_hi, 2) if p_hi > 0 else None,
+            "lo_mult": round(s["mult"] * 0.97 / p_lo, 2) if p_lo > 0 else None,
+            "potential": hilo_payout(s) if s["steps"] else 0,
+            "history": [cj(c) for c in s["history"][-8:]], "finished": s.get("finished", False)}
+
+
+# ═══════════════════════════════════════════════
+# ═══════════ دونفره ═══════════
+# رابط: init(g) / action(g, uid, body) → خطا یا None / view(g, uid)
+# پایان بازی: g.finish(winner_uid | None, reason)
+# ═══════════════════════════════════════════════
+
+# ─── بلک‌جک ───
+def bj_value(cards) -> int:
+    total, aces = 0, 0
+    for r, _ in cards:
+        if r == 14:
+            total += 11
+            aces += 1
+        elif r >= 10:
+            total += 10
+        else:
+            total += r
+    while total > 21 and aces:
+        total -= 10
+        aces -= 1
+    return total
+
+
+def _bj_resolve(g):
+    a, b = g.uids()
+    va, vb = bj_value(g.data["hands"][a]), bj_value(g.data["hands"][b])
+    if va > 21 and vb > 21:
+        g.finish(None, "هر دو سوختید — مساوی")
+    elif va > 21:
+        g.finish(b, f"{g.name(a)} سوخت ({va})")
+    elif vb > 21:
+        g.finish(a, f"{g.name(b)} سوخت ({vb})")
+    elif va == vb:
+        g.finish(None, f"امتیاز برابر ({va}) — مساوی")
+    else:
+        w = a if va > vb else b
+        g.finish(w, f"{g.name(w)} با {max(va, vb)} در برابر {min(va, vb)} برد")
+
+
+async def bj_init(g):
+    deck = new_deck()
+    a, b = g.uids()
+    hands = {a: [deck.pop(), deck.pop()], b: [deck.pop(), deck.pop()]}
+    done = {u: bj_value(hands[u]) == 21 for u in (a, b)}
+    g.data = {"deck": deck, "hands": hands, "done": done}
+    g.waiting = {u for u in (a, b) if not done[u]}
+    if not g.waiting:
+        _bj_resolve(g)
+
+
+async def bj_action(g, uid, body):
+    if uid not in g.waiting:
+        return "نوبت تو تمام شده — منتظر حریف باش"
+    d = g.data
+    act = body.get("action")
+    if act == "hit":
+        d["hands"][uid].append(d["deck"].pop())
+        if bj_value(d["hands"][uid]) >= 21:
+            d["done"][uid] = True
+            g.waiting.discard(uid)
+    elif act == "stand":
+        d["done"][uid] = True
+        g.waiting.discard(uid)
+    else:
+        return "حرکت نامعتبر است"
+    if not g.waiting:
+        _bj_resolve(g)
+    return None
+
+
+def bj_view(g, uid) -> dict:
+    d = g.data
+    o = g.opp(uid)
+    show = g.finished
+    return {"my_cards": [cj(c) for c in d["hands"][uid]], "my_value": bj_value(d["hands"][uid]),
+            "my_done": d["done"][uid],
+            "opp_cards": [cj(c) if (show or i == 0) else None for i, c in enumerate(d["hands"][o])],
+            "opp_value": bj_value(d["hands"][o]) if show else None, "opp_done": d["done"][o]}
+
+
+# ─── حکم دونفره ───
+def _sort_hand(hand):
+    return sorted(hand, key=lambda c: (SUIT_SORT.index(c[1]), c[0]))
+
+
+async def hokm_init(g):
+    deck = new_deck()
+    a, b = g.uids()
+    hakem = rng.choice((a, b))
+    g.data = {"deck": deck, "hands": {hakem: _sort_hand([deck.pop() for _ in range(5)]), g.opp(hakem): []},
+              "hakem": hakem, "trump": None, "phase": "trump", "table": [], "tricks": {a: 0, b: 0},
+              "last_trick": None}
+    g.waiting = {hakem}
+
+
+async def hokm_action(g, uid, body):
+    d = g.data
+    if uid not in g.waiting:
+        return "نوبت تو نیست"
+    if d["phase"] == "trump":
+        suit = body.get("suit")
+        if suit not in SUITS:
+            return "خال حکم نامعتبر است"
+        d["trump"] = suit
+        hakem, other = d["hakem"], g.opp(d["hakem"])
+        d["hands"][hakem] = _sort_hand(d["hands"][hakem] + [d["deck"].pop() for _ in range(8)])
+        d["hands"][other] = _sort_hand([d["deck"].pop() for _ in range(13)])
+        d["phase"] = "play"
+        g.waiting = {hakem}
         return None
+    cid = str(body.get("card") or "")
+    hand = d["hands"][uid]
+    card = next((c for c in hand if f"{c[0]}{c[1]}" == cid), None)
+    if not card:
+        return "این کارت در دست تو نیست"
+    if d["table"]:
+        led = d["table"][0][1][1]
+        if card[1] != led and any(c[1] == led for c in hand):
+            return "باید هم‌خال بازی کنی"
+    hand.remove(card)
+    d["table"].append((uid, card))
+    if len(d["table"]) == 1:
+        g.waiting = {g.opp(uid)}
+        return None
+    (u1, c1), (u2, c2) = d["table"]
+    if c2[1] == c1[1]:
+        w = u2 if c2[0] > c1[0] else u1
+    elif c2[1] == d["trump"]:
+        w = u2
+    else:
+        w = u1
+    d["tricks"][w] += 1
+    d["last_trick"] = {"cards": list(d["table"]), "winner": w}
+    d["table"] = []
+    if d["tricks"][w] >= 7:
+        g.finish(w, f"{g.name(w)} هفت دست برد")
+        return None
+    g.waiting = {w}
+    return None
+
+
+def hokm_view(g, uid) -> dict:
+    d = g.data
+    o = g.opp(uid)
+    hand = d["hands"][uid]
+    led = d["table"][0][1][1] if d["table"] else None
+    has_led = led is not None and any(c[1] == led for c in hand)
+    my_turn = uid in g.waiting and d["phase"] == "play"
+    cards = []
+    for c in hand:
+        j = cj(c)
+        j["playable"] = bool(my_turn and (not has_led or c[1] == led))
+        cards.append(j)
+    lt = None
+    if d["last_trick"]:
+        lt = {"cards": [{"card": cj(c), "mine": u == uid} for u, c in d["last_trick"]["cards"]],
+              "i_won": d["last_trick"]["winner"] == uid}
+    return {"phase": d["phase"], "trump": d["trump"], "i_am_hakem": d["hakem"] == uid, "my_hand": cards,
+            "opp_count": len(d["hands"][o]), "table": [{"card": cj(c), "mine": u == uid} for u, c in d["table"]],
+            "tricks_me": d["tricks"][uid], "tricks_opp": d["tricks"][o], "last_trick": lt}
+
+
+# ─── پوکر تگزاس هولدم (هدز‌آپ، رِیز آزاد) ───
+HAND_NAMES = ["کارت بالا", "یک جفت", "دو جفت", "سه‌تایی", "استریت", "فلاش", "فول هاوس", "چهارتایی", "استریت فلاش"]
+STREET_NAMES = ["پیش از فلاپ", "فلاپ", "ترن", "ریور", "شودان"]
+HOLDEM_MAX_RAISES = 4  # حداکثر رِیز در هر مرحله
+
+
+def eval5(cs) -> tuple:
+    ranks = sorted((c[0] for c in cs), reverse=True)
+    flush = len({c[1] for c in cs}) == 1
+    uniq = sorted(set(ranks), reverse=True)
+    sh = 0
+    if len(uniq) == 5:
+        if uniq[0] - uniq[4] == 4:
+            sh = uniq[0]
+        elif uniq == [14, 5, 4, 3, 2]:
+            sh = 5
+    counts = {}
+    for r in ranks:
+        counts[r] = counts.get(r, 0) + 1
+    groups = sorted(counts.items(), key=lambda x: (x[1], x[0]), reverse=True)
+    shape = [n for _, n in groups]
+    gr = [r for r, _ in groups]
+    if sh and flush:
+        return (8, sh)
+    if shape[0] == 4:
+        return (7, *gr)
+    if shape == [3, 2]:
+        return (6, *gr)
+    if flush:
+        return (5, *ranks)
+    if sh:
+        return (4, sh)
+    if shape[0] == 3:
+        return (3, *gr)
+    if shape == [2, 2, 1]:
+        return (2, *gr)
+    if shape[0] == 2:
+        return (1, *gr)
+    return (0, *ranks)
+
+
+def best_hand(cards) -> tuple:
+    if len(cards) < 5:
+        ranks = sorted((c[0] for c in cards), reverse=True)
+        if len(ranks) == 2 and ranks[0] == ranks[1]:
+            return (1, ranks[0])
+        return (0, *ranks)
+    return max(eval5(x) for x in itertools.combinations(cards, 5))
+
+
+def hand_name(score) -> str:
+    return "رویال فلاش" if score[0] == 8 and score[1] == 14 else HAND_NAMES[score[0]]
+
+
+def _holdem_min_raise(g) -> int:
+    return max(1, g.bet // 10)
+
+
+def _hlog(g, text):
+    g.data["log"] = (g.data["log"] + [text])[-6:]
+
+
+def _holdem_showdown(g):
+    d = g.data
+    a, b = g.uids()
+    d["street"] = 4
+    d["showdown"] = True
+    sa, sb = best_hand(d["hole"][a] + d["board"]), best_hand(d["hole"][b] + d["board"])
+    d["final"] = {a: hand_name(sa), b: hand_name(sb)}
+    if sa == sb:
+        g.finish(None, f"دست برابر ({hand_name(sa)}) — پات تقسیم شد")
+    else:
+        w = a if sa > sb else b
+        g.finish(w, f"{g.name(w)} با {d['final'][w]} برد")
+
+
+def _holdem_next_street(g):
+    d = g.data
+    a, b = g.uids()
+    if d["street"] >= 3:
+        _holdem_showdown(g)
+        return
+    d["street"] += 1
+    d["sbets"] = {a: 0, b: 0}
+    d["acted"] = set()
+    d["raises"] = 0
+    _hlog(g, f"— {STREET_NAMES[d['street']]} —")
+    g.waiting = {b}
+
+
+async def holdem_init(g):
+    deck = new_deck()
+    a, b = g.uids()
+    g.data = {"hole": {a: [deck.pop(), deck.pop()], b: [deck.pop(), deck.pop()]},
+              "board": [deck.pop() for _ in range(5)],  # فقط سمت سرور
+              "street": 0, "sbets": {a: 0, b: 0}, "acted": set(), "raises": 0,
+              "log": [], "showdown": False, "allin": False, "bal": {a: 0, b: 0}}
+    g.waiting = {a}
+
+
+async def holdem_prepare(g):
+    """قبل از ساخت view: موجودی بازیکنان برای محاسبه سقف رِیز"""
+    for u in g.uids():
+        g.data["bal"][u] = await _balance(u)
+
+
+def _raise_bounds(g, uid):
+    d = g.data
+    o = g.opp(uid)
+    diff = max(0, d["sbets"][o] - d["sbets"][uid])
+    mx = max(0, min(d["bal"].get(uid, 0) - diff, d["bal"].get(o, 0)))
+    return diff, _holdem_min_raise(g), mx
+
+
+async def holdem_action(g, uid, body):
+    d = g.data
+    if uid not in g.waiting:
+        return "نوبت تو نیست"
+    act = body.get("action")
+    o = g.opp(uid)
+    diff = d["sbets"][o] - d["sbets"][uid]
+    name = g.name(uid)
+    if act == "fold":
+        _hlog(g, f"{name} فولد کرد")
+        g.finish(o, f"{name} فولد کرد")
+        return None
+    if act == "check":
+        if diff > 0:
+            return "باید کال یا فولد کنی"
+        _hlog(g, f"{name} چک کرد")
+    elif act == "call":
+        if diff <= 0:
+            _hlog(g, f"{name} چک کرد")
+        elif await db.deduct_balance(uid, diff):
+            g.contrib[uid] += diff
+            d["sbets"][uid] += diff
+            _hlog(g, f"{name} کال کرد ({_fmt(diff)})")
+        else:
+            # آل‌این کوتاه: هر چه دارد می‌گذارد و مازاد رِیز به حریف برمی‌گردد
+            pay = max(0, await _balance(uid))
+            if pay > 0 and not await db.deduct_balance(uid, pay):
+                pay = 0
+            short = diff - pay
+            g.contrib[uid] += pay
+            d["sbets"][uid] += pay
+            if short > 0:
+                g.contrib[o] -= short
+                d["sbets"][o] -= short
+                await db.add_balance(o, short)
+            d["allin"] = True
+            _hlog(g, f"{name} آل‌این کال کرد ({_fmt(pay)})")
+            _holdem_showdown(g)
+            return None
+    elif act == "raise":
+        if d["raises"] >= HOLDEM_MAX_RAISES:
+            return "سقف رِیز این مرحله پر شده"
+        await holdem_prepare(g)
+        diff0, mn, mx = _raise_bounds(g, uid)
+        amount = _to_int(body.get("amount"), 0)
+        if mx <= 0:
+            return "موجودی تو یا حریف برای رِیز کافی نیست"
+        if amount > mx:
+            return f"حداکثر رِیز {_fmt(mx)} است"
+        if amount < min(mn, mx):
+            return f"حداقل رِیز {_fmt(min(mn, mx))} است"
+        total = diff0 + amount
+        if not await db.deduct_balance(uid, total):
+            return "موجودی کافی نیست"
+        g.contrib[uid] += total
+        d["sbets"][uid] += total
+        d["raises"] += 1
+        d["acted"] = {uid}
+        _hlog(g, f"{name} رِیز کرد (+{_fmt(amount)})" + (" — آل‌این!" if amount == mx else ""))
+        g.waiting = {o}
+        return None
+    else:
+        return "حرکت نامعتبر است"
+    d["acted"].add(uid)
+    if len(d["acted"]) >= 2 and d["sbets"][uid] == d["sbets"][o]:
+        _holdem_next_street(g)
+    else:
+        g.waiting = {o}
+    return None
+
+
+def holdem_view(g, uid) -> dict:
+    d = g.data
+    o = g.opp(uid)
+    street = d["street"]
+    n = 5 if d["showdown"] else [0, 3, 4, 5, 5][min(street, 4)]
+    board = d["board"][:n]
+    diff, mn, mx = _raise_bounds(g, uid)
+    show_opp = d["showdown"]
+    return {"street": street, "street_name": STREET_NAMES[min(street, 4)], "board": [cj(c) for c in board],
+            "my_cards": [cj(c) for c in d["hole"][uid]],
+            "opp_cards": [cj(c) for c in d["hole"][o]] if show_opp else [None, None],
+            "my_hand": hand_name(best_hand(d["hole"][uid] + board)),
+            "opp_hand": d.get("final", {}).get(o) if show_opp else None,
+            "can_check": diff <= 0, "call_amount": diff,
+            "min_raise": min(mn, mx) if mx > 0 else 0, "max_raise": mx,
+            "can_raise": d["raises"] < HOLDEM_MAX_RAISES and mx > 0,
+            "my_balance": d["bal"].get(uid, 0),
+            "my_contrib": g.contrib[uid], "opp_contrib": g.contrib[o],
+            "log": d["log"], "showdown": d["showdown"]}
+
+
+# ═══════════ ثبت بازی‌ها برای webapp ═══════════
+SOLO_INSTANT = {
+    "wheel": play_wheel, "crash": play_crash, "coin": play_coin,
+    "card": play_card, "roulette": play_roulette,
+}
+
+MINIAPP_GAMES = {
+    "holdem": {"init": holdem_init, "action": holdem_action, "view": holdem_view, "prepare": holdem_prepare},
+    "hokm": {"init": hokm_init, "action": hokm_action, "view": hokm_view},
+    "blackjack": {"init": bj_init, "action": bj_action, "view": bj_view},
+}
+
+
+# ═══════════ اتصال خودکار امکانات جدید به ربات ═══════════
+# bot.py این ماژول را در ابتدای کار import می‌کند؛ اینجا build اپلیکیشن را hook می‌کنیم
+# تا webapp.setup_bot(app) حتماً اجرا شود (حتی اگر خط آن در bot.py اضافه نشده باشد).
+def _install_build_hook():
+    try:
+        from telegram.ext import ApplicationBuilder
+    except Exception:
+        return
+    if getattr(ApplicationBuilder.build, "_zar_hooked", False):
+        return
+    original = ApplicationBuilder.build
+
+    def build(self, *args, **kwargs):
+        app = original(self, *args, **kwargs)
+        try:
+            import webapp
+            webapp.setup_bot(app)
+        except Exception:
+            logger.exception("❌ webapp.setup_bot اجرا نشد")
+        return app
+
+    build._zar_hooked = True
+    ApplicationBuilder.build = build
+
+
+_install_build_hook()
