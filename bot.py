@@ -708,7 +708,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if data.startswith("tr:c:"):
-            await confirm_transfer(query, int(data.split(":")[2]))
+            await confirm_transfer(query, context, int(data.split(":")[2]))
             return
         if data.startswith("tr:x:"):
             # 🔧 رفع باگ: cancel باید owner_id (از callback_data) را pop کند، نه clicker_id.
@@ -798,14 +798,24 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("❌ موجودی!")
                 return
             utils.user_states.pop(user_id, None)
-            if gk == "penalty":
-                await penalty.start_game(update, amount, context)
-            elif gk == "rps":
-                await rps.create_room(update, user, amount)
-            elif gk == "ttt":
-                await ttt.create_room(update, user, amount)
-            elif gk == "quiz":
-                await quiz.create_room(update, user, amount)
+            # 🔧 اگر ساخت بازی خطا بدهد، ورودی کسر‌شده برگردانده شود
+            try:
+                if gk == "penalty":
+                    await penalty.start_game(update, amount, context)
+                elif gk == "rps":
+                    await rps.create_room(update, user, amount)
+                elif gk == "ttt":
+                    await ttt.create_room(update, user, amount)
+                elif gk == "quiz":
+                    await quiz.create_room(update, user, amount)
+            except Exception:
+                logger.exception(f"❌ ساخت بازی {gk} ناموفق بود")
+                utils.penalty_games.pop(user_id, None)
+                rid = utils.find_user_room(user_id)
+                if rid:
+                    utils.rooms.pop(rid, None)
+                await db.add_balance(user_id, amount)
+                await update.message.reply_text("❌ شروع بازی ناموفق بود. ورودی شما برگشت داده شد.")
             return
 
         if action == "casino_entry":
@@ -949,7 +959,7 @@ async def cancel_room(query, room_id: str):
     await utils.safe_edit(query, "❌ بازی لغو شد.", utils.BACK_GAMES_KB)
 
 
-async def confirm_transfer(query, owner_id: int):
+async def confirm_transfer(query, context, owner_id: int):
     if query.from_user.id != owner_id:
         await utils.safe_answer(query, "❌ دکمه برای تو نیست", show_alert=True)
         return
@@ -972,7 +982,7 @@ async def confirm_transfer(query, owner_id: int):
     except Exception:
         pass
     result = await db.progress_mission(owner_id, "transfer", 1, base_xp=config.BASE_XP_TRANSFER)
-    await utils.notify_mission(query.bot, query.message.chat_id, result)
+    await utils.notify_mission(context, query.message.chat_id, result)
 
 
 async def owner_give(update: Update, context: ContextTypes.DEFAULT_TYPE):
