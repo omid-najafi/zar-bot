@@ -1,125 +1,117 @@
-from telegram import InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.constants import ParseMode
-import utils, db, config
+# -*- coding: utf-8 -*-
+"""
+❌ بازی‌های صفحه‌ای مینی‌اپ: دوز (۳×۳) و چهار در یک ردیف (۶×۷)
+بازی متنی قدیمی حذف شده و فقط پیام «منتقل شد» نمایش داده می‌شود.
+"""
+from games.casino import legacy_notice
 
-def ttt_check_win(board):
-    lines = [(0,1,2),(3,4,5),(6,7,8),(0,3,6),(1,4,7),(2,5,8),(0,4,8),(2,4,6)]
-    for a, b, c in lines:
-        if board[a] and board[a] == board[b] == board[c]: return board[a]
-    if all(board): return "draw"
+
+def _int(v, default=-1):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
+
+
+# ═══════════ دوز ═══════════
+LINES = [(0, 1, 2), (3, 4, 5), (6, 7, 8), (0, 3, 6), (1, 4, 7), (2, 5, 8), (0, 4, 8), (2, 4, 6)]
+
+
+async def ttt_init(g):
+    a, b = g.uids()
+    g.data = {"board": [0] * 9, "marks": {a: 1, b: 2}, "line": None}
+    g.waiting = {a}
+
+
+async def ttt_action(g, uid, body):
+    if uid not in g.waiting:
+        return "نوبت تو نیست"
+    i = _int(body.get("cell"))
+    board = g.data["board"]
+    if not 0 <= i < 9 or board[i]:
+        return "این خانه قابل انتخاب نیست"
+    mark = g.data["marks"][uid]
+    board[i] = mark
+    for line in LINES:
+        if all(board[x] == mark for x in line):
+            g.data["line"] = list(line)
+            g.finish(uid, f"{g.name(uid)} سه‌تا در یک خط چید")
+            return None
+    if all(board):
+        g.finish(None, "صفحه پر شد — مساوی")
+        return None
+    g.waiting = {g.opp(uid)}
     return None
 
-def kb(room):
-    rows = []
-    for r in range(3):
-        row = []
-        for c in range(3):
-            i = r * 3 + c
-            v = room["board"][i]
-            if v == "X": row.append(InlineKeyboardButton("❌", callback_data="ttt:noop"))
-            elif v == "O": row.append(InlineKeyboardButton("⭕", callback_data="ttt:noop"))
-            else: row.append(InlineKeyboardButton("⬜", callback_data=f"ttt:m:{room['id']}:{i}"))
-        rows.append(row)
-    return InlineKeyboardMarkup(rows)
 
-async def render(query, room):
-    p1, p2 = room["players"]
-    turn = room["turn"]
-    text = (f"❌ <b>دوز</b>\n💰 ورودی: {utils.fmt(room['entry'])}\n\n"
-            f"👤 {utils.escape(room['user_names'][p1])} ❌\n"
-            f"👤 {utils.escape(room['user_names'][p2])} ⭕\n\n"
-            f"🎯 نوبت: <b>{utils.escape(room['user_names'][turn])}</b>")
-    msg = await utils.safe_edit(query, text, kb(room))
-    # هر دو بازیکن می‌توانند کلیک کنند
-    utils.remember_owners(msg, room["players"])
+def ttt_view(g, uid) -> dict:
+    return {"board": g.data["board"], "my_mark": g.data["marks"][uid], "line": g.data["line"]}
 
-async def create_room(update, user, amount):
-    rid = utils.new_room_id()
-    utils.rooms[rid] = {
-        "id": rid, "game": "ttt", "entry": amount, "creator": user.id,
-        "players": [user.id], "status": "waiting",
-        "user_names": {user.id: user.first_name or str(user.id)},
-        "chat_id": update.effective_chat.id, "created_at": utils.now_iso(),
-    }
-    text = f"❌ <b>دوز</b>\n━━━━━━━━━━━━━━━━━━\n💰 ورودی: <b>{utils.fmt(amount)}</b>\n\n👤 بازیکن ۱: {utils.escape(user.first_name)}\n\n⏳ منتظر بازیکن دوم..."
-    msg = await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=utils.join_room_kb(rid, "ttt"))
-    utils.remember_owner(msg, user.id)
 
-async def handle_callback(query, context, data, user_id):
-    parts = data.split(":")
-    action = parts[1]
+# ═══════════ چهار در یک ردیف ═══════════
+ROWS, COLS = 6, 7
 
-    if action == "noop":
-        await utils.safe_answer(query); return
 
-    room_id = parts[2]
-    if action == "join":
-        room = utils.rooms.get(room_id)
-        if not room or room["status"] != "waiting" or user_id in room["players"]:
-            await utils.safe_answer(query, "❌ نمی‌تونی وارد بشی", show_alert=True); return
-        if utils.find_user_room(user_id):
-            await utils.safe_answer(query, "⚠️ در بازی دیگر فعالی", show_alert=True); return
+async def c4_init(g):
+    a, b = g.uids()
+    g.data = {"board": [0] * (ROWS * COLS), "discs": {a: 1, b: 2}, "line": None, "last": None}
+    g.waiting = {a}
 
-        await db.ensure_user(query.from_user)
-        if not await db.deduct_balance(user_id, room["entry"]):
-            await utils.safe_answer(query, "❌ موجودی کافی نیست", show_alert=True); return
 
-        room["players"].append(user_id)
-        room["user_names"][user_id] = query.from_user.first_name or str(user_id)
-        room["status"] = "playing"
-        room["board"] = [""] * 9
-        room["turn"] = room["players"][0]
-        room["symbols"] = {room["players"][0]: "X", room["players"][1]: "O"}
-        await render(query, room)
-        await utils.safe_answer(query)
+def _c4_line(board, r, c, d):
+    for dr, dc in ((0, 1), (1, 0), (1, 1), (1, -1)):
+        cells = [(r, c)]
+        for sign in (1, -1):
+            rr, cc = r + dr * sign, c + dc * sign
+            while 0 <= rr < ROWS and 0 <= cc < COLS and board[rr * COLS + cc] == d:
+                cells.append((rr, cc))
+                rr += dr * sign
+                cc += dc * sign
+        if len(cells) >= 4:
+            return [x * COLS + y for x, y in cells]
+    return None
 
-    elif action == "m":
-        idx = int(parts[3])
-        room = utils.rooms.get(room_id)
-        if not room or room["status"] != "playing":
-            await utils.safe_answer(query, "❌ بازی فعال نیست", show_alert=True); return
-        if user_id != room["turn"]:
-            await utils.safe_answer(query, "⏳ نوبت تو نیست", show_alert=True); return
-        if room["board"][idx]:
-            await utils.safe_answer(query, "❌ خانه پر است", show_alert=True); return
 
-        p1, p2 = room["players"]
-        room["board"][idx] = room["symbols"][user_id]
-        winner = ttt_check_win(room["board"])
-
-        if winner:
-            if winner == "draw":
-                await db.add_balance(p1, room["entry"]); await db.add_balance(p2, room["entry"])
-                text = "🤝 <b>مساوی!</b> پول‌ها برگشت."
+async def c4_action(g, uid, body):
+    if uid not in g.waiting:
+        return "نوبت تو نیست"
+    c = _int(body.get("col"))
+    if not 0 <= c < COLS:
+        return "ستون نامعتبر است"
+    board = g.data["board"]
+    d = g.data["discs"][uid]
+    for r in range(ROWS - 1, -1, -1):
+        if board[r * COLS + c] == 0:
+            board[r * COLS + c] = d
+            g.data["last"] = r * COLS + c
+            line = _c4_line(board, r, c, d)
+            if line:
+                g.data["line"] = line
+                g.finish(uid, f"{g.name(uid)} چهار مهره پشت‌سرهم چید")
+            elif all(board):
+                g.finish(None, "صفحه پر شد — مساوی")
             else:
-                w_id = p1 if winner == "X" else p2
-                full = int(room["entry"] * config.GAMES["ttt"]["mult"])
-                prize, comm = utils.apply_commission(full, config.COMMISSION_RATE)
-                await db.add_balance(w_id, prize)
-                text = f"🏆 <b>{utils.escape(room['user_names'][w_id])}</b> برنده شد!\n💰 جایزه: {utils.fmt(full)}\n💵 کارمزد 10%: {utils.fmt(comm)}\n✅ دریافتی: <b>{utils.fmt(prize)}</b>"
-            room["status"] = "finished"; utils.rooms.pop(room_id, None)
-            await utils.safe_edit(query, text, utils.BACK_GAMES_KB)
-            await utils.safe_answer(query)
+                g.waiting = {g.opp(uid)}
+            return None
+    return "این ستون پر است"
 
-            # ✅ ثبت ماموریت‌ها
-            r_p1 = await db.progress_mission(p1, "play_ttt", 1, base_xp=config.BASE_XP_PLAY_GAME)
-            r_p2 = await db.progress_mission(p2, "play_ttt", 1, base_xp=config.BASE_XP_PLAY_GAME)
-            await utils.notify_mission(context, room["chat_id"], r_p1)
-            await utils.notify_mission(context, room["chat_id"], r_p2)
 
-            r_any_p1 = await db.progress_mission(p1, "play_any_game", 1, base_xp=0)
-            r_any_p2 = await db.progress_mission(p2, "play_any_game", 1, base_xp=0)
-            await utils.notify_mission(context, room["chat_id"], r_any_p1)
-            await utils.notify_mission(context, room["chat_id"], r_any_p2)
+def c4_view(g, uid) -> dict:
+    return {"board": g.data["board"], "my_disc": g.data["discs"][uid], "line": g.data["line"],
+            "last": g.data["last"], "rows": ROWS, "cols": COLS}
 
-            if winner in ("X", "O"):
-                w_id = p1 if winner == "X" else p2
-                r_win = await db.progress_mission(w_id, "win_ttt", 1, base_xp=config.BASE_XP_WIN_GAME)
-                await utils.notify_mission(context, room["chat_id"], r_win)
-                r_any_win = await db.progress_mission(w_id, "win_any_game", 1, base_xp=0)
-                await utils.notify_mission(context, room["chat_id"], r_any_win)
-            return
 
-        room["turn"] = p2 if room["turn"] == p1 else p1
-        await render(query, room)
-        await utils.safe_answer(query)
+MINIAPP_GAMES = {
+    "ttt": {"init": ttt_init, "action": ttt_action, "view": ttt_view},
+    "connect4": {"init": c4_init, "action": c4_action, "view": c4_view},
+}
+
+# ─── سازگاری با کد قدیمی bot.py ───
+handle_callback = legacy_notice
+create_room = legacy_notice
+
+
+def __getattr__(name):
+    if name.startswith("__"):
+        raise AttributeError(name)
+    return legacy_notice
