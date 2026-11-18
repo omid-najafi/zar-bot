@@ -99,13 +99,16 @@ def validate_init_data(init_data_raw: str) -> dict | None:
         logger.error("❌ BOT_TOKEN تنظیم نشده — اعتبارسنجی initData غیرممکن")
         return None
 
-    # پارس دستی بدون URL-decode — برای حفظ encoding اصلی Telegram
+    # طبق مستندات رسمی تلگرام: رشته query را parse کن (مقادیر URL-decode می‌شوند)،
+    # فیلد hash را جدا کن و بقیه‌ی فیلدها (از جمله signature) را به‌ترتیب الفبایی
+    # به‌صورت key=value با \n بچین.
+    try:
+        parsed = urllib.parse.parse_qsl(init_data_raw, keep_blank_values=True)
+    except Exception:
+        return None
     pairs = {}
     received_hash = None
-    for chunk in init_data_raw.split("&"):
-        if "=" not in chunk:
-            continue
-        k, _, v = chunk.partition("=")
+    for k, v in parsed:
         if k == "hash":
             received_hash = v
         else:
@@ -113,15 +116,14 @@ def validate_init_data(init_data_raw: str) -> dict | None:
     if not received_hash:
         return None
 
-    # ساخت data-check-string با کلیدها به ترتیب الفبایی، مقادیر URL-encoded اصلی
     data_check = "\n".join(f"{k}={pairs[k]}" for k in sorted(pairs.keys()))
 
-    # کلید محرمانه: HMAC(SHA256, bot_token, "WebAppData")
+    # کلید محرمانه: HMAC_SHA256(key="WebAppData", msg=bot_token)
     secret_key = hmac.new(b"WebAppData", bot_token.encode(), hashlib.sha256).digest()
     computed = hmac.new(secret_key, data_check.encode(), hashlib.sha256).hexdigest()
 
     if not hmac.compare_digest(computed, received_hash):
-        logger.warning("⚠️ initData نامعتبر — هش مطابقت ندارد")
+        logger.warning("⚠️ initData نامعتبر — هش مطابقت ندارد (BOT_TOKEN سرور با رباتی که مینی‌اپ را باز کرده یکی است؟)")
         return None
 
     # اعتبارسنجی auth_date (پیر بودن بیش از ۱ روز رد شود)
@@ -129,7 +131,7 @@ def validate_init_data(init_data_raw: str) -> dict | None:
     if auth_date_raw:
         try:
             # auth_date عدد است — decode امن
-            auth_date = int(urllib.parse.unquote(auth_date_raw))
+            auth_date = int(auth_date_raw)
             if time.time() - auth_date > 86400:
                 logger.warning("⚠️ initData خیلی قدیمی است")
                 return None
@@ -141,8 +143,7 @@ def validate_init_data(init_data_raw: str) -> dict | None:
     if not user_raw:
         return None
     try:
-        user_json = urllib.parse.unquote(user_raw)
-        user = json.loads(user_json)
+        user = json.loads(user_raw)
     except Exception:
         return None
     return user
@@ -440,7 +441,7 @@ async def handle_match_join(request: web.Request):
 
         queue = _match_queues.setdefault(game_key, {})
         # پاکسازی ورودی‌های منقضی شده (با refund)
-        _cleanup_queue_with_refund(game_key)
+        await _cleanup_queue_with_refund(game_key)
 
         # پیدا کردن حریف منتظر با همان شرط
         matched_opponent = None
@@ -1596,12 +1597,12 @@ async def security_headers_middleware(request: web.Request, handler):
     # no-store برای جلوگیری از کش HTML و API بعد از deploy
     response.headers.setdefault("Cache-Control", "no-store, no-cache, must-revalidate")
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
-    response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
     # CSP — فقط scripts از self و telegram.org مجاز
     response.headers.setdefault(
         "Content-Security-Policy",
         "default-src 'self'; script-src 'self' 'unsafe-inline' https://telegram.org; "
-        "style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self';"
+        "style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self'; "
+        "frame-ancestors 'self' https://web.telegram.org https://*.telegram.org https://telegram.org;"
     )
     # CORS — اجازه به Telegram origins (و self)
     origin = request.headers.get("Origin", "")
