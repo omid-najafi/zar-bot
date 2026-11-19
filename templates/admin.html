@@ -63,7 +63,10 @@ a{color:var(--gold)}
 </head>
 <body>
 <div class="wrap">
-  <header><h1>🛠 پنل مدیریت زربات</h1><button class="btn ghost" onclick="loadStats()">🔄 بروزرسانی</button></header>
+  <header><h1>🛠 پنل مدیریت زربات</h1>
+    <div class="row"><span id="bot-state" class="pill ok">🤖 ربات: روشن</span>
+      <button class="btn red" id="bot-btn" onclick="toggleBot()">🔴 خاموش کردن بات</button>
+      <button class="btn ghost" onclick="loadStats()">🔄 بروزرسانی</button></div></header>
   <div id="pwwarn" class="warn hidden">⚠️ رمز پنل هنوز پیش‌فرض (<b>admin</b>) است. در Railway متغیرهای <code>ADMIN_USERNAME</code> و <code>ADMIN_PASSWORD</code> را تنظیم و ربات را ری‌استارت کن.</div>
   <div class="stats" id="stats"></div>
   <div class="tabs">
@@ -197,6 +200,9 @@ async function loadStats() {
   try {
     const d = await api('stats'); CAT = d.catalog;
     $('#pwwarn').classList.toggle('hidden', !d.default_password);
+    const bs = $('#bot-state'), bb = $('#bot-btn');
+    if (d.bot_off) { bs.textContent = '🤖 ربات: خاموش'; bs.className = 'pill no'; bb.textContent = '🟢 روشن کردن بات'; bb.className = 'btn green'; }
+    else { bs.textContent = '🤖 ربات: روشن'; bs.className = 'pill ok'; bb.textContent = '🔴 خاموش کردن بات'; bb.className = 'btn red'; }
     $('#stats').innerHTML = [['👥 کاربران', fmt(d.users)], ['💰 مجموع موجودی', fmt(d.balance)], ['🏦 مجموع بانک', fmt(d.bank)],
       ['🎮 بازی‌های فعال', fmt(d.games)], ['⏳ در صف', fmt(d.queue)], ['🎁 کدهای فعال', fmt(d.gifts)], ['🔑 Redis', d.redis ? '✅' : '❌']]
       .map(([a, b]) => `<div class="stat"><small>${a}</small><b>${b}</b></div>`).join('');
@@ -206,6 +212,12 @@ async function loadStats() {
 }
 
 /* ── کاربران ── */
+async function toggleBot() {
+  const off = $('#bot-state').className.includes('ok');
+  if (off && !confirm('⚠️ بات خاموش شود؟\nتا وقتی دوباره روشنش نکنی، ربات به هیچ کاربری (به جز ادمین‌ها) جواب نمی‌دهد.')) return;
+  try { const d = await api('bot/toggle', { off }); toast(d.off ? '🔴 بات خاموش شد' : '🟢 بات روشن شد', 'ok'); loadStats(); }
+  catch (e) { toast(e.message, 'err'); }
+}
 async function search() {
   const q = $('#q').value.trim(); if (!q) return;
   try {
