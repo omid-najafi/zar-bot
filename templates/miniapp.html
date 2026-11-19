@@ -293,6 +293,15 @@ input{font-family:inherit}
 .qopt.right{border-color:rgba(16,185,129,.6);background:rgba(16,185,129,.14)}
 .qopt.wrong{border-color:rgba(225,29,72,.6);background:rgba(225,29,72,.12)}
 .qlast{font-size:12.5px;color:var(--muted);padding:10px 12px;border-radius:12px;background:rgba(255,255,255,.04);margin-bottom:10px;line-height:1.9}
+/* ── othello ── */
+.oth{display:grid;grid-template-columns:repeat(8,1fr);gap:3px;padding:8px;background:#0f3d24;border-radius:16px;border:6px solid #3b2410;direction:ltr;box-shadow:0 14px 30px rgba(0,0,0,.5)}
+.ocell{aspect-ratio:1;background:#15803d;border-radius:5px;display:grid;place-items:center;padding:0;box-shadow:inset 0 0 0 1px rgba(0,0,0,.15)}
+.ocell.last{box-shadow:inset 0 0 0 2px var(--gold)}
+.odisc{width:84%;height:84%;border-radius:50%;box-shadow:0 3px 6px rgba(0,0,0,.45)}
+.odisc.b{background:radial-gradient(circle at 35% 30%,#5b5b5b,#000 70%)}
+.odisc.w{background:radial-gradient(circle at 35% 30%,#fff,#cbd5e1 70%)}
+.odisc.flip{animation:pop .4s}
+.ohint{width:30%;height:30%;border-radius:50%;background:rgba(245,196,81,.75);animation:bump 1.4s infinite}
 </style>
 </head>
 <body>
@@ -379,7 +388,8 @@ const GRAD = {
   wheel: ['#f59e0b', '#9a3412'], crash: ['#818cf8', '#312e81'], mines: ['#10b981', '#064e3b'], hilo: ['#ec4899', '#831843'],
   coin: ['#eab308', '#713f12'], holdem: ['#e11d48', '#4c0519'], hokm: ['#a855f7', '#3b0764'], blackjack: ['#0ea5e9', '#0c4a6e'],
   connect4: ['#ef4444', '#1e3a8a'], rps: ['#fb923c', '#7c2d12'], ttt: ['#2dd4bf', '#134e4a'],
-  card: ['#f43f5e', '#1e1b4b'], roulette: ['#16a34a', '#14532d'], penalty: ['#22c55e', '#166534'], quiz: ['#6366f1', '#1e1b4b']
+  card: ['#f43f5e', '#1e1b4b'], roulette: ['#16a34a', '#14532d'], penalty: ['#22c55e', '#166534'], quiz: ['#6366f1', '#1e1b4b'],
+  othello: ['#475569', '#0f172a']
 };
 const RANK = { 11: 'J', 12: 'Q', 13: 'K', 14: 'A' };
 const SUIT = { S: '♠', H: '♥', D: '♦', C: '♣' };
@@ -1159,6 +1169,21 @@ const RENDER = {
       ${s.can_check ? `<button class="btn btn-green" data-act="poker" data-v="check" ${can ? '' : 'disabled'}>✔️ چک</button>`
         : `<button class="btn btn-green" data-act="poker" data-v="call" ${can ? '' : 'disabled'} style="font-size:13px">📞 کال ${short(s.call_amount)}</button>`}
       <button class="btn btn-gold" data-act="poker" data-v="raise" ${can && s.can_raise ? '' : 'disabled'} style="font-size:13px">⬆️ رِیز</button></div>`;
+  },
+  othello(g) {
+    const s = g.state, valid = new Set(s.valid || []), can = g.your_turn && !g.finished, flipped = new Set(s.flipped || []);
+    const myC = s.my_disc === 1 ? 'b' : 'w', opC = s.my_disc === 1 ? 'w' : 'b';
+    let cells = '';
+    for (let i = 0; i < 64; i++) {
+      const v = s.board[i], ok = can && valid.has(i);
+      const disc = v ? `<div class="odisc ${v === 1 ? 'b' : 'w'} ${(flipped.has(i) || s.last === i) ? 'flip' : ''}"></div>` : (ok ? '<div class="ohint"></div>' : '');
+      cells += `<button class="ocell ${s.last === i ? 'last' : ''}" ${ok ? `data-act="cell" data-v="${i}"` : 'disabled'} style="opacity:1">${disc}</button>`;
+    }
+    $('#g-board').innerHTML = `<div class="score"><div><span class="odisc ${myC}" style="display:inline-block;width:22px;height:22px;vertical-align:middle"></span> ${fmt(s.me)}<small>تو</small></div>
+        <span style="color:var(--muted);font-size:20px">:</span><div>${fmt(s.opp)} <span class="odisc ${opC}" style="display:inline-block;width:22px;height:22px;vertical-align:middle"></span><small>حریف</small></div></div>
+      <div class="oth">${cells}</div>
+      <p class="hint" style="text-align:center;margin-top:10px">${s.opp_passed && !g.finished ? '⏭ حریف حرکتی نداشت — دوباره نوبت توئه' : s.i_passed && !g.finished ? '⏭ حرکتی نداشتی — نوبتت سوخت' : 'نقطه‌های طلایی = حرکت‌های مجاز'}</p>`;
+    $('#g-actions').innerHTML = '';
   },
   quiz(g) {
     const s = g.state, can = !g.finished && s.my_answer == null && s.question;
