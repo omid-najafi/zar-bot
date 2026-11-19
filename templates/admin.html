@@ -211,7 +211,7 @@ async function search() {
   try {
     const d = await api('search', { q });
     $('#results').innerHTML = d.results.length ? d.results.map(u => `<button class="res" onclick="openUser(${u.user_id})">
-      <span><b>${esc(u.first_name || '—')}</b> ${u.username ? '<span class="muted">@' + esc(u.username) + '</span>' : ''}<br><span class="muted">${u.user_id} · لول ${fmt(u.level)}</span></span>
+      <span><b>${esc(u.first_name || '—')}</b> ${u.username ? '<span class="muted">@' + esc(u.username) + '</span>' : ''}${u.banned ? ' <span class="pill no">🚫 بن</span>' : ''}<br><span class="muted">${u.user_id} · لول ${fmt(u.level)}</span></span>
       <span class="big" style="font-size:15px">${fmt(u.balance)}</span></button>`).join('') : '<p class="muted">کاربری پیدا نشد</p>';
     if (d.results.length === 1) openUser(d.results[0].user_id);
   } catch (e) { toast(e.message, 'err'); }
@@ -229,12 +229,20 @@ function renderUser() {
   $('#user').innerHTML = `<div class="card"><div class="uhead"><div><div class="big">${esc(u.first_name || '—')}</div>
       <span class="muted">${u.username ? '@' + esc(u.username) + ' · ' : ''}آیدی: ${u.user_id} · کارت: ${esc(u.card || '-')}</span><br>
       <span class="muted">درآمد روزانه: ${fmt(u.daily_income)} ${u.in_game ? ' · 🎮 در بازی' : ''}${u.in_queue ? ' · ⏳ در صف' : ''}</span></div>
-      <button class="btn ghost" onclick="openUser(${u.user_id})">🔄</button></div>
+      <div class="row">${u.banned ? `<button class="btn green" onclick="toggleBan(false)">✅ رفع بن</button>` : `<button class="btn red" onclick="toggleBan(true)">🚫 بن کردن از ربات</button>`}
+      <button class="btn ghost" onclick="openUser(${u.user_id})">🔄</button></div></div>
+    ${u.banned ? '<div class="warn" style="margin:0 0 12px">🚫 این کاربر بن است: ربات برایش کار نمی‌کند، کسی نمی‌تواند به او حمله کند یا پول انتقال دهد.</div>' : ''}
     <table><thead><tr><th>مورد</th><th>فعلی</th><th>مقدار</th><th></th></tr></thead><tbody>
       ${adjRow('💰 موجودی', 'coins', fmt(u.balance))}${adjRow('🏦 بانک', 'bank', fmt(u.bank))}${adjRow('⭐ لول', 'levels', fmt(u.level))}${adjRow('✨ XP', 'xp', fmt(u.xp))}</tbody></table>
     ${u.gifts.length ? `<p class="muted">🎁 کدهای استفاده‌شده: ${u.gifts.map(g => '<code>' + esc(g.code) + '</code>').join(' ')}</p>` : ''}</div>
     <div class="grid2">${tbl('🏠 ملک‌ها', CAT.properties, u.properties, 'property', CAT.max_per_key)}${tbl('👷 کارگرها', CAT.workers, u.workers, 'worker', CAT.max_per_key)}</div>
     ${tbl('💀 اینونتوری بازار سیاه', CAT.items, u.items, 'item', 0)}`;
+}
+async function toggleBan(ban) {
+  if (!CUR) return;
+  if (ban && !confirm('کاربر ' + (CUR.first_name || CUR.user_id) + ' از ربات بن شود؟\nاگر در صف یا بازی باشد، پول صف برمی‌گردد و بازی را می‌بازد.')) return;
+  try { const d = await api(ban ? 'ban' : 'unban', { user_id: CUR.user_id }); CUR = d.user; renderUser(); toast(ban ? '🚫 کاربر بن شد' : '✅ بن برداشته شد', 'ok'); }
+  catch (e) { toast(e.message, 'err'); }
 }
 async function adj(kind, key, sign) {
   const n = num($(`#a-${kind}-${key}`).value);
