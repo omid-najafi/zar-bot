@@ -7,28 +7,28 @@
 <title>🛠 پنل مدیریت زربات</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css">
 <style>
-:root{--bg:#07070c;--panel:rgba(255,255,255,.045);--line:rgba(255,255,255,.09);--text:#f4f4f7;--muted:#9a9ab0;--gold:#f5c451;--red:#e11d48;--green:#10b981;--blue:#38bdf8}
+:root{--bg:#07070c;--panel:rgba(255,255,255,.045);--line:rgba(255,255,255,.09);--text:#f4f4f7;--muted:#9a9ab0;--gold:#f5c451;--red:#e11d48;--green:#10b981}
 *{box-sizing:border-box}
 body{margin:0;font-family:Vazirmatn,Tahoma,sans-serif;color:var(--text);min-height:100vh;
   background:radial-gradient(1000px 500px at 100% -10%,rgba(225,29,72,.16),transparent 60%),radial-gradient(800px 500px at 0 0,rgba(245,196,81,.1),transparent 55%),var(--bg)}
-button,input,select{font-family:inherit;font-size:14px;color:inherit}
+button,input,select,textarea{font-family:inherit;font-size:14px;color:inherit}
 button{cursor:pointer;border:0}
 .wrap{max-width:1150px;margin:0 auto;padding:20px 16px 60px}
 header{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px}
 h1{margin:0;font-size:24px;font-weight:900;background:linear-gradient(90deg,#fff,var(--gold));-webkit-background-clip:text;background-clip:text;color:transparent}
 .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px}
 .stat{padding:14px;border-radius:16px;background:var(--panel);border:1px solid var(--line)}
-.stat small{color:var(--muted);font-size:12px;display:block}
-.stat b{font-size:19px;color:var(--gold)}
+.stat small{color:var(--muted);font-size:12px;display:block}.stat b{font-size:19px;color:var(--gold)}
 .warn{padding:12px 14px;border-radius:14px;background:rgba(225,29,72,.12);border:1px solid rgba(225,29,72,.4);color:#fecdd3;margin-bottom:14px;font-size:13px;line-height:1.9}
-.tabs{display:flex;gap:8px;margin-bottom:16px}
-.tab{padding:10px 18px;border-radius:12px;background:var(--panel);border:1px solid var(--line);font-weight:700;color:var(--muted)}
+.tabs{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+.tab{padding:10px 18px;border-radius:12px;background:var(--panel);border:1px solid var(--line);font-weight:700;color:var(--muted);position:relative}
 .tab.on{background:linear-gradient(135deg,var(--red),#9f1239);color:#fff;border-color:transparent}
+.badge{position:absolute;top:-6px;left:-6px;background:var(--gold);color:#1d1200;border-radius:99px;font-size:11px;padding:1px 7px;font-weight:900}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:16px;margin-bottom:14px}
 .card h3{margin:0 0 12px;font-size:16px}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-input,select{background:rgba(0,0,0,.35);border:1px solid var(--line);border-radius:11px;padding:10px 12px;outline:none;min-width:0}
-input:focus,select:focus{border-color:var(--gold)}
+input,select,textarea{background:rgba(0,0,0,.35);border:1px solid var(--line);border-radius:11px;padding:10px 12px;outline:none;min-width:0}
+input:focus,select:focus,textarea:focus{border-color:var(--gold)}
 .btn{padding:10px 16px;border-radius:11px;font-weight:700}
 .gold{background:linear-gradient(135deg,#ffd978,#d99a1e);color:#1d1200}
 .red{background:rgba(225,29,72,.18);color:#fb7185;border:1px solid rgba(225,29,72,.4)}
@@ -45,7 +45,7 @@ td,th{padding:8px 6px;border-bottom:1px solid var(--line);text-align:right;verti
 th{color:var(--muted);font-weight:500;font-size:12px}
 td input{width:72px;padding:6px 8px;text-align:center}
 .pill{display:inline-block;padding:2px 10px;border-radius:99px;font-size:12px;background:rgba(255,255,255,.08)}
-.pill.ok{background:rgba(16,185,129,.15);color:#34d399}.pill.no{background:rgba(225,29,72,.15);color:#fb7185}
+.pill.ok{background:rgba(16,185,129,.15);color:#34d399}.pill.no{background:rgba(225,29,72,.15);color:#fb7185}.pill.wait{background:rgba(245,196,81,.15);color:var(--gold)}
 .big{font-size:22px;font-weight:900;color:var(--gold)}
 .uhead{display:flex;flex-wrap:wrap;justify-content:space-between;gap:12px;align-items:center;margin-bottom:12px}
 .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
@@ -58,6 +58,7 @@ td input{width:72px;padding:6px 8px;text-align:center}
 #toast.err{border-color:rgba(225,29,72,.6);color:#fecdd3}#toast.ok{border-color:rgba(16,185,129,.6);color:#bbf7d0}
 .hidden{display:none!important}
 code{background:rgba(0,0,0,.4);padding:2px 6px;border-radius:6px;direction:ltr;display:inline-block}
+a{color:var(--gold)}
 </style>
 </head>
 <body>
@@ -65,8 +66,14 @@ code{background:rgba(0,0,0,.4);padding:2px 6px;border-radius:6px;direction:ltr;d
   <header><h1>🛠 پنل مدیریت زربات</h1><button class="btn ghost" onclick="loadStats()">🔄 بروزرسانی</button></header>
   <div id="pwwarn" class="warn hidden">⚠️ رمز پنل هنوز پیش‌فرض (<b>admin</b>) است. در Railway متغیرهای <code>ADMIN_USERNAME</code> و <code>ADMIN_PASSWORD</code> را تنظیم و ربات را ری‌استارت کن.</div>
   <div class="stats" id="stats"></div>
-  <div class="tabs"><button class="tab on" data-t="users">👤 کاربران</button><button class="tab" data-t="gifts">🎁 کدهای هدیه</button></div>
+  <div class="tabs">
+    <button class="tab on" data-t="users">👤 کاربران</button>
+    <button class="tab" data-t="gifts">🎁 کدهای هدیه</button>
+    <button class="tab" data-t="shop">🛒 فروشگاه</button>
+    <button class="tab" data-t="orders">🧾 سفارش‌ها <span class="badge hidden" id="ord-badge"></span></button>
+  </div>
 
+  <!-- کاربران -->
   <section id="t-users">
     <div class="card">
       <h3>🔎 جستجوی کاربر</h3>
@@ -76,31 +83,63 @@ code{background:rgba(0,0,0,.4);padding:2px 6px;border-radius:6px;direction:ltr;d
     <div id="user"></div>
   </section>
 
+  <!-- کد هدیه -->
   <section id="t-gifts" class="hidden">
     <div class="card">
       <h3>➕ ساخت کد هدیه</h3>
       <div class="form">
         <label>کد (خالی = تصادفی)<input id="g-code" placeholder="مثلا NOWRUZ"></label>
-        <label>💰 زرکوین<input id="g-coins" inputmode="numeric" placeholder="0"></label>
-        <label>🏦 بانک<input id="g-bank" inputmode="numeric" placeholder="0"></label>
-        <label>⭐ لول (افزایش)<input id="g-levels" inputmode="numeric" placeholder="0"></label>
-        <label>✨ XP<input id="g-xp" inputmode="numeric" placeholder="0"></label>
-        <label>👥 حداکثر استفاده (۰ = نامحدود)<input id="g-max" inputmode="numeric" placeholder="0"></label>
-        <label>🔒 حداقل لول کاربر<input id="g-minlvl" inputmode="numeric" placeholder="0"></label>
-        <label>⌛ انقضا (ساعت، ۰ = همیشگی)<input id="g-exp" inputmode="numeric" placeholder="0"></label>
+        <label>💰 زرکوین<input id="g-coins" inputmode="numeric"></label>
+        <label>🏦 بانک<input id="g-bank" inputmode="numeric"></label>
+        <label>⭐ لول (افزایش)<input id="g-levels" inputmode="numeric"></label>
+        <label>✨ XP<input id="g-xp" inputmode="numeric"></label>
+        <label>👥 حداکثر استفاده (۰ = نامحدود)<input id="g-max" inputmode="numeric"></label>
+        <label>🔒 حداقل لول کاربر<input id="g-minlvl" inputmode="numeric"></label>
+        <label>⌛ انقضا (ساعت، ۰ = همیشگی)<input id="g-exp" inputmode="numeric"></label>
         <label>📝 یادداشت<input id="g-note"></label>
       </div>
-      <div class="row" style="margin-top:12px">
-        <select id="g-type" onchange="fillKeys()"><option value="properties">🏠 ملک</option><option value="workers">👷 کارگر</option><option value="items">💀 بازار سیاه</option></select>
-        <select id="g-key" style="flex:1"></select>
-        <input id="g-n" inputmode="numeric" value="1" style="width:80px;text-align:center">
-        <button class="btn ghost" onclick="addReward()">افزودن به جایزه</button>
-      </div>
-      <div class="chips" id="g-chips"></div>
+      <div id="g-builder"></div>
       <button class="btn gold" style="margin-top:14px;width:100%" onclick="createGift()">🎁 ساخت کد هدیه</button>
-      <p class="muted">کاربر با نوشتن <code>هدیه زر کد</code> در ربات جایزه را می‌گیرد. هر کاربر از هر کد فقط یک بار می‌تواند استفاده کند. ملک/کارگر تا سقف ۵ و پدافندها تا سقف ۱ عدد داده می‌شوند.</p>
+      <p class="muted">کاربر با نوشتن <code>هدیه زر کد</code> جایزه را می‌گیرد. هر کاربر از هر کد فقط یک بار. ملک/کارگر تا سقف ۵ و پدافندها تا سقف ۱.</p>
     </div>
     <div class="card"><h3>📋 کدهای ساخته‌شده</h3><div style="overflow-x:auto"><table><thead><tr><th>کد</th><th>جایزه</th><th>استفاده</th><th>شرط</th><th>وضعیت</th><th></th></tr></thead><tbody id="g-list"></tbody></table></div></div>
+  </section>
+
+  <!-- فروشگاه -->
+  <section id="t-shop" class="hidden">
+    <div class="card">
+      <h3>💳 تنظیمات پرداخت کارت به کارت</h3>
+      <div class="form"><label>شماره کارت<input id="s-card" placeholder="6037-...."></label><label>به نام<input id="s-holder"></label></div>
+      <button class="btn gold" style="margin-top:10px" onclick="saveSettings()">ذخیره</button>
+      <p class="muted">⭐ پرداخت با استارز تلگرام نیازی به تنظیم ندارد. رسیدهای کارت به کارت در تلگرام برای OWNER_ID ارسال می‌شود و از تب «سفارش‌ها» هم قابل بررسی است.</p>
+    </div>
+    <div class="card">
+      <h3 id="p-form-title">➕ افزودن محصول</h3>
+      <input type="hidden" id="p-id">
+      <div class="form">
+        <label>عنوان محصول<input id="p-title" placeholder="مثلا ۱۰ میلیون زرکوین"></label>
+        <label>💳 قیمت (تومان)<input id="p-toman" inputmode="numeric" placeholder="0 = غیرفعال"></label>
+        <label>⭐ قیمت (استارز)<input id="p-stars" inputmode="numeric" placeholder="0 = غیرفعال"></label>
+        <label>ترتیب نمایش<input id="p-sort" inputmode="numeric" placeholder="0"></label>
+        <label>💰 زرکوین<input id="p-coins" inputmode="numeric"></label>
+        <label>🏦 بانک<input id="p-bank" inputmode="numeric"></label>
+        <label>⭐ لول (افزایش)<input id="p-levels" inputmode="numeric"></label>
+        <label>✨ XP<input id="p-xp" inputmode="numeric"></label>
+      </div>
+      <label class="muted" style="display:grid;gap:5px;margin-top:10px">توضیحات<textarea id="p-desc" rows="2"></textarea></label>
+      <div id="p-builder"></div>
+      <div class="row" style="margin-top:14px"><button class="btn gold" style="flex:1" onclick="saveProduct()">💾 ذخیره محصول</button><button class="btn ghost hidden" id="p-cancel" onclick="resetProduct()">انصراف از ویرایش</button></div>
+    </div>
+    <div class="card"><h3>📦 محصولات</h3><div style="overflow-x:auto"><table><thead><tr><th>محصول</th><th>شامل</th><th>قیمت</th><th>فروش</th><th>وضعیت</th><th></th></tr></thead><tbody id="p-list"></tbody></table></div></div>
+  </section>
+
+  <!-- سفارش‌ها -->
+  <section id="t-orders" class="hidden">
+    <div class="card">
+      <div class="row" style="justify-content:space-between;margin-bottom:10px"><h3 style="margin:0">🧾 سفارش‌ها</h3>
+        <select id="o-filter" onchange="loadOrders()"><option value="">همه</option><option value="review">🕵️ در انتظار بررسی</option><option value="awaiting_receipt">📸 منتظر رسید</option><option value="paid">✅ پرداخت‌شده</option><option value="rejected">❌ رد شده</option><option value="pending">⭐ فاکتور صادرشده</option><option value="cancelled">لغو شده</option></select></div>
+      <div style="overflow-x:auto"><table><thead><tr><th>#</th><th>کاربر</th><th>محصول</th><th>مبلغ</th><th>وضعیت</th><th>زمان</th><th></th></tr></thead><tbody id="o-list"></tbody></table></div>
+    </div>
   </section>
 </div>
 <div id="toast"></div>
@@ -109,8 +148,10 @@ code{background:rgba(0,0,0,.4);padding:2px 6px;border-radius:6px;direction:ltr;d
 const $ = s => document.querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt = n => Number(n || 0).toLocaleString('fa-IR');
-const num = v => { const s = String(v || '').replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d)).replace(/[^\d]/g, ''); return s ? parseInt(s, 10) : 0; };
-let CAT = null, CUR = null, giftRewards = { properties: {}, workers: {}, items: {} };
+const num = v => { const s = String(v == null ? '' : v).replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d)).replace(/[^\d]/g, ''); return s ? parseInt(s, 10) : 0; };
+const dt = t => new Date(t * 1000).toLocaleString('fa-IR');
+let CAT = null, CUR = null;
+const RB = { g: { properties: {}, workers: {}, items: {} }, p: { properties: {}, workers: {}, items: {} } };
 function toast(m, k) { const t = $('#toast'); t.textContent = m; t.className = 'show ' + (k || ''); clearTimeout(t._t); t._t = setTimeout(() => t.className = '', 2800); }
 async function api(path, body) {
   const r = await fetch('/admin/api/' + path, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
@@ -122,10 +163,36 @@ async function api(path, body) {
 }
 document.querySelectorAll('.tab').forEach(b => b.onclick = () => {
   document.querySelectorAll('.tab').forEach(x => x.classList.toggle('on', x === b));
-  $('#t-users').classList.toggle('hidden', b.dataset.t !== 'users');
-  $('#t-gifts').classList.toggle('hidden', b.dataset.t !== 'gifts');
-  if (b.dataset.t === 'gifts') loadGifts();
+  ['users', 'gifts', 'shop', 'orders'].forEach(t => $('#t-' + t).classList.toggle('hidden', b.dataset.t !== t));
+  ({ gifts: loadGifts, shop: loadProducts, orders: loadOrders }[b.dataset.t] || (() => {}))();
 });
+
+/* ── سازنده جایزه (مشترک کد هدیه و محصول) ── */
+function builderHtml(px) {
+  return `<div class="row" style="margin-top:12px">
+    <select id="${px}-type" onchange="fillKeys('${px}')"><option value="properties">🏠 ملک</option><option value="workers">👷 کارگر</option><option value="items">💀 بازار سیاه</option></select>
+    <select id="${px}-key" style="flex:1"></select><input id="${px}-n" inputmode="numeric" value="1" style="width:80px;text-align:center">
+    <button class="btn ghost" onclick="addReward('${px}')">افزودن</button></div><div class="chips" id="${px}-chips"></div>`;
+}
+function fillKeys(px) { if (!CAT) return; $('#' + px + '-key').innerHTML = (CAT[$('#' + px + '-type').value] || []).map(i => `<option value="${i.key}">${i.emoji} ${esc(i.name)}</option>`).join(''); }
+function addReward(px) { const t = $('#' + px + '-type').value, k = $('#' + px + '-key').value, n = num($('#' + px + '-n').value); if (!k || !n) return; RB[px][t][k] = n; renderChips(px); }
+function delReward(px, t, k) { delete RB[px][t][k]; renderChips(px); }
+function renderChips(px) {
+  const out = [];
+  for (const t of ['properties', 'workers', 'items']) for (const [k, n] of Object.entries(RB[px][t])) {
+    const it = ((CAT && CAT[t]) || []).find(i => i.key === k) || { emoji: '', name: k };
+    out.push(`<span class="chip">${it.emoji} ${esc(it.name)} × ${fmt(n)}<button onclick="delReward('${px}','${t}','${k}')">✕</button></span>`);
+  }
+  $('#' + px + '-chips').innerHTML = out.join('');
+}
+function collectRewards(px) {
+  return { coins: num($('#' + px + '-coins').value), bank: num($('#' + px + '-bank').value), levels: num($('#' + px + '-levels').value), xp: num($('#' + px + '-xp').value),
+    properties: RB[px].properties, workers: RB[px].workers, items: RB[px].items };
+}
+$('#g-builder').innerHTML = builderHtml('g');
+$('#p-builder').innerHTML = builderHtml('p');
+
+/* ── آمار ── */
 async function loadStats() {
   try {
     const d = await api('stats'); CAT = d.catalog;
@@ -133,9 +200,12 @@ async function loadStats() {
     $('#stats').innerHTML = [['👥 کاربران', fmt(d.users)], ['💰 مجموع موجودی', fmt(d.balance)], ['🏦 مجموع بانک', fmt(d.bank)],
       ['🎮 بازی‌های فعال', fmt(d.games)], ['⏳ در صف', fmt(d.queue)], ['🎁 کدهای فعال', fmt(d.gifts)], ['🔑 Redis', d.redis ? '✅' : '❌']]
       .map(([a, b]) => `<div class="stat"><small>${a}</small><b>${b}</b></div>`).join('');
-    fillKeys();
+    fillKeys('g'); fillKeys('p');
+    api('shop/orders', { status: 'review' }).then(o => { const b = $('#ord-badge'); b.textContent = fmt(o.review_count); b.classList.toggle('hidden', !o.review_count); }).catch(() => {});
   } catch (e) { toast(e.message, 'err'); }
 }
+
+/* ── کاربران ── */
 async function search() {
   const q = $('#q').value.trim(); if (!q) return;
   try {
@@ -147,11 +217,9 @@ async function search() {
   } catch (e) { toast(e.message, 'err'); }
 }
 $('#q').addEventListener('keydown', e => { if (e.key === 'Enter') search(); });
-async function openUser(id) {
-  try { const d = await api('user', { user_id: id }); CUR = d.user; renderUser(); } catch (e) { toast(e.message, 'err'); }
-}
+async function openUser(id) { try { const d = await api('user', { user_id: id }); CUR = d.user; renderUser(); } catch (e) { toast(e.message, 'err'); } }
 function adjRow(label, kind, value, key) {
-  return `<tr><td>${label}</td><td><b>${value}</b></td><td><input id="a-${kind}-${key || ''}" inputmode="numeric" value="${kind === 'coins' || kind === 'bank' || kind === 'xp' ? '' : 1}" placeholder="مقدار"></td>
+  return `<tr><td>${label}</td><td><b>${value}</b></td><td><input id="a-${kind}-${key || ''}" inputmode="numeric" value="${['coins', 'bank', 'xp'].includes(kind) ? '' : 1}" placeholder="مقدار"></td>
     <td style="white-space:nowrap"><button class="btn green sm" onclick="adj('${kind}','${key || ''}',1)">➕</button> <button class="btn red sm" onclick="adj('${kind}','${key || ''}',-1)">➖</button></td></tr>`;
 }
 function renderUser() {
@@ -163,8 +231,7 @@ function renderUser() {
       <span class="muted">درآمد روزانه: ${fmt(u.daily_income)} ${u.in_game ? ' · 🎮 در بازی' : ''}${u.in_queue ? ' · ⏳ در صف' : ''}</span></div>
       <button class="btn ghost" onclick="openUser(${u.user_id})">🔄</button></div>
     <table><thead><tr><th>مورد</th><th>فعلی</th><th>مقدار</th><th></th></tr></thead><tbody>
-      ${adjRow('💰 موجودی', 'coins', fmt(u.balance))}${adjRow('🏦 بانک', 'bank', fmt(u.bank))}
-      ${adjRow('⭐ لول', 'levels', fmt(u.level))}${adjRow('✨ XP', 'xp', fmt(u.xp))}</tbody></table>
+      ${adjRow('💰 موجودی', 'coins', fmt(u.balance))}${adjRow('🏦 بانک', 'bank', fmt(u.bank))}${adjRow('⭐ لول', 'levels', fmt(u.level))}${adjRow('✨ XP', 'xp', fmt(u.xp))}</tbody></table>
     ${u.gifts.length ? `<p class="muted">🎁 کدهای استفاده‌شده: ${u.gifts.map(g => '<code>' + esc(g.code) + '</code>').join(' ')}</p>` : ''}</div>
     <div class="grid2">${tbl('🏠 ملک‌ها', CAT.properties, u.properties, 'property', CAT.max_per_key)}${tbl('👷 کارگرها', CAT.workers, u.workers, 'worker', CAT.max_per_key)}</div>
     ${tbl('💀 اینونتوری بازار سیاه', CAT.items, u.items, 'item', 0)}`;
@@ -175,33 +242,15 @@ async function adj(kind, key, sign) {
   try { const d = await api('adjust', { user_id: CUR.user_id, kind, key, amount: sign * n }); CUR = d.user; renderUser(); toast('✅ ' + d.message, 'ok'); }
   catch (e) { toast(e.message, 'err'); }
 }
-function fillKeys() {
-  if (!CAT) return;
-  const list = CAT[$('#g-type').value] || [];
-  $('#g-key').innerHTML = list.map(i => `<option value="${i.key}">${i.emoji} ${esc(i.name)}</option>`).join('');
-}
-function addReward() {
-  const t = $('#g-type').value, k = $('#g-key').value, n = num($('#g-n').value);
-  if (!k || !n) return;
-  giftRewards[t][k] = n; renderChips();
-}
-function renderChips() {
-  const out = [];
-  for (const t of ['properties', 'workers', 'items']) for (const [k, n] of Object.entries(giftRewards[t])) {
-    const it = (CAT[t] || []).find(i => i.key === k) || { emoji: '', name: k };
-    out.push(`<span class="chip">${it.emoji} ${esc(it.name)} × ${fmt(n)}<button onclick="delete giftRewards['${t}']['${k}'];renderChips()">✕</button></span>`);
-  }
-  $('#g-chips').innerHTML = out.join('');
-}
+
+/* ── کد هدیه ── */
 async function createGift() {
-  const rewards = { coins: num($('#g-coins').value), bank: num($('#g-bank').value), levels: num($('#g-levels').value), xp: num($('#g-xp').value),
-    properties: giftRewards.properties, workers: giftRewards.workers, items: giftRewards.items };
   try {
-    const d = await api('gifts/create', { code: $('#g-code').value, rewards, max_uses: num($('#g-max').value), min_level: num($('#g-minlvl').value),
+    const d = await api('gifts/create', { code: $('#g-code').value, rewards: collectRewards('g'), max_uses: num($('#g-max').value), min_level: num($('#g-minlvl').value),
       expires_hours: num($('#g-exp').value), note: $('#g-note').value });
     toast('✅ کد ساخته شد: ' + d.code, 'ok');
     ['#g-code', '#g-coins', '#g-bank', '#g-levels', '#g-xp', '#g-max', '#g-minlvl', '#g-exp', '#g-note'].forEach(s => $(s).value = '');
-    giftRewards = { properties: {}, workers: {}, items: {} }; renderChips(); loadGifts(); loadStats();
+    RB.g = { properties: {}, workers: {}, items: {} }; renderChips('g'); loadGifts(); loadStats();
   } catch (e) { toast(e.message, 'err'); }
 }
 async function loadGifts() {
@@ -210,9 +259,8 @@ async function loadGifts() {
     $('#g-list').innerHTML = d.gifts.length ? d.gifts.map(g => {
       const expired = g.expires_at && g.expires_at < now;
       return `<tr><td><code>${esc(g.code)}</code><br><span class="muted">هدیه زر ${esc(g.code)}</span>${g.note ? '<br><span class="muted">📝 ' + esc(g.note) + '</span>' : ''}</td>
-        <td style="white-space:pre-line;font-size:12.5px">${esc(g.rewards_text)}</td>
-        <td>${fmt(g.used)} / ${g.max_uses ? fmt(g.max_uses) : '∞'}</td>
-        <td class="muted">${g.min_level ? 'لول ' + fmt(g.min_level) + '+' : '—'}<br>${g.expires_at ? (expired ? '⌛ منقضی' : 'تا ' + new Date(g.expires_at * 1000).toLocaleString('fa-IR')) : 'همیشگی'}</td>
+        <td style="white-space:pre-line;font-size:12.5px">${esc(g.rewards_text)}</td><td>${fmt(g.used)} / ${g.max_uses ? fmt(g.max_uses) : '∞'}</td>
+        <td class="muted">${g.min_level ? 'لول ' + fmt(g.min_level) + '+' : '—'}<br>${g.expires_at ? (expired ? '⌛ منقضی' : 'تا ' + dt(g.expires_at)) : 'همیشگی'}</td>
         <td><span class="pill ${g.active && !expired ? 'ok' : 'no'}">${g.active ? (expired ? 'منقضی' : 'فعال') : 'غیرفعال'}</span></td>
         <td style="white-space:nowrap"><button class="btn ghost sm" onclick="giftAct('toggle','${esc(g.code)}')">${g.active ? '⏸' : '▶️'}</button> <button class="btn red sm" onclick="giftAct('delete','${esc(g.code)}')">🗑</button></td></tr>`;
     }).join('') : '<tr><td colspan="6" class="muted">هنوز کدی ساخته نشده</td></tr>';
@@ -221,6 +269,70 @@ async function loadGifts() {
 async function giftAct(act, code) {
   if (act === 'delete' && !confirm('کد ' + code + ' حذف شود؟')) return;
   try { await api('gifts/' + act, { code }); loadGifts(); loadStats(); } catch (e) { toast(e.message, 'err'); }
+}
+
+/* ── فروشگاه ── */
+let PRODUCTS = [];
+async function loadProducts() {
+  try {
+    const d = await api('shop/products'); PRODUCTS = d.products;
+    $('#s-card').value = d.card_number || ''; $('#s-holder').value = d.card_holder || '';
+    $('#p-list').innerHTML = PRODUCTS.length ? PRODUCTS.map(p => `<tr><td><b>${esc(p.title)}</b>${p.description ? '<br><span class="muted">' + esc(p.description) + '</span>' : ''}</td>
+      <td style="white-space:pre-line;font-size:12.5px">${esc(p.rewards_text)}</td>
+      <td style="white-space:nowrap">${p.price_toman ? '💳 ' + fmt(p.price_toman) + ' ت' : ''}${p.price_toman && p.price_stars ? '<br>' : ''}${p.price_stars ? '⭐ ' + fmt(p.price_stars) : ''}</td>
+      <td>${fmt(p.sold)}</td><td><span class="pill ${p.active ? 'ok' : 'no'}">${p.active ? 'فعال' : 'غیرفعال'}</span></td>
+      <td style="white-space:nowrap"><button class="btn ghost sm" onclick="editProduct(${p.id})">✏️</button> <button class="btn ghost sm" onclick="prodAct('toggle',${p.id})">${p.active ? '⏸' : '▶️'}</button> <button class="btn red sm" onclick="prodAct('delete',${p.id})">🗑</button></td></tr>`).join('')
+      : '<tr><td colspan="6" class="muted">هنوز محصولی اضافه نشده</td></tr>';
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function saveSettings() {
+  try { await api('shop/settings', { card_number: $('#s-card').value, card_holder: $('#s-holder').value }); toast('✅ ذخیره شد', 'ok'); } catch (e) { toast(e.message, 'err'); }
+}
+function resetProduct() {
+  ['#p-id', '#p-title', '#p-toman', '#p-stars', '#p-sort', '#p-coins', '#p-bank', '#p-levels', '#p-xp', '#p-desc'].forEach(s => $(s).value = '');
+  RB.p = { properties: {}, workers: {}, items: {} }; renderChips('p');
+  $('#p-form-title').textContent = '➕ افزودن محصول'; $('#p-cancel').classList.add('hidden');
+}
+function editProduct(id) {
+  const p = PRODUCTS.find(x => x.id === id); if (!p) return;
+  const r = p.rewards || {};
+  $('#p-id').value = p.id; $('#p-title').value = p.title; $('#p-desc').value = p.description; $('#p-toman').value = p.price_toman || ''; $('#p-stars').value = p.price_stars || '';
+  $('#p-sort').value = p.sort || ''; $('#p-coins').value = r.coins || ''; $('#p-bank').value = r.bank || ''; $('#p-levels').value = r.levels || ''; $('#p-xp').value = r.xp || '';
+  RB.p = { properties: Object.assign({}, r.properties), workers: Object.assign({}, r.workers), items: Object.assign({}, r.items) }; renderChips('p');
+  $('#p-form-title').textContent = '✏️ ویرایش محصول #' + p.id; $('#p-cancel').classList.remove('hidden');
+  window.scrollTo({ top: $('#p-form-title').offsetTop - 20, behavior: 'smooth' });
+}
+async function saveProduct() {
+  try {
+    await api('shop/save', { id: num($('#p-id').value), title: $('#p-title').value, description: $('#p-desc').value, price_toman: num($('#p-toman').value),
+      price_stars: num($('#p-stars').value), sort: num($('#p-sort').value), rewards: collectRewards('p') });
+    toast('✅ محصول ذخیره شد', 'ok'); resetProduct(); loadProducts();
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function prodAct(act, id) {
+  if (act === 'delete' && !confirm('محصول حذف شود؟')) return;
+  try { await api('shop/' + act, { id }); loadProducts(); } catch (e) { toast(e.message, 'err'); }
+}
+
+/* ── سفارش‌ها ── */
+const ST = { pending: ['⭐ فاکتور صادرشده', 'wait'], awaiting_receipt: ['📸 منتظر رسید', 'wait'], review: ['🕵️ بررسی', 'wait'], paid: ['✅ پرداخت‌شده', 'ok'], rejected: ['❌ رد شده', 'no'], cancelled: ['لغو شده', ''] };
+async function loadOrders() {
+  try {
+    const d = await api('shop/orders', { status: $('#o-filter').value });
+    const b = $('#ord-badge'); b.textContent = fmt(d.review_count); b.classList.toggle('hidden', !d.review_count);
+    $('#o-list').innerHTML = d.orders.length ? d.orders.map(o => {
+      const st = ST[o.status] || [o.status, ''];
+      const canAct = ['review', 'awaiting_receipt'].includes(o.status);
+      return `<tr><td>${o.id}</td><td>${esc(o.name || '—')}${o.username ? ' <span class="muted">@' + esc(o.username) + '</span>' : ''}<br><span class="muted">${o.user_id}</span></td>
+        <td>${esc(o.title)}</td><td style="white-space:nowrap">${o.method === 'stars' ? '⭐ ' + fmt(o.amount) : '💳 ' + fmt(o.amount) + ' ت'}</td>
+        <td><span class="pill ${st[1]}">${st[0]}</span></td><td class="muted">${dt(o.created_at)}</td>
+        <td style="white-space:nowrap">${o.receipt ? `<a href="/admin/receipt/${o.id}" target="_blank">🖼 رسید</a> ` : ''}${canAct ? `<button class="btn green sm" onclick="orderAct('approve',${o.id})">✅</button> <button class="btn red sm" onclick="orderAct('reject',${o.id})">❌</button>` : ''}</td></tr>`;
+    }).join('') : '<tr><td colspan="7" class="muted">سفارشی نیست</td></tr>';
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function orderAct(act, id) {
+  if (!confirm(act === 'approve' ? 'سفارش #' + id + ' تأیید و تحویل شود؟' : 'سفارش #' + id + ' رد شود؟')) return;
+  try { await api('shop/' + act, { id }); toast('✅ انجام شد', 'ok'); loadOrders(); } catch (e) { toast(e.message, 'err'); }
 }
 loadStats();
 </script>
