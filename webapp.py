@@ -64,6 +64,7 @@ LAUNCHER_MAX = int(os.getenv("LAUNCHER_MAX_PER_ITEM") or 3)  # از هر وسی�
 DEFENSE_MAX = 1                                               # از هر سیستم دفاعی فقط ۱ عدد
 _banned: set = set()                                          # کاربران بن‌شده (کش حافظه)
 _bot_off = False                                              # حالت خاموشی بات (از پنل مدیریت)
+_admins: set = set()                                          # ادمین‌های افزوده‌شده از پنل (کش حافظه)
 
 ADMIN_USERNAME = (os.getenv("ADMIN_USERNAME") or getattr(config, "ADMIN_USERNAME", "") or "admin").strip()
 ADMIN_PASSWORD = (os.getenv("ADMIN_PASSWORD") or getattr(config, "ADMIN_PASSWORD", "") or "admin").strip()
@@ -359,6 +360,9 @@ async def _ensure_tables():
                 await cur.execute(
                     "CREATE TABLE IF NOT EXISTS banned_users (user_id BIGINT PRIMARY KEY, reason VARCHAR(255) NULL, "
                     "banned_at DOUBLE NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
+                await cur.execute(
+                    "CREATE TABLE IF NOT EXISTS bot_admins (user_id BIGINT PRIMARY KEY, note VARCHAR(255) NULL, "
+                    "added_at DOUBLE NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
                 try:
                     await cur.execute("ALTER TABLE inventory ADD COLUMN last_used DOUBLE NULL DEFAULT NULL")
                 except Exception:
@@ -1757,6 +1761,10 @@ def setup_bot(app):
             await _load_bans()
         except Exception:
             logger.exception("ساخت جداول جدید / بارگذاری بن‌ها ناموفق")
+        try:
+            await _load_admins()
+        except Exception:
+            logger.exception("بارگذاری ادمین‌ها ناموفق")
 
     async def _post_shutdown(application):
         try:
@@ -1955,13 +1963,19 @@ async def _h_help_cb(update, context):
 # ═══════════════════════════════════════════════
 # ═══════════ فروشگاه: خرید کوین و لول ═══════════
 # ═══════════════════════════════════════════════
-def _owner_ids() -> set:
+def _env_admin_ids() -> set:
+    """مالک (OWNER_ID) + آیدی‌های SHOP_ADMIN_IDS — از تنظیمات سرور می‌آیند و از پنل قابل حذف نیستند"""
     ids = {int(getattr(config, "OWNER_ID", 0) or 0)}
     for x in (os.getenv("SHOP_ADMIN_IDS") or "").split(","):
         if x.strip().isdigit():
             ids.add(int(x.strip()))
     ids.discard(0)
     return ids
+
+
+def _owner_ids() -> set:
+    """همه‌ی ادمین‌های ربات: مالک + تنظیمات سرور + ادمین‌های افزوده‌شده از پنل"""
+    return _env_admin_ids() | _admins
 
 
 async def _get_setting(k: str, default: str = "") -> str:
@@ -2463,6 +2477,78 @@ async def _kick_from_games(uid: int):
         await _close_solo_session(uid)
 
 
+# ═══════════ ادمین‌های ربات (افزودن از پنل با آیدی عددی) ═══════════
+async def _load_admins():
+    await _ensure_tables()
+    rows = await _fetch("SELECT user_id FROM bot_admins")
+    _admins.clear()
+    _admins.update(int(r["user_id"]) for r in rows)
+    logger.info(f"🛡 {len(_admins)} ادمین (افزوده‌شده از پنل) بارگذاری شد")
+
+
+@_admin
+async def admin_admins_list(request, body):
+    await _ensure_tables()
+    owner = int(getattr(config, "OWNER_ID", 0) or 0)
+    fixed = sorted(_env_admin_ids(), key=lambda x: (x != owner, x))
+    names = {}
+    if fixed:
+        ph = ",".join(["%s"] * len(fixed))
+        for r in await _fetch(f"SELECT user_id, first_name, username FROM users WHERE user_id IN ({ph})", tuple(fixed)):
+            names[int(r["user_id"])] = r
+    out = []
+    for uid in fixed:
+        r = names.get(uid) or {}
+        out.append({"user_id": uid, "name": r.get("first_name") or "", "username": r.get("username") or "",
+                    "role": "owner" if uid == owner else "env", "note": "", "added_at": None, "removable": False})
+    rows = await _fetch("SELECT a.user_id, a.note, a.added_at, u.first_name, u.username FROM bot_admins a "
+                        "LEFT JOIN users u ON u.user_id = a.user_id ORDER BY a.added_at ASC")
+    for r in rows:
+        uid = int(r["user_id"])
+        if uid in fixed:
+            continue
+        out.append({"user_id": uid, "name": r["first_name"] or "", "username": r["username"] or "", "role": "panel",
+                    "note": r["note"] or "", "added_at": float(r["added_at"]), "removable": True})
+    return _json({"ok": True, "admins": out})
+
+
+@_admin
+async def admin_admins_add(request, body):
+    uid = _to_int(body.get("user_id"), 0) or 0
+    if uid <= 0:
+        return _err("آیدی عددی نامعتبر است")
+    if uid in _owner_ids():
+        return _err("این کاربر از قبل ادمین است")
+    if uid in _banned:
+        return _err("این کاربر بن است — اول رفع بن کن")
+    u = await _fetch("SELECT first_name FROM users WHERE user_id=%s", (uid,), one=True)
+    if not u:
+        return _err("کاربری با این آیدی در ربات پیدا نشد — باید اول ربات را استارت کرده باشد", 404)
+    await _ensure_tables()
+    await _exec("INSERT INTO bot_admins (user_id, note, added_at) VALUES (%s,%s,%s) "
+                "ON DUPLICATE KEY UPDATE note=VALUES(note)", (uid, str(body.get("note") or "")[:255], time.time()))
+    _admins.add(uid)
+    await _notify(uid, "🛡 شما <b>ادمین ربات</b> شدید.\n• رسیدهای خرید برای تأیید یا رد به شما هم ارسال می‌شود\n"
+                       "• در حالت خاموشی، ربات برای شما کار می‌کند")
+    logger.warning(f"🛡 ادمین جدید از پنل اضافه شد: {uid}")
+    return _json({"ok": True, "name": u["first_name"] or ""})
+
+
+@_admin
+async def admin_admins_remove(request, body):
+    uid = _to_int(body.get("user_id"), 0) or 0
+    if uid in _env_admin_ids():
+        return _err("این ادمین از تنظیمات سرور (OWNER_ID یا SHOP_ADMIN_IDS) است و از پنل قابل حذف نیست")
+    await _ensure_tables()
+    n = await _exec("DELETE FROM bot_admins WHERE user_id=%s", (uid,))
+    _admins.discard(uid)
+    if not n:
+        return _err("این کاربر ادمین نیست")
+    await _notify(uid, "ℹ️ دسترسی ادمین شما برداشته شد.")
+    logger.warning(f"🛡 ادمین از پنل حذف شد: {uid}")
+    return _json({"ok": True})
+
+
 @_admin
 async def admin_bot_toggle(request, body):
     """خاموش/روشن کردن بات از پنل مدیریت"""
@@ -2483,7 +2569,7 @@ async def admin_ban(request, body):
     if not uid:
         return _err("آیدی نامعتبر است")
     if uid in _owner_ids():
-        return _err("نمی‌توان مدیر ربات را بن کرد")
+        return _err("این کاربر مالک یا ادمین ربات است — اول از تب «ادمین‌ها» حذفش کن")
     if not await _fetch("SELECT user_id FROM users WHERE user_id=%s", (uid,), one=True):
         return _err("کاربر پیدا نشد", 404)
     await _ensure_tables()
@@ -2673,6 +2759,7 @@ def create_app() -> web.Application:
         "shop/delete": admin_shop_delete, "shop/orders": admin_shop_orders, "shop/approve": admin_shop_approve,
         "shop/reject": admin_shop_reject, "shop/settings": admin_shop_settings,
         "ban": admin_ban, "unban": admin_unban, "bot/toggle": admin_bot_toggle,
+        "admins/list": admin_admins_list, "admins/add": admin_admins_add, "admins/remove": admin_admins_remove,
     }
     for p, h in admin_routes.items():
         app.router.add_post(f"/admin/api/{p}", h)
