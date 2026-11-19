@@ -164,13 +164,17 @@ input{font-family:inherit}
 .card.deal{animation:deal .35s ease}
 @keyframes deal{from{transform:translateY(-20px) rotate(-8deg);opacity:0}}
 .cards{display:flex;gap:6px;justify-content:center;flex-wrap:wrap}
-.hand{display:flex;justify-content:center;padding:14px 4px 4px;overflow-x:auto}
-.hand .card{margin-inline-start:-18px}
-.hand .card:first-child{margin-inline-start:0}
+/* دست کارت‌ها چپ‌به‌راست تا عدد گوشه‌ی بالا-چپ هر کارت زیر کارت بعدی نرود */
+.hand{display:flex;justify-content:center;padding:16px 4px 4px;overflow-x:auto;direction:ltr}
+.hand .card{margin-left:-28px}
+.hand .card:first-child{margin-left:0}
+.hand .card .cr{font-size:17px;font-weight:900;top:4px;left:4px;letter-spacing:-1px}
+.hand .card .cs{top:22px;left:5px;font-size:13px}
+@media (min-width:430px){.hand .card{margin-left:-20px}}
 .hand .card.playable{transform:translateY(-12px);box-shadow:0 0 0 2px var(--gold),0 10px 20px rgba(0,0,0,.5);cursor:pointer}
 .hand .card.unplayable{filter:brightness(.55)}
-.opp-hand .card{margin-inline-start:-30px}
-.opp-hand .card:first-child{margin-inline-start:0}
+.opp-hand .card{margin-left:-30px}
+.opp-hand .card:first-child{margin-left:0}
 
 /* ── game screen ── */
 .ghead{display:flex;align-items:center;gap:10px;margin-bottom:12px}
@@ -546,7 +550,9 @@ document.addEventListener('click', e => {
 
 /* ════════════ کنترل شرط ════════════ */
 function chipsFor(g) {
-  const out = []; [1, 5, 10, 50, 100, 500].forEach(m => { const v = g.min_bet * m; if (v <= g.max_bet && out.length < 5) out.push(v); });
+  const out = [];
+  [1, 1.5, 2, 3, 5, 10, 50, 100].forEach(m => { const v = Math.round(g.min_bet * m); if (v <= g.max_bet && out.length < 5 && !out.includes(v)) out.push(v); });
+  if (!out.includes(g.max_bet)) out.push(g.max_bet);
   return out;
 }
 function betControl(key, id) {
