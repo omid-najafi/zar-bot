@@ -59,6 +59,10 @@ SOLO_SESSION_TTL = 3600
 SWEEP_INTERVAL = 3
 LAUNCH_COOLDOWN = int(getattr(config, "LAUNCH_COOLDOWN_SECONDS", 3600))  # خنک شدن هر وسیله شلیک
 MAX_LEVEL = 50
+MIN_BET = int(os.getenv("MINIAPP_MIN_BET") or getattr(config, "MINIAPP_MIN_BET", 30_000_000))  # حداقل شرط کازینو
+LAUNCHER_MAX = int(os.getenv("LAUNCHER_MAX_PER_ITEM") or 3)  # از هر وسیله شلیک حداکثر ۳ عدد
+DEFENSE_MAX = 1                                               # از هر سیستم دفاعی فقط ۱ عدد
+_banned: set = set()                                          # کاربران بن‌شده (کش حافظه)
 
 ADMIN_USERNAME = (os.getenv("ADMIN_USERNAME") or getattr(config, "ADMIN_USERNAME", "") or "admin").strip()
 ADMIN_PASSWORD = (os.getenv("ADMIN_PASSWORD") or getattr(config, "ADMIN_PASSWORD", "") or "admin").strip()
@@ -87,14 +91,11 @@ _DEFAULT_GAMES = {
 
 
 def _build_games() -> dict:
-    cfg = getattr(config, "MINIAPP_GAMES", {}) or {}
     games = {}
     for key, g in _DEFAULT_GAMES.items():
         merged = dict(g)
-        src = cfg.get(key) or (cfg.get("poker") if key == "holdem" else None)
-        if isinstance(src, dict) and isinstance(src.get("min_bet"), int) and src["min_bet"] > 0:
-            merged["min_bet"] = src["min_bet"]
-        merged["max_bet"] = max(MAX_BET, merged["min_bet"])
+        merged["min_bet"] = MIN_BET
+        merged["max_bet"] = max(MAX_BET, MIN_BET)
         games[key] = merged
     return games
 
@@ -354,6 +355,9 @@ async def _ensure_tables():
                 await cur.execute(
                     "CREATE TABLE IF NOT EXISTS zar_settings (k VARCHAR(64) PRIMARY KEY, v TEXT NULL) "
                     "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
+                await cur.execute(
+                    "CREATE TABLE IF NOT EXISTS banned_users (user_id BIGINT PRIMARY KEY, reason VARCHAR(255) NULL, "
+                    "banned_at DOUBLE NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
                 try:
                     await cur.execute("ALTER TABLE inventory ADD COLUMN last_used DOUBLE NULL DEFAULT NULL")
                 except Exception:
@@ -408,6 +412,12 @@ def _defense_keys() -> set:
     return {k for k, v in _bm_items().items() if v.get("type") == "defense"}
 
 
+def _item_cap(key: str) -> int:
+    """سقف تعداد مجاز یک آیتم بازار سیاه (۰ = نامحدود)"""
+    t = _bm_items().get(key, {}).get("type")
+    return DEFENSE_MAX if t == "defense" else (LAUNCHER_MAX if t == "launcher" else 0)
+
+
 GRANT_KINDS = ("coins", "bank", "xp", "levels", "property", "worker", "item")
 
 
@@ -452,9 +462,10 @@ async def _grant(cur, uid: int, kind: str, key: str, n: int) -> int:
         if not info:
             return 0
         add = min(n, 100)
-        if info.get("type") == "defense":
+        cap = _item_cap(key)
+        if cap:
             await cur.execute("SELECT COUNT(*) AS c FROM inventory WHERE user_id=%s AND item_key=%s", (uid, key))
-            add = max(0, min(n, 1 - int((await cur.fetchone())["c"])))
+            add = max(0, min(n, cap - int((await cur.fetchone())["c"])))
         for _ in range(add):
             await cur.execute("INSERT INTO inventory (user_id, item_key, purchased_at) VALUES (%s,%s,%s)",
                               (uid, key, _now_iso()))
@@ -661,6 +672,7 @@ async def _get_user_for_request(request: web.Request) -> dict | None:
         return None
     user = dict(db_user)
     user["user_id"] = int(user_id)
+    user["_banned"] = int(user_id) in _banned
     if tg and tg.get("first_name"):
         user["first_name"] = tg["first_name"]
     return user
@@ -671,6 +683,8 @@ def _auth(handler):
         user = await _get_user_for_request(request)
         if not user:
             return _err("احراز هویت ناموفق بود — مینی‌اپ را از داخل ربات باز کن", 401, "auth")
+        if user.get("_banned"):
+            return _err("🚫 شما از ربات محروم شده‌اید", 403, "banned")
         try:
             return await handler(request, user)
         except Exception as e:
@@ -1197,6 +1211,15 @@ async def _sweeper():
             for k, p in list(_pending_launch.items()):
                 if now - p["t"] > 120:
                     _pending_launch.pop(k, None)
+            for k, d in list(_last_damage.items()):
+                if now - d["t"] > 120:
+                    _last_damage.pop(k, None)
+            for ip, fails in list(_admin_fails.items()):
+                if not fails or now - fails[-1] > 600:
+                    _admin_fails.pop(ip, None)
+            for k, t in list(_ban_notified.items()):
+                if now - t > 600:
+                    _ban_notified.pop(k, None)
             if len(_user_locks) > 5000:
                 for uid, lk in list(_user_locks.items()):
                     if not lk.locked():
@@ -1290,7 +1313,7 @@ async def _user_detail(uid: int) -> dict | None:
         "daily_income": sum(int(r["inc"] or 0) for r in assets),
         "items": {r["item_key"]: int(r["c"]) for r in inv},
         "gifts": [{"code": g["code"], "at": float(g["redeemed_at"])} for g in gifts],
-        "in_game": uid in _user_games, "in_queue": uid in _waiting,
+        "in_game": uid in _user_games, "in_queue": uid in _waiting, "banned": uid in _banned,
     }
 
 
@@ -1333,7 +1356,7 @@ async def admin_search(request, body):
     return _json({"ok": True, "results": [{
         "user_id": int(r["user_id"]), "username": r["username"], "first_name": r["first_name"],
         "balance": int(r["balance"] or 0), "bank": int(r["bank_balance"] or 0),
-        "level": _calc_level(int(r["total_xp"] or 0))} for r in rows]})
+        "level": _calc_level(int(r["total_xp"] or 0)), "banned": int(r["user_id"]) in _banned} for r in rows]})
 
 
 @_admin
@@ -1454,7 +1477,7 @@ def casino_text() -> str:
     n2 = sum(1 for g in GAMES.values() if g["type"] == "2p")
     return ("🎰 <b>کازینو زر</b>\n━━━━━━━━━━━━━━━━━━\n"
             f"🎯 {n1} بازی تک‌نفره | ⚔️ {n2} بازی دونفره آنلاین\n"
-            f"💰 حداکثر شرط: {_fmt(MAX_BET)}\n\n👇 برای ورود به کازینو بزن:")
+            f"💰 شرط: از {_fmt(MIN_BET)} تا {_fmt(MAX_BET)}\n\n👇 برای ورود به کازینو بزن:")
 
 
 def patch_bot_ui():
@@ -1477,10 +1500,17 @@ def patch_bot_ui():
         _utils.GAMES_MENU_KB = casino.miniapp_keyboard()
         _utils.BACK_GAMES_KB = M([[B("🔙 بازگشت", callback_data="menu:main")]])
     # تخریب حمله: پول + ملک/کارگر تصادفی (bot.py همین db.apply_damage را صدا می‌زند)
-    global _orig_apply_damage
+    global _orig_apply_damage, _orig_transfer
     if not getattr(getattr(db, "apply_damage", None), "_zar", False):
         _orig_apply_damage = getattr(db, "apply_damage", None)
         db.apply_damage = apply_damage_split
+    # انتقال به/از کاربر بن‌شده ممنوع
+    if hasattr(db, "transfer_coins") and not getattr(db.transfer_coins, "_zar", False):
+        _orig_transfer = db.transfer_coins
+        db.transfer_coins = _transfer_guarded
+    # جوین اجباری: پیام عضویت به نام همان کاربر ثبت می‌شود + کش نتیجه مثبت (سریع‌تر)
+    if _utils and not getattr(getattr(_utils, "verify_membership", None), "_zar", False):
+        _utils.verify_membership = verify_membership_owned
     t = getattr(config, "HELP_TEXT", "") or ""
     if t and "کازینو (مینی‌اپ)" not in t:
         block = ("🎰 کازینو (مینی‌اپ) : از منوی اصلی روی «🎰 کازینو» بزن\n"
@@ -1552,46 +1582,51 @@ async def _count_items(uid: int, key: str) -> int:
     return int(r["c"]) if r else 0
 
 
+def _cap_text(key: str) -> str:
+    return ("🛡️ از هر سیستم دفاعی فقط ۱ عدد می‌تونی داشته باشی!" if _item_cap(key) == DEFENSE_MAX
+            and _bm_items().get(key, {}).get("type") == "defense"
+            else f"🚀 از هر وسیله شلیک حداکثر {LAUNCHER_MAX} عدد می‌تونی داشته باشی!")
+
+
 async def _h_bm_guard(update, context):
-    """از هر سیستم دفاعی فقط ۱ عدد"""
+    """سقف خرید: پدافندها ۱ عدد، وسایل شلیک ۳ عدد"""
     q = update.callback_query
     parts = (q.data or "").split(":")
     key = parts[2] if len(parts) > 2 else ""
-    if key not in _defense_keys():
-        return
-    uid = q.from_user.id
-    if q.message and _utils and not _utils.is_menu_owner(q.message.chat_id, q.message.message_id, uid):
+    cap = _item_cap(key)
+    if not cap or _not_owner(q):
         return
     try:
-        have = await _count_items(uid, key)
+        have = await _count_items(q.from_user.id, key)
     except Exception:
         return
-    if have >= 1:
+    if have >= cap:
         try:
-            await q.answer("🛡️ از هر سیستم دفاعی فقط ۱ عدد می‌تونی داشته باشی و الان یکی داری!", show_alert=True)
+            await q.answer(_cap_text(key) + f"\n(الان {have} عدد داری)", show_alert=True)
         except Exception:
             pass
         raise _stop()
 
 
 async def _h_bm_post(update, context):
-    """اطمینان نهایی: اگر به هر دلیلی بیش از ۱ پدافند ثبت شد، اضافه حذف و پولش برمی‌گردد"""
+    """اطمینان نهایی: اگر به هر دلیلی بیش از سقف ثبت شد، اضافه حذف و پولش برمی‌گردد"""
     q = update.callback_query
     parts = (q.data or "").split(":")
     key = parts[2] if len(parts) > 2 else ""
-    if key not in _defense_keys():
+    cap = _item_cap(key)
+    if not cap:
         return
     uid = q.from_user.id
     try:
         have = await _count_items(uid, key)
-        if have > 1:
+        if have > cap:
             removed = await _exec("DELETE FROM inventory WHERE user_id=%s AND item_key=%s ORDER BY id DESC LIMIT %s",
-                                  (uid, key, have - 1))
+                                  (uid, key, have - cap))
             refund = removed * int(_bm_items()[key]["price"])
             if refund:
                 await db.add_balance(uid, refund)
                 await context.bot.send_message(q.message.chat_id if q.message else uid,
-                                               f"🛡️ از هر سیستم دفاعی فقط ۱ عدد مجاز است — {_fmt(refund)} برگشت داده شد.")
+                                               f"{_cap_text(key)} — {_fmt(refund)} برگشت داده شد.")
     except Exception:
         logger.exception("bm post-check error")
 
@@ -1608,6 +1643,10 @@ async def _h_attack_pre(update, context):
     proj = _cmd_map().get(msg.text.strip())
     if not proj:
         return
+    target = msg.reply_to_message.from_user
+    if target and target.id in _banned:
+        await msg.reply_text("🚫 این کاربر از ربات محروم است و نمی‌توان به او حمله کرد.")
+        raise _stop()
     launchers = [k for k, v in _bm_items().items() if v.get("type") == "launcher" and proj in v.get("launches", [])]
     if not launchers:
         return
@@ -1617,9 +1656,9 @@ async def _h_attack_pre(update, context):
         ph = ",".join(["%s"] * len(launchers))
         rows = await _fetch(f"SELECT id, item_key, last_used FROM inventory WHERE user_id=%s AND item_key IN ({ph})",
                             (uid, *launchers))
-        if not rows or await _count_items(uid, proj) <= 0:
+        proj_count = await _count_items(uid, proj) if rows else 0
+        if not rows or proj_count <= 0:
             return  # هندلر اصلی پیام «وسیله/مهمات نداری» را می‌دهد
-        proj_count = await _count_items(uid, proj)
     except Exception:
         logger.exception("attack pre-check error")
         return
@@ -1674,8 +1713,14 @@ def setup_bot(app):
     _setup_apps.add(id(app))
     global _bot_app
     _bot_app = app
-    from telegram.ext import CallbackQueryHandler, MessageHandler, PreCheckoutQueryHandler, filters
+    from telegram import Update
+    from telegram.ext import (CallbackQueryHandler, CommandHandler, MessageHandler, PreCheckoutQueryHandler,
+                              TypeHandler, filters)
     patch_bot_ui()
+    app.add_handler(TypeHandler(Update, _h_ban_gate), group=-100)  # کاربر بن‌شده → ربات برایش کار نمی‌کند
+    app.add_handler(CallbackQueryHandler(_h_check_membership, pattern=r"^check_membership$"), group=-2)
+    app.add_handler(CallbackQueryHandler(_h_lb_cb, pattern=r"^lb:"), group=-2)
+    app.add_handler(CommandHandler("start", _h_start_shop, filters=filters.ChatType.PRIVATE), group=-2)
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^\s*هدیه\s*زر(\s+\S+)?\s*$"), _h_gift), group=-2)
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^\s*(کازینو\s*زربات|زر\s*بازی)\s*$"),
                                    _h_casino_text), group=-2)
@@ -1707,8 +1752,9 @@ def setup_bot(app):
             logger.exception("start_webapp ناموفق")
         try:
             await _ensure_tables()
+            await _load_bans()
         except Exception:
-            logger.exception("ساخت جداول جدید ناموفق")
+            logger.exception("ساخت جداول جدید / بارگذاری بن‌ها ناموفق")
 
     async def _post_shutdown(application):
         try:
@@ -1738,8 +1784,9 @@ def _esc(s) -> str:
 
 async def apply_damage_split(target_id, damage_percent, *args, **kwargs) -> int:
     """
-    درصد تخریب از کل ثروت هدف (کیف پول + بانک + ارزش خرید ملک‌ها و کارگرها) حساب می‌شود
-    و به‌صورت تصادفی بین پول و دارایی‌ها تقسیم می‌شود. ملک/کارگرهای نابودشده تصادفی انتخاب می‌شوند.
+    همان درصد تخریب وسیله از پول هدف (کیف پول + بانک) و همان درصد از «تعداد» ملک‌ها و کارگرهایش کم می‌شود.
+    ملک/کارگرهای نابودشده تصادفی انتخاب می‌شوند. گرد کردن احتمالی است (مثلاً ۲۰٪ از ۳ ملک = ۰٫۶ → با احتمال ۶۰٪ یکی)
+    و با درصد کمتر از ۱۰۰ هیچ‌وقت همه‌ی دارایی‌ها یک‌جا صفر نمی‌شود.
     خروجی: ارزش کل خسارت (برای پیام bot.py)
     """
     try:
@@ -1747,7 +1794,7 @@ async def apply_damage_split(target_id, damage_percent, *args, **kwargs) -> int:
         target_id = int(target_id)
     except (TypeError, ValueError):
         return 0
-    if pct <= 0:
+    if pct <= 0 or target_id in _banned:
         return 0
 
     async def run(cur):
@@ -1759,37 +1806,22 @@ async def apply_damage_split(target_id, damage_percent, *args, **kwargs) -> int:
         await cur.execute("SELECT id, asset_type, asset_key, purchase_price FROM assets WHERE user_id=%s FOR UPDATE",
                           (target_id,))
         assets = list(await cur.fetchall())
-        cash = bal + bank
-        total = cash + sum(int(a["purchase_price"] or 0) for a in assets)
-        dmg = int(total * pct)
-        if dmg <= 0:
+        money_part = int((bal + bank) * pct)
+        n = len(assets)
+        k = 0
+        if n:
+            exact = n * pct
+            k = int(exact)
+            if _rng.random() < exact - k:
+                k += 1
+            if pct < 1 and n > 1:
+                k = min(k, n - 1)
+        removed = _rng.sample(assets, k) if k else []
+        if money_part <= 0 and not removed:
             return None
-        if not assets:
-            money_part = dmg
-        elif cash <= 0:
-            money_part = 0
-        else:
-            money_part = int(dmg * _rng.uniform(0.25, 0.75))  # سهم تصادفی پول
-        budget = dmg - money_part
-        _rng.shuffle(assets)
-        removed, left = [], []
-        for a in assets:
-            price = int(a["purchase_price"] or 0)
-            if price <= budget:
-                removed.append(a)
-                budget -= price
-            else:
-                left.append(a)
-        # باقی‌مانده‌ی بودجه: با احتمال متناسب یک دارایی گران‌تر هم نابود می‌شود
-        if budget > 0 and left:
-            c = _rng.choice(left)
-            price = int(c["purchase_price"] or 1)
-            if _rng.random() < budget / price:
-                removed.append(c)
-                budget = 0
-        money_part = min(cash, money_part + budget)
         from_bal = min(bal, money_part)
-        from_bank = money_part - from_bal
+        from_bank = min(bank, money_part - from_bal)
+        money_part = from_bal + from_bank
         await cur.execute("UPDATE users SET balance = balance - %s, bank_balance = bank_balance - %s WHERE user_id=%s",
                           (from_bal, from_bank, target_id))
         if removed:
@@ -1866,7 +1898,7 @@ def _help_pages() -> list:
           "از منوی اصلی روی «🎰 کازینو» بزن یا بنویس <b>کازینو زربات</b>\n\n"
           f"🎯 <b>تک‌نفره ({len(one)}):</b>\n" + "، ".join(f"{g['emoji']} {g['name']}" for g in one) + "\n\n"
           f"⚔️ <b>دونفره آنلاین ({len(two)}):</b>\n" + "، ".join(f"{g['emoji']} {g['name']}" for g in two) + "\n\n"
-          f"💰 حداکثر شرط: {_fmt(MAX_BET)} زرکوین\n"
+          f"💰 حداقل شرط: {_fmt(MIN_BET)} | حداکثر: {_fmt(MAX_BET)} زرکوین\n"
           f"⏳ یافتن حریف: حداکثر {MATCH_TIMEOUT} ثانیه (وگرنه پول برمی‌گردد)\n"
           f"⏰ زمان هر نوبت: {TURN_TIMEOUT} ثانیه\n"
           f"💵 کارمزد برنده‌ی دونفره: {int(COMMISSION_RATE * 100)}٪ — مساوی = برگشت کامل پول")
@@ -1878,15 +1910,16 @@ def _help_pages() -> list:
           f"باز کردن با {_fmt(getattr(c, 'KABAREH_UNLOCK_COST', 0))} | روزی یک بار\n\n"
           "🏆 <b>لیدربورد:</b> رتبه‌بندی بر اساس ثروت (موجودی + بانک)")
     p4 = ("💀 <b>راهنما — بازار سیاه</b>\n━━━━━━━━━━━━━━━━━━\n"
-          f"🚀 <b>وسایل شلیک</b> (الزامی برای شلیک — تعداد نامحدود):\n{items('launcher')}\n\n"
+          f"🚀 <b>وسایل شلیک</b> (الزامی برای شلیک — از هر کدام حداکثر {LAUNCHER_MAX} عدد):\n{items('launcher')}\n\n"
           f"💥 <b>مهمات</b> (مصرفی):\n{items('projectile')}\n\n"
           f"🛡️ <b>دفاعی</b> (از هر کدام فقط ۱ عدد):\n{items('defense')}")
     p5 = ("🎯 <b>راهنما — حمله و دفاع</b>\n━━━━━━━━━━━━━━━━━━\n"
           "۱. وسیله شلیک و مهمات را از بازار سیاه بخر\n۲. روی پیام هدف ریپلای کن\n۳. دستور شلیک را بفرست:\n"
           + cmds + "\n\n⚠️ <b>قوانین:</b>\n"
           f" • هر وسیله شلیک بعد از شلیک {LAUNCH_COOLDOWN // 60} دقیقه خنک می‌شود؛ با چند وسیله می‌توانی پشت‌سرهم شلیک کنی\n"
-          " • درصد تخریب از کل ثروت هدف (پول + بانک + ارزش ملک‌ها و کارگرها) است و تصادفی بین پول و "
-          "ملک/کارگرها تقسیم می‌شود؛ ملک و کارگرهای نابودشده تصادفی انتخاب می‌شوند\n"
+          " • همان درصد تخریب وسیله از پول هدف (کیف + بانک) و همان درصد از تعداد ملک‌ها و کارگرهایش کم می‌شود؛ "
+          "ملک و کارگرهای نابودشده تصادفی انتخاب می‌شوند\n"
+          " • به کاربران بن‌شده نمی‌توان حمله کرد یا پول انتقال داد\n"
           " • بمب‌ها قابل دفاع نیستند، فقط موشک و پهباد\n"
           " • هر شلیک یک مهمات مصرف می‌کند")
     return [p1, p2, p3, p4, p5]
@@ -2084,20 +2117,21 @@ async def _h_shop_cb(update, context):
         if m:
             _utils.remember_owner(m, uid)
 
+    # خرید فقط از پیوی ربات
+    if act in ("menu", "p", "stars", "card") and q.message and q.message.chat.type != "private":
+        un = context.bot.username
+        rows = [[B("🛒 ورود به فروشگاه در پیوی ربات", url=f"https://t.me/{un}?start=shop")]] if un else []
+        rows.append([B("🔙 بازگشت", callback_data="menu:main")])
+        await _utils.safe_answer(q, "🛒 خرید فقط از پیوی ربات امکان‌پذیر است", show_alert=True)
+        await edit("💎 <b>خرید کوین و لول</b>\n━━━━━━━━━━━━━━━━━━\n🔒 برای امنیت پرداخت، خرید فقط از "
+                   "<b>پیوی ربات</b> امکان‌پذیر است.\n👇 روی دکمه زیر بزن:", rows)
+        raise _stop()
+
     if act == "menu":
         if not await _utils.verify_membership(update, context):
             raise _stop()
-        prods = await _shop_products()
+        text, rows = await _shop_menu_content()
         await _utils.safe_answer(q)
-        if prods:
-            text = ("💎 <b>خرید کوین و لول</b>\n━━━━━━━━━━━━━━━━━━\n"
-                    + "\n".join(f"• <b>{_esc(p['title'])}</b> — {_price_line(p)}" for p in prods)
-                    + "\n\n👇 محصول مورد نظر را انتخاب کن:")
-            rows = [[B(f"💎 {p['title'][:40]}", callback_data=f"shop:p:{p['id']}")] for p in prods]
-        else:
-            text = "💎 <b>خرید کوین و لول</b>\n━━━━━━━━━━━━━━━━━━\n😔 فعلاً محصولی برای فروش موجود نیست."
-            rows = []
-        rows.append([B("🔙 بازگشت", callback_data="menu:main")])
         await edit(text, rows)
         raise _stop()
 
@@ -2136,14 +2170,11 @@ async def _h_shop_cb(update, context):
                   currency="XTR", prices=[LabeledPrice(p["title"][:32], stars)])
         try:
             await context.bot.send_invoice(chat_id=uid, **kw)
-            await _utils.safe_answer(q, "🧾 فاکتور در پیوی ربات برایت ارسال شد", show_alert=True)
-        except Exception:
-            try:
-                await context.bot.send_invoice(chat_id=q.message.chat_id, **kw)
-                await _utils.safe_answer(q)
-            except Exception as e:
-                logger.warning(f"send_invoice ناموفق: {e}")
-                await _utils.safe_answer(q, "❌ ارسال فاکتور ناموفق بود — اول ربات را در پیوی استارت کن", show_alert=True)
+            await _utils.safe_answer(q, "🧾 فاکتور پرداخت ارسال شد 👇")
+        except Exception as e:
+            logger.warning(f"send_invoice ناموفق: {e}")
+            await _exec("UPDATE shop_orders SET status='cancelled', updated_at=%s WHERE id=%s", (time.time(), oid))
+            await _utils.safe_answer(q, "❌ ارسال فاکتور ناموفق بود — دوباره تلاش کن", show_alert=True)
         raise _stop()
 
     if act == "card":
@@ -2159,10 +2190,7 @@ async def _h_shop_cb(update, context):
                 + (f"👤 به نام: {_esc(holder)}\n" if holder else "")
                 + f"🧾 کد سفارش: <b>#{oid}</b>\n\n📸 بعد از واریز، <b>عکس رسید</b> را در <b>پیوی ربات</b> بفرست.\n"
                   "سفارش بعد از تأیید مدیر خودکار تحویل می‌شود.")
-        rows = []
-        if context.bot.username:
-            rows.append([B("📸 ارسال رسید در پیوی ربات", url=f"https://t.me/{context.bot.username}")])
-        rows.append([B("❌ لغو سفارش", callback_data=f"shop:cancel:{oid}")])
+        rows = [[B("❌ لغو سفارش", callback_data=f"shop:cancel:{oid}")]]
         rows.append([B("🔙 بازگشت به فروشگاه", callback_data="shop:menu")])
         await _utils.safe_answer(q)
         await edit(text, rows)
@@ -2369,6 +2397,215 @@ async def admin_receipt(request, body):
     return web.Response(body=bytes(data), content_type="image/jpeg")
 
 
+# ═══════════════════════════════════════════════
+# ═══════════ بن کاربر ═══════════
+# ═══════════════════════════════════════════════
+_ban_notified: dict = {}
+_orig_transfer = None
+
+
+async def _load_bans():
+    await _ensure_tables()
+    rows = await _fetch("SELECT user_id FROM banned_users")
+    _banned.clear()
+    _banned.update(int(r["user_id"]) for r in rows)
+    logger.info(f"🚫 {len(_banned)} کاربر بن‌شده بارگذاری شد")
+
+
+async def _h_ban_gate(update, context):
+    """اولین هندلر: کاربر بن‌شده هیچ پاسخی از ربات نمی‌گیرد"""
+    u = update.effective_user
+    if not u or u.id not in _banned:
+        return
+    try:
+        if update.pre_checkout_query:
+            await update.pre_checkout_query.answer(ok=False, error_message="🚫 شما از ربات محروم شده‌اید")
+        elif update.callback_query:
+            await update.callback_query.answer("🚫 شما از ربات محروم شده‌اید", show_alert=True)
+        elif update.effective_chat and update.effective_chat.type == "private" and update.effective_message:
+            if time.time() - _ban_notified.get(u.id, 0) > 600:
+                _ban_notified[u.id] = time.time()
+                await update.effective_message.reply_text("🚫 شما از ربات محروم شده‌اید.")
+    except Exception:
+        pass
+    raise _stop()
+
+
+async def _transfer_guarded(sender_id, recipient_id, *args, **kwargs):
+    try:
+        if int(recipient_id) in _banned or int(sender_id) in _banned:
+            return False
+    except (TypeError, ValueError):
+        pass
+    return await _orig_transfer(sender_id, recipient_id, *args, **kwargs)
+
+
+_transfer_guarded._zar = True
+
+
+async def _kick_from_games(uid: int):
+    async with _matchmaking_lock:
+        w = await _queue_remove(uid)
+        if w:
+            await db.add_balance(uid, w["bet"])
+    g = _active_game_of(uid)
+    if g:
+        async with g.lock:
+            if not g.finished:
+                await _settle(g, g.opp(uid), f"{g.name(uid)} از ربات محروم شد")
+    async with _ulock(uid):
+        await _close_solo_session(uid)
+
+
+@_admin
+async def admin_ban(request, body):
+    uid = _to_int(body.get("user_id"), 0)
+    if not uid:
+        return _err("آیدی نامعتبر است")
+    if uid in _owner_ids():
+        return _err("نمی‌توان مدیر ربات را بن کرد")
+    if not await _fetch("SELECT user_id FROM users WHERE user_id=%s", (uid,), one=True):
+        return _err("کاربر پیدا نشد", 404)
+    await _ensure_tables()
+    await _exec("INSERT INTO banned_users (user_id, reason, banned_at) VALUES (%s,%s,%s) "
+                "ON DUPLICATE KEY UPDATE reason=VALUES(reason), banned_at=VALUES(banned_at)",
+                (uid, str(body.get("reason") or "")[:255], time.time()))
+    _banned.add(uid)
+    await _kick_from_games(uid)
+    await _notify(uid, "🚫 شما از ربات محروم شدید.")
+    logger.warning(f"🚫 ادمین کاربر {uid} را بن کرد")
+    return _json({"ok": True, "user": await _user_detail(uid)})
+
+
+@_admin
+async def admin_unban(request, body):
+    uid = _to_int(body.get("user_id"), 0)
+    await _ensure_tables()
+    await _exec("DELETE FROM banned_users WHERE user_id=%s", (uid,))
+    _banned.discard(uid)
+    await _notify(uid, "✅ محرومیت شما برداشته شد. خوش برگشتی!")
+    return _json({"ok": True, "user": await _user_detail(uid)})
+
+
+# ═══════════ جوین اجباری (رفع باگ مالکیت پیام) ═══════════
+async def verify_membership_owned(update, context) -> bool:
+    """مثل utils.verify_membership ولی پیام جوین به نام همان کاربر ثبت می‌شود و نتیجه مثبت کش می‌شود"""
+    user = update.effective_user
+    if not user:
+        return False
+    is_joined, missing = await _utils.check_membership_quiet(context.bot, user.id)
+    if is_joined:
+        return True
+    text, kb = _utils.get_join_text(missing), _utils.get_join_keyboard()
+    q = update.callback_query
+    m = None
+    if q:
+        await _utils.safe_answer(q, "❌ هنوز عضو نشدی!", show_alert=True)
+        if not _not_owner(q):
+            m = await _utils.safe_edit(q, text, kb)
+        if m is None:
+            try:
+                m = await q.from_user.send_message(text, parse_mode="HTML", reply_markup=kb)
+            except Exception:
+                m = None
+    elif update.effective_message:
+        try:
+            m = await update.effective_message.reply_text(text, parse_mode="HTML", reply_markup=kb)
+        except Exception as e:
+            logger.warning(f"ارسال پیام جوین ناموفق: {e}")
+    if m:
+        _utils.remember_owner(m, user.id)
+    return False
+
+
+verify_membership_owned._zar = True
+
+
+async def _h_check_membership(update, context):
+    """دکمه «عضو شدم»: فقط صاحب پیام جوین منو را می‌بیند؛ بقیه فقط نتیجه‌ی عضویت خودشان را"""
+    q = update.callback_query
+    if not q.message or not _utils:
+        return
+    owners = _utils.menu_owners.get((q.message.chat_id, q.message.message_id))
+    if owners is not None and q.from_user.id in owners:
+        return  # صاحب پیام → هندلر اصلی bot.py
+    is_joined, missing = await _utils.check_membership_force(context.bot, q.from_user.id)
+    if is_joined:
+        await _utils.safe_answer(q, "✅ عضویتت تأیید شد!\nبرای باز شدن منوی خودت /menu را بفرست.", show_alert=True)
+    else:
+        await _utils.safe_answer(q, "❌ هنوز عضو نشدی:\n" + "\n".join(f"• {x}" for x in missing), show_alert=True)
+    raise _stop()
+
+
+# ═══════════ لیدربورد (۵ نفر اول + رتبه خودت) ═══════════
+async def _leaderboard_text(uid: int) -> str:
+    excl, args = "", ()
+    if _banned:
+        ids = list(_banned)[:2000]
+        excl = f" WHERE user_id NOT IN ({','.join(['%s'] * len(ids))})"
+        args = tuple(ids)
+    top = await _fetch(f"SELECT user_id, first_name, balance + bank_balance AS w FROM users{excl} "
+                       "ORDER BY w DESC LIMIT 5", args)
+    me = await _fetch("SELECT balance + bank_balance AS w FROM users WHERE user_id=%s", (uid,), one=True)
+    my_w = int(me["w"] or 0) if me else 0
+    where = "WHERE balance + bank_balance > %s" + (excl.replace(" WHERE", " AND") if excl else "")
+    r = await _fetch(f"SELECT COUNT(*) AS c FROM users {where}", (my_w, *args), one=True)
+    medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
+    lines = [f"{medals[i]} {_esc((row['first_name'] or 'بی‌نام')[:20])}{' 👈' if int(row['user_id']) == uid else ''}"
+             f" — <b>{_fmt(row['w'])}</b>" for i, row in enumerate(top)]
+    return ("🏆 <b>ثروتمندترین‌های زرکوین</b>\n━━━━━━━━━━━━━━━━━━\n" + ("\n".join(lines) or "—")
+            + f"\n━━━━━━━━━━━━━━━━━━\n👤 رتبه‌ی تو: <b>{_fmt(int(r['c']) + 1)}</b>\n💰 ثروت تو: <b>{_fmt(my_w)}</b>"
+            "\n<i>(ثروت = موجودی + بانک)</i>")
+
+
+async def _h_lb_cb(update, context):
+    from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M
+    q = update.callback_query
+    if _not_owner(q):
+        await _utils.safe_answer(q, "❌ این منو برای شما نیست!\nبرای منوی خودت /menu را بفرست.", show_alert=True)
+        raise _stop()
+    if not await _utils.verify_membership(update, context):
+        raise _stop()
+    text = await _leaderboard_text(q.from_user.id)
+    await _utils.safe_answer(q)
+    m = await _utils.safe_edit(q, text, M([[B("🔄 بروزرسانی", callback_data="lb:menu")],
+                                           [B("🔙 بازگشت", callback_data="menu:main")]]))
+    if m:
+        _utils.remember_owner(m, q.from_user.id)
+    raise _stop()
+
+
+# ═══════════ فروشگاه: منو و ورود از پیوی ═══════════
+async def _shop_menu_content():
+    from telegram import InlineKeyboardButton as B
+    prods = await _shop_products()
+    if prods:
+        text = ("💎 <b>خرید کوین و لول</b>\n━━━━━━━━━━━━━━━━━━\n"
+                + "\n".join(f"• <b>{_esc(p['title'])}</b> — {_price_line(p)}" for p in prods)
+                + "\n\n👇 محصول مورد نظر را انتخاب کن:")
+        rows = [[B(f"💎 {p['title'][:40]}", callback_data=f"shop:p:{p['id']}")] for p in prods]
+    else:
+        text = "💎 <b>خرید کوین و لول</b>\n━━━━━━━━━━━━━━━━━━\n😔 فعلاً محصولی برای فروش موجود نیست."
+        rows = []
+    rows.append([B("🔙 بازگشت", callback_data="menu:main")])
+    return text, rows
+
+
+async def _h_start_shop(update, context):
+    """/start shop در پیوی → مستقیم فروشگاه"""
+    if not context.args or context.args[0].lower() != "shop":
+        return
+    from telegram import InlineKeyboardMarkup as M
+    if _utils and not await _utils.verify_membership(update, context):
+        raise _stop()
+    await db.ensure_user(update.effective_user)
+    text, rows = await _shop_menu_content()
+    m = await update.effective_message.reply_text(text, parse_mode="HTML", reply_markup=M(rows))
+    if _utils:
+        _utils.remember_owner(m, update.effective_user.id)
+    raise _stop()
+
+
 # ═══════════ سرور ═══════════
 _CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline' https://telegram.org https://cdn.jsdelivr.net; "
         "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; font-src 'self' data: https://cdn.jsdelivr.net; "
@@ -2415,6 +2652,7 @@ def create_app() -> web.Application:
         "shop/products": admin_shop_products, "shop/save": admin_shop_save, "shop/toggle": admin_shop_toggle,
         "shop/delete": admin_shop_delete, "shop/orders": admin_shop_orders, "shop/approve": admin_shop_approve,
         "shop/reject": admin_shop_reject, "shop/settings": admin_shop_settings,
+        "ban": admin_ban, "unban": admin_unban,
     }
     for p, h in admin_routes.items():
         app.router.add_post(f"/admin/api/{p}", h)
