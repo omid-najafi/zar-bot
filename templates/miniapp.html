@@ -551,7 +551,9 @@ document.addEventListener('click', e => {
 /* ════════════ کنترل شرط ════════════ */
 function chipsFor(g) {
   const out = [];
-  [1, 1.5, 2, 3, 5, 10, 50, 100].forEach(m => { const v = Math.round(g.min_bet * m); if (v <= g.max_bet && out.length < 5 && !out.includes(v)) out.push(v); });
+  // بازه‌ی بزرگ (مثل ۱۰ هزار تا ۳۰ میلیون) → پله‌های ده‌برابری؛ بازه‌ی کوچک → پله‌های ریزتر
+  const mults = g.max_bet / g.min_bet >= 100 ? [1, 10, 100, 1000, 10000] : [1, 1.5, 2, 3, 5, 10, 50];
+  mults.forEach(m => { const v = Math.round(g.min_bet * m); if (v <= g.max_bet && out.length < 5 && !out.includes(v)) out.push(v); });
   if (!out.includes(g.max_bet)) out.push(g.max_bet);
   return out;
 }
