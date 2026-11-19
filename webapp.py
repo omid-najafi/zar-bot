@@ -18,8 +18,10 @@ import hashlib
 import hmac
 import json
 import logging
+import html
 import math
 import os
+import random
 import re
 import secrets
 import time
@@ -51,7 +53,7 @@ ADMIN_HTML = TEMPLATES_DIR / "admin.html"
 COMMISSION_RATE = float(getattr(config, "MINIAPP_COMMISSION_RATE", 0.05))
 MATCH_TIMEOUT = int(getattr(config, "MATCHMAKING_TIMEOUT", 60))
 TURN_TIMEOUT = int(getattr(config, "MINIAPP_TURN_TIMEOUT", 45))
-MAX_BET = int(os.getenv("MINIAPP_MAX_BET") or getattr(config, "MINIAPP_MAX_BET", 20_000_000))
+MAX_BET = int(os.getenv("MINIAPP_MAX_BET") or getattr(config, "MINIAPP_MAX_BET", 100_000_000))
 FINISHED_GAME_TTL = 180
 SOLO_SESSION_TTL = 3600
 SWEEP_INTERVAL = 3
@@ -80,6 +82,7 @@ _DEFAULT_GAMES = {
     "connect4": {"name": "چهار در یک ردیف", "emoji": "🔴", "type": "2p", "min_bet": 5_000, "desc": "اولین نفری که ۴ مهره پشت‌سرهم بچیند"},
     "rps": {"name": "سنگ کاغذ قیچی", "emoji": "✊", "type": "2p", "min_bet": 1_000, "desc": "سه دست — هر کس ۲ دست ببرد"},
     "ttt": {"name": "دوز", "emoji": "⭕", "type": "2p", "min_bet": 1_000, "desc": "سه در یک خط — کلاسیک دونفره"},
+    "othello": {"name": "اتللو", "emoji": "⚫", "type": "2p", "min_bet": 5_000, "desc": "مهره‌های حریف را محاصره و برعکس کن"},
 }
 
 
@@ -337,6 +340,20 @@ async def _ensure_tables():
                     "CREATE TABLE IF NOT EXISTS gift_redemptions (id INT PRIMARY KEY AUTO_INCREMENT, code VARCHAR(64) NOT NULL, "
                     "user_id BIGINT NOT NULL, redeemed_at DOUBLE NOT NULL, UNIQUE KEY uq_code_user (code, user_id), "
                     "INDEX idx_user (user_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
+                await cur.execute(
+                    "CREATE TABLE IF NOT EXISTS shop_products (id INT PRIMARY KEY AUTO_INCREMENT, title VARCHAR(64) NOT NULL, "
+                    "description TEXT NULL, rewards TEXT NOT NULL, price_toman BIGINT NOT NULL DEFAULT 0, "
+                    "price_stars INT NOT NULL DEFAULT 0, active TINYINT NOT NULL DEFAULT 1, sort INT NOT NULL DEFAULT 0, "
+                    "created_at DOUBLE NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
+                await cur.execute(
+                    "CREATE TABLE IF NOT EXISTS shop_orders (id INT PRIMARY KEY AUTO_INCREMENT, user_id BIGINT NOT NULL, "
+                    "product_id INT NOT NULL, title VARCHAR(64) NOT NULL, rewards TEXT NOT NULL, method VARCHAR(16) NOT NULL, "
+                    "amount BIGINT NOT NULL, status VARCHAR(20) NOT NULL, receipt_file_id VARCHAR(255) NULL, "
+                    "charge_id VARCHAR(255) NULL, created_at DOUBLE NOT NULL, updated_at DOUBLE NOT NULL, "
+                    "INDEX idx_user_status (user_id, status)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
+                await cur.execute(
+                    "CREATE TABLE IF NOT EXISTS zar_settings (k VARCHAR(64) PRIMARY KEY, v TEXT NULL) "
+                    "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
                 try:
                     await cur.execute("ALTER TABLE inventory ADD COLUMN last_used DOUBLE NULL DEFAULT NULL")
                 except Exception:
@@ -1451,7 +1468,7 @@ def patch_bot_ui():
                 [B("👷 کارگرها", callback_data="worker:menu"), casino.miniapp_button("🎰 کازینو")],
                 [B("🎯 ماموریت‌ها", callback_data="mission:menu"), B("💸 انتقال", callback_data="transfer:start")],
                 [B("🎭 کاباره زر", callback_data="kabareh:menu"), B("🏆 لیدربورد", callback_data="lb:menu")],
-                [B("💀 بازار سیاه", callback_data="bm:menu:0")],
+                [B("💀 بازار سیاه", callback_data="bm:menu:0"), B("💎 خرید کوین و لول", callback_data="shop:menu")],
                 [B("📚 راهنما", callback_data="help:menu")],
             ])
 
@@ -1459,6 +1476,11 @@ def patch_bot_ui():
         _utils.MAIN_MENU_KB = build_main_menu_kb()
         _utils.GAMES_MENU_KB = casino.miniapp_keyboard()
         _utils.BACK_GAMES_KB = M([[B("🔙 بازگشت", callback_data="menu:main")]])
+    # تخریب حمله: پول + ملک/کارگر تصادفی (bot.py همین db.apply_damage را صدا می‌زند)
+    global _orig_apply_damage
+    if not getattr(getattr(db, "apply_damage", None), "_zar", False):
+        _orig_apply_damage = getattr(db, "apply_damage", None)
+        db.apply_damage = apply_damage_split
     t = getattr(config, "HELP_TEXT", "") or ""
     if t and "کازینو (مینی‌اپ)" not in t:
         block = ("🎰 کازینو (مینی‌اپ) : از منوی اصلی روی «🎰 کازینو» بزن\n"
@@ -1619,13 +1641,30 @@ async def _h_attack_pre(update, context):
 
 async def _h_attack_post(update, context):
     p = _pending_launch.pop(update.update_id, None)
-    if not p:
-        return
+    if p:
+        try:
+            if await _count_items(p["uid"], p["proj"]) < p["count"]:  # شلیک واقعاً انجام شد
+                await _exec("UPDATE inventory SET last_used=%s WHERE id=%s", (time.time(), p["row"]))
+        except Exception:
+            logger.exception("attack post error")
+    # گزارش ملک/کارگرهای نابودشده
     try:
-        if await _count_items(p["uid"], p["proj"]) < p["count"]:  # شلیک واقعاً انجام شد
-            await _exec("UPDATE inventory SET last_used=%s WHERE id=%s", (time.time(), p["row"]))
+        msg = update.effective_message
+        rep = msg.reply_to_message if msg else None
+        tgt = rep.from_user.id if rep and rep.from_user else None
+        d = _last_damage.pop(tgt, None) if tgt else None
+        if d and time.time() - d["t"] < 60 and d["total"] > 0:
+            report = _damage_report(d)
+            await msg.reply_text(f"🏚 <b>جزئیات خسارت</b>\n━━━━━━━━━━━━━━━━━━\n{report}\n\n💥 مجموع خسارت: <b>{_fmt(d['total'])}</b>",
+                                 parse_mode="HTML")
+            if d["assets"]:
+                try:
+                    await context.bot.send_message(tgt, f"🏚 <b>در حمله این دارایی‌ها از دست رفت:</b>\n{report}",
+                                                   parse_mode="HTML")
+                except Exception:
+                    pass
     except Exception:
-        logger.exception("attack post error")
+        logger.exception("damage report error")
 
 
 def setup_bot(app):
@@ -1633,11 +1672,18 @@ def setup_bot(app):
     if id(app) in _setup_apps:
         return
     _setup_apps.add(id(app))
-    from telegram.ext import CallbackQueryHandler, MessageHandler, filters
+    global _bot_app
+    _bot_app = app
+    from telegram.ext import CallbackQueryHandler, MessageHandler, PreCheckoutQueryHandler, filters
     patch_bot_ui()
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^\s*هدیه\s*زر(\s+\S+)?\s*$"), _h_gift), group=-2)
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^\s*(زر\s*بازی|زر\s*کازینو|کازینو)\s*$"),
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^\s*(کازینو\s*زربات|زر\s*بازی)\s*$"),
                                    _h_casino_text), group=-2)
+    app.add_handler(CallbackQueryHandler(_h_help_cb, pattern=r"^help:(menu|p:\d+)$"), group=-2)
+    app.add_handler(CallbackQueryHandler(_h_shop_cb, pattern=r"^shop:"), group=-2)
+    app.add_handler(PreCheckoutQueryHandler(_h_precheckout), group=-2)
+    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, _h_paid), group=-2)
+    app.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, _h_receipt), group=-2)
     app.add_handler(CallbackQueryHandler(
         _h_legacy_cb, pattern=r"^(game:(menu|casino|rps|ttt|quiz|penalty)$|casino:|rps:|ttt:|quiz:|penalty:|pen:)"),
         group=-2)
@@ -1675,6 +1721,652 @@ def setup_bot(app):
     app.post_init = _post_init
     app.post_shutdown = _post_shutdown
     logger.info("✅ کازینو، کد هدیه، پنل مدیریت و قوانین بازار سیاه فعال شد")
+
+
+# ═══════════════════════════════════════════════
+# ═══════════ تخریب حمله: پول + ملک/کارگر تصادفی ═══════════
+# ═══════════════════════════════════════════════
+_rng = random.SystemRandom()
+_last_damage: dict = {}
+_orig_apply_damage = None
+_bot_app = None
+
+
+def _esc(s) -> str:
+    return html.escape(str(s or ""))
+
+
+async def apply_damage_split(target_id, damage_percent, *args, **kwargs) -> int:
+    """
+    درصد تخریب از کل ثروت هدف (کیف پول + بانک + ارزش خرید ملک‌ها و کارگرها) حساب می‌شود
+    و به‌صورت تصادفی بین پول و دارایی‌ها تقسیم می‌شود. ملک/کارگرهای نابودشده تصادفی انتخاب می‌شوند.
+    خروجی: ارزش کل خسارت (برای پیام bot.py)
+    """
+    try:
+        pct = max(0.0, min(float(damage_percent), 1.0))
+        target_id = int(target_id)
+    except (TypeError, ValueError):
+        return 0
+    if pct <= 0:
+        return 0
+
+    async def run(cur):
+        await cur.execute("SELECT balance, bank_balance FROM users WHERE user_id=%s FOR UPDATE", (target_id,))
+        u = await cur.fetchone()
+        if not u:
+            return None
+        bal, bank = max(0, int(u["balance"] or 0)), max(0, int(u["bank_balance"] or 0))
+        await cur.execute("SELECT id, asset_type, asset_key, purchase_price FROM assets WHERE user_id=%s FOR UPDATE",
+                          (target_id,))
+        assets = list(await cur.fetchall())
+        cash = bal + bank
+        total = cash + sum(int(a["purchase_price"] or 0) for a in assets)
+        dmg = int(total * pct)
+        if dmg <= 0:
+            return None
+        if not assets:
+            money_part = dmg
+        elif cash <= 0:
+            money_part = 0
+        else:
+            money_part = int(dmg * _rng.uniform(0.25, 0.75))  # سهم تصادفی پول
+        budget = dmg - money_part
+        _rng.shuffle(assets)
+        removed, left = [], []
+        for a in assets:
+            price = int(a["purchase_price"] or 0)
+            if price <= budget:
+                removed.append(a)
+                budget -= price
+            else:
+                left.append(a)
+        # باقی‌مانده‌ی بودجه: با احتمال متناسب یک دارایی گران‌تر هم نابود می‌شود
+        if budget > 0 and left:
+            c = _rng.choice(left)
+            price = int(c["purchase_price"] or 1)
+            if _rng.random() < budget / price:
+                removed.append(c)
+                budget = 0
+        money_part = min(cash, money_part + budget)
+        from_bal = min(bal, money_part)
+        from_bank = money_part - from_bal
+        await cur.execute("UPDATE users SET balance = balance - %s, bank_balance = bank_balance - %s WHERE user_id=%s",
+                          (from_bal, from_bank, target_id))
+        if removed:
+            ids = [int(a["id"]) for a in removed]
+            await cur.execute(f"DELETE FROM assets WHERE id IN ({','.join(['%s'] * len(ids))})", ids)
+        asset_value = sum(int(a["purchase_price"] or 0) for a in removed)
+        return {"money": money_part, "assets": [(a["asset_type"], a["asset_key"]) for a in removed],
+                "asset_value": asset_value, "total": money_part + asset_value}
+
+    try:
+        res = await _tx(run)
+    except Exception:
+        logger.exception("apply_damage_split error — استفاده از نسخه قدیمی")
+        if _orig_apply_damage:
+            return await _orig_apply_damage(target_id, damage_percent, *args, **kwargs)
+        return 0
+    _invalidate(target_id)
+    if not res:
+        return 0
+    res["t"] = time.time()
+    _last_damage[target_id] = res
+    return res["total"]
+
+
+apply_damage_split._zar = True
+
+
+def _damage_report(d: dict) -> str:
+    lines = [f"💰 پول: {_fmt(d['money'])}"]
+    counts = {}
+    for t, k in d["assets"]:
+        counts[(t, k)] = counts.get((t, k), 0) + 1
+    for (t, k), n in counts.items():
+        lines.append(f"{_kind_label(t, k)} × {n}")
+    if not d["assets"]:
+        lines.append("🏠 ملک یا کارگری نابود نشد")
+    return "\n".join(lines)
+
+
+# ═══════════════════════════════════════════════
+# ═══════════ راهنمای صفحه‌بندی‌شده ═══════════
+# ═══════════════════════════════════════════════
+def _help_pages() -> list:
+    c = config
+    bm = _bm_items()
+    one = [g for g in GAMES.values() if g["type"] == "1p"]
+    two = [g for g in GAMES.values() if g["type"] == "2p"]
+
+    def items(t):
+        out = []
+        for v in bm.values():
+            if v.get("type") != t:
+                continue
+            extra = ""
+            if t == "projectile":
+                extra = f" — {int(v.get('damage', 0) * 100)}٪ تخریب"
+            elif t == "defense":
+                extra = f" — {int(v.get('defense_chance', 0) * 100)}٪ دفاع"
+            out.append(f" • {v['emoji']} {v['name']} ({_fmt(v['price'])}){extra}")
+        return "\n".join(out) or " —"
+
+    cmds = "\n".join(f" • <code>{v['command']}</code> ← {v['emoji']} {v['name']}"
+                     for v in bm.values() if v.get("type") == "projectile" and v.get("command"))
+    p1 = ("📚 <b>راهنما — اقتصاد و پیشرفت</b>\n━━━━━━━━━━━━━━━━━━\n"
+          "⭐ <b>لول:</b> هر لول نیاز به 2^level × 1000 XP دارد\n"
+          f"🎯 <b>ماموریت‌ها:</b> هر روز {getattr(c, 'DAILY_MISSION_COUNT', 6)} ماموریت جدید با جایزه XP\n"
+          "💰 <b>زر:</b> هر ۵ دقیقه بنویس «زر» و زرکوین رایگان بگیر\n"
+          f"🏦 <b>بانک:</b> سود روزانه {int(getattr(c, 'BANK_RATE', 0.02) * 100)}٪ (هر ساعت واریز می‌شود)\n"
+          f"🏠 <b>ملک‌ها</b> و 👷 <b>کارگرها:</b> حداکثر {getattr(c, 'MAX_PER_KEY', 5)} از هر نوع — سود روزانه ۳۵٪\n"
+          "💸 <b>برداشت درآمد:</b> از بخش ملک یا کارگر، درآمد انباشته را برداشت کن\n"
+          "💸 <b>انتقال:</b> بالای ۱ میلیون کارمزد ۱٪\n"
+          "🔒 هر کاربر فقط می‌تواند از منوی خودش استفاده کند")
+    p2 = ("🎰 <b>راهنما — کازینو (مینی‌اپ)</b>\n━━━━━━━━━━━━━━━━━━\n"
+          "از منوی اصلی روی «🎰 کازینو» بزن یا بنویس <b>کازینو زربات</b>\n\n"
+          f"🎯 <b>تک‌نفره ({len(one)}):</b>\n" + "، ".join(f"{g['emoji']} {g['name']}" for g in one) + "\n\n"
+          f"⚔️ <b>دونفره آنلاین ({len(two)}):</b>\n" + "، ".join(f"{g['emoji']} {g['name']}" for g in two) + "\n\n"
+          f"💰 حداکثر شرط: {_fmt(MAX_BET)} زرکوین\n"
+          f"⏳ یافتن حریف: حداکثر {MATCH_TIMEOUT} ثانیه (وگرنه پول برمی‌گردد)\n"
+          f"⏰ زمان هر نوبت: {TURN_TIMEOUT} ثانیه\n"
+          f"💵 کارمزد برنده‌ی دونفره: {int(COMMISSION_RATE * 100)}٪ — مساوی = برگشت کامل پول")
+    p3 = ("💎 <b>راهنما — فروشگاه، هدیه و سرگرمی</b>\n━━━━━━━━━━━━━━━━━━\n"
+          "💎 <b>خرید کوین و لول:</b> از منوی اصلی محصول را انتخاب کن و با ⭐ استارز تلگرام یا 💳 کارت به کارت بپرداز. "
+          "خرید کارت به کارت بعد از تأیید رسید توسط مدیر تحویل می‌شود.\n\n"
+          "🎁 <b>کد هدیه:</b> بنویس <code>هدیه زر کد</code> — از هر کد فقط یک بار\n\n"
+          f"🎭 <b>کاباره زر:</b> نیاز به لول {getattr(c, 'KABAREH_MIN_LEVEL', 4)}+ | "
+          f"باز کردن با {_fmt(getattr(c, 'KABAREH_UNLOCK_COST', 0))} | روزی یک بار\n\n"
+          "🏆 <b>لیدربورد:</b> رتبه‌بندی بر اساس ثروت (موجودی + بانک)")
+    p4 = ("💀 <b>راهنما — بازار سیاه</b>\n━━━━━━━━━━━━━━━━━━\n"
+          f"🚀 <b>وسایل شلیک</b> (الزامی برای شلیک — تعداد نامحدود):\n{items('launcher')}\n\n"
+          f"💥 <b>مهمات</b> (مصرفی):\n{items('projectile')}\n\n"
+          f"🛡️ <b>دفاعی</b> (از هر کدام فقط ۱ عدد):\n{items('defense')}")
+    p5 = ("🎯 <b>راهنما — حمله و دفاع</b>\n━━━━━━━━━━━━━━━━━━\n"
+          "۱. وسیله شلیک و مهمات را از بازار سیاه بخر\n۲. روی پیام هدف ریپلای کن\n۳. دستور شلیک را بفرست:\n"
+          + cmds + "\n\n⚠️ <b>قوانین:</b>\n"
+          f" • هر وسیله شلیک بعد از شلیک {LAUNCH_COOLDOWN // 60} دقیقه خنک می‌شود؛ با چند وسیله می‌توانی پشت‌سرهم شلیک کنی\n"
+          " • درصد تخریب از کل ثروت هدف (پول + بانک + ارزش ملک‌ها و کارگرها) است و تصادفی بین پول و "
+          "ملک/کارگرها تقسیم می‌شود؛ ملک و کارگرهای نابودشده تصادفی انتخاب می‌شوند\n"
+          " • بمب‌ها قابل دفاع نیستند، فقط موشک و پهباد\n"
+          " • هر شلیک یک مهمات مصرف می‌کند")
+    return [p1, p2, p3, p4, p5]
+
+
+def _not_owner(q) -> bool:
+    return bool(q.message and _utils and not _utils.is_menu_owner(q.message.chat_id, q.message.message_id, q.from_user.id))
+
+
+async def _h_help_cb(update, context):
+    from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M
+    q = update.callback_query
+    if _not_owner(q):
+        await _utils.safe_answer(q, "❌ این منو برای شما نیست!\nبرای منوی خودت /menu را بفرست.", show_alert=True)
+        raise _stop()
+    pages = _help_pages()
+    page = 0 if q.data == "help:menu" else max(0, min(int(q.data.split(":")[2]), len(pages) - 1))
+    nav = []
+    if page > 0:
+        nav.append(B("➡️ قبلی", callback_data=f"help:p:{page - 1}"))
+    nav.append(B(f"📄 {page + 1}/{len(pages)}", callback_data=f"help:p:{page}"))
+    if page < len(pages) - 1:
+        nav.append(B("بعدی ⬅️", callback_data=f"help:p:{page + 1}"))
+    await _utils.safe_answer(q)
+    m = await _utils.safe_edit(q, pages[page], M([nav, [B("🔙 بازگشت", callback_data="menu:main")]]))
+    if m:
+        _utils.remember_owner(m, q.from_user.id)
+    raise _stop()
+
+
+# ═══════════════════════════════════════════════
+# ═══════════ فروشگاه: خرید کوین و لول ═══════════
+# ═══════════════════════════════════════════════
+def _owner_ids() -> set:
+    ids = {int(getattr(config, "OWNER_ID", 0) or 0)}
+    for x in (os.getenv("SHOP_ADMIN_IDS") or "").split(","):
+        if x.strip().isdigit():
+            ids.add(int(x.strip()))
+    ids.discard(0)
+    return ids
+
+
+async def _get_setting(k: str, default: str = "") -> str:
+    await _ensure_tables()
+    r = await _fetch("SELECT v FROM zar_settings WHERE k=%s", (k,), one=True)
+    return (r["v"] if r else "") or default
+
+
+async def _set_setting(k: str, v: str):
+    await _ensure_tables()
+    await _exec("INSERT INTO zar_settings (k, v) VALUES (%s,%s) ON DUPLICATE KEY UPDATE v=VALUES(v)", (k, v))
+
+
+def _clean_rewards(raw) -> tuple:
+    raw = raw if isinstance(raw, dict) else {}
+    rewards = {}
+    for k in ("coins", "bank", "xp", "levels"):
+        n = _to_int(raw.get(k), 0) or 0
+        if n < 0 or n > 10 ** 15:
+            return None, "مقدار جایزه نامعتبر است"
+        if n:
+            rewards[k] = min(n, MAX_LEVEL) if k == "levels" else n
+    for field, store in (("properties", config.PROPERTIES), ("workers", config.WORKERS), ("items", _bm_items())):
+        sub = {}
+        for key, n in (raw.get(field) or {}).items():
+            n = _to_int(n, 0) or 0
+            if key not in store:
+                return None, f"آیتم نامعتبر: {key}"
+            if n > 0:
+                sub[key] = min(n, 100)
+        if sub:
+            rewards[field] = sub
+    if not rewards:
+        return None, "حداقل یک مورد (پول/لول/ملک/...) تعیین کن"
+    return rewards, None
+
+
+def _loads(s) -> dict:
+    try:
+        d = json.loads(s or "{}")
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def _price_line(p) -> str:
+    parts = []
+    if int(p["price_stars"] or 0):
+        parts.append(f"⭐ {_fmt(p['price_stars'])} استارز")
+    if int(p["price_toman"] or 0):
+        parts.append(f"💳 {_fmt(p['price_toman'])} تومان")
+    return " | ".join(parts) or "—"
+
+
+async def _shop_products(active_only: bool = True):
+    await _ensure_tables()
+    where = " WHERE active=1" if active_only else ""
+    return await _fetch(f"SELECT * FROM shop_products{where} ORDER BY sort ASC, id ASC")
+
+
+async def _create_order(uid: int, p: dict, method: str, amount: int, status: str) -> int:
+    now = time.time()
+    async with db.db_pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "INSERT INTO shop_orders (user_id, product_id, title, rewards, method, amount, status, created_at, updated_at) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                (uid, int(p["id"]), p["title"], p["rewards"], method, amount, status, now, now))
+            oid = cur.lastrowid
+        await conn.commit()
+    return int(oid)
+
+
+async def _deliver_order(oid: int, allowed: tuple, charge_id=None):
+    """تحویل سفارش (اتمیک). خروجی: (user_id یا None, متن)"""
+    now = time.time()
+
+    async def run(cur):
+        await cur.execute("SELECT * FROM shop_orders WHERE id=%s FOR UPDATE", (oid,))
+        o = await cur.fetchone()
+        if not o:
+            return None, "سفارش پیدا نشد"
+        if o["status"] not in allowed:
+            return None, f"وضعیت فعلی سفارش: {o['status']}"
+        granted, skipped = [], []
+        for kind, key, n in _rewards_list(_loads(o["rewards"])):
+            done = await _grant(cur, int(o["user_id"]), kind, key, n)
+            if done:
+                granted.append((kind, key, done))
+            if done < n:
+                skipped.append((kind, key, n - done))
+        await cur.execute("UPDATE shop_orders SET status='paid', charge_id=%s, updated_at=%s WHERE id=%s",
+                          (charge_id, now, oid))
+        text = f"✅ <b>خرید تحویل شد!</b>\n━━━━━━━━━━━━━━━━━━\n🛒 {_esc(o['title'])} (سفارش #{oid})\n{_rewards_text(granted)}"
+        if skipped:
+            text += "\n\n⚠️ به‌خاطر سقف مجاز اضافه نشد:\n" + _rewards_text(skipped)
+        return int(o["user_id"]), text
+
+    uid, text = await _tx(run)
+    if uid:
+        _invalidate(uid)
+    return uid, text
+
+
+async def _notify(uid: int, text: str, bot=None):
+    bot = bot or (_bot_app.bot if _bot_app else None)
+    if not bot:
+        return
+    try:
+        await bot.send_message(uid, text, parse_mode="HTML")
+    except Exception:
+        pass
+
+
+async def _h_shop_cb(update, context):
+    from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M, LabeledPrice
+    q = update.callback_query
+    uid = q.from_user.id
+    parts = (q.data or "").split(":")
+    act = parts[1] if len(parts) > 1 else "menu"
+    arg = _to_int(parts[2], 0) if len(parts) > 2 else 0
+    await _ensure_tables()
+
+    # ─── تأیید / رد رسید توسط مدیر ───
+    if act in ("ok", "no"):
+        if uid not in _owner_ids():
+            await _utils.safe_answer(q, "❌ فقط مدیر می‌تواند رسید را بررسی کند", show_alert=True)
+            raise _stop()
+        if act == "ok":
+            buyer, text = await _deliver_order(arg, ("review", "awaiting_receipt"))
+            note = "✅ تأیید و تحویل شد" if buyer else "⚠️ " + text
+            if buyer:
+                await _notify(buyer, text, context.bot)
+        else:
+            o = await _fetch("SELECT user_id FROM shop_orders WHERE id=%s", (arg,), one=True)
+            n = await _exec("UPDATE shop_orders SET status='rejected', updated_at=%s WHERE id=%s "
+                            "AND status IN ('review','awaiting_receipt')", (time.time(), arg))
+            note = "❌ رد شد" if n else "⚠️ این سفارش قابل رد نیست"
+            if n and o:
+                await _notify(int(o["user_id"]), f"❌ رسید سفارش #{arg} تأیید نشد. در صورت مشکل با پشتیبانی تماس بگیر.",
+                              context.bot)
+        try:
+            await q.edit_message_caption(caption=(q.message.caption or "") + "\n\n" + note)
+        except Exception:
+            pass
+        await _utils.safe_answer(q, note)
+        raise _stop()
+
+    if _not_owner(q):
+        await _utils.safe_answer(q, "❌ این منو برای شما نیست!\nبرای منوی خودت /menu را بفرست.", show_alert=True)
+        raise _stop()
+
+    async def edit(text, rows):
+        m = await _utils.safe_edit(q, text, M(rows))
+        if m:
+            _utils.remember_owner(m, uid)
+
+    if act == "menu":
+        if not await _utils.verify_membership(update, context):
+            raise _stop()
+        prods = await _shop_products()
+        await _utils.safe_answer(q)
+        if prods:
+            text = ("💎 <b>خرید کوین و لول</b>\n━━━━━━━━━━━━━━━━━━\n"
+                    + "\n".join(f"• <b>{_esc(p['title'])}</b> — {_price_line(p)}" for p in prods)
+                    + "\n\n👇 محصول مورد نظر را انتخاب کن:")
+            rows = [[B(f"💎 {p['title'][:40]}", callback_data=f"shop:p:{p['id']}")] for p in prods]
+        else:
+            text = "💎 <b>خرید کوین و لول</b>\n━━━━━━━━━━━━━━━━━━\n😔 فعلاً محصولی برای فروش موجود نیست."
+            rows = []
+        rows.append([B("🔙 بازگشت", callback_data="menu:main")])
+        await edit(text, rows)
+        raise _stop()
+
+    p = None
+    if act in ("p", "stars", "card"):
+        p = await _fetch("SELECT * FROM shop_products WHERE id=%s AND active=1", (arg,), one=True)
+        if not p:
+            await _utils.safe_answer(q, "❌ این محصول دیگر موجود نیست", show_alert=True)
+            raise _stop()
+
+    if act == "p":
+        card = await _get_setting("card_number")
+        desc = (_esc(p["description"]) + "\n\n") if p["description"] else ""
+        text = (f"💎 <b>{_esc(p['title'])}</b>\n━━━━━━━━━━━━━━━━━━\n{desc}🎁 <b>شامل:</b>\n"
+                f"{_rewards_text(_rewards_list(_loads(p['rewards'])))}\n\n💰 <b>قیمت:</b> {_price_line(p)}\n\n👇 روش پرداخت:")
+        rows = []
+        if int(p["price_stars"] or 0):
+            rows.append([B(f"⭐ پرداخت با استارز ({_fmt(p['price_stars'])})", callback_data=f"shop:stars:{p['id']}")])
+        if int(p["price_toman"] or 0) and card:
+            rows.append([B(f"💳 کارت به کارت ({_fmt(p['price_toman'])} تومان)", callback_data=f"shop:card:{p['id']}")])
+        if not rows:
+            text += "\n⚠️ فعلاً روش پرداختی فعال نیست."
+        rows.append([B("🔙 بازگشت به فروشگاه", callback_data="shop:menu")])
+        await _utils.safe_answer(q)
+        await edit(text, rows)
+        raise _stop()
+
+    if act == "stars":
+        stars = int(p["price_stars"] or 0)
+        if stars <= 0:
+            await _utils.safe_answer(q, "❌ پرداخت با استارز برای این محصول فعال نیست", show_alert=True)
+            raise _stop()
+        oid = await _create_order(uid, p, "stars", stars, "pending")
+        desc = (p["description"] or _rewards_text(_rewards_list(_loads(p["rewards"]))))[:250] or p["title"]
+        kw = dict(title=p["title"][:32], description=desc, payload=f"zarshop:{oid}", provider_token="",
+                  currency="XTR", prices=[LabeledPrice(p["title"][:32], stars)])
+        try:
+            await context.bot.send_invoice(chat_id=uid, **kw)
+            await _utils.safe_answer(q, "🧾 فاکتور در پیوی ربات برایت ارسال شد", show_alert=True)
+        except Exception:
+            try:
+                await context.bot.send_invoice(chat_id=q.message.chat_id, **kw)
+                await _utils.safe_answer(q)
+            except Exception as e:
+                logger.warning(f"send_invoice ناموفق: {e}")
+                await _utils.safe_answer(q, "❌ ارسال فاکتور ناموفق بود — اول ربات را در پیوی استارت کن", show_alert=True)
+        raise _stop()
+
+    if act == "card":
+        card, holder = await _get_setting("card_number"), await _get_setting("card_holder")
+        if not card or not int(p["price_toman"] or 0):
+            await _utils.safe_answer(q, "❌ پرداخت کارت به کارت فعال نیست", show_alert=True)
+            raise _stop()
+        await _exec("UPDATE shop_orders SET status='cancelled', updated_at=%s WHERE user_id=%s AND status='awaiting_receipt'",
+                    (time.time(), uid))
+        oid = await _create_order(uid, p, "card", int(p["price_toman"]), "awaiting_receipt")
+        text = (f"💳 <b>پرداخت کارت به کارت</b>\n━━━━━━━━━━━━━━━━━━\n🛒 محصول: <b>{_esc(p['title'])}</b>\n"
+                f"💰 مبلغ: <b>{_fmt(p['price_toman'])} تومان</b>\n💳 شماره کارت: <code>{_esc(card)}</code>\n"
+                + (f"👤 به نام: {_esc(holder)}\n" if holder else "")
+                + f"🧾 کد سفارش: <b>#{oid}</b>\n\n📸 بعد از واریز، <b>عکس رسید</b> را در <b>پیوی ربات</b> بفرست.\n"
+                  "سفارش بعد از تأیید مدیر خودکار تحویل می‌شود.")
+        rows = []
+        if context.bot.username:
+            rows.append([B("📸 ارسال رسید در پیوی ربات", url=f"https://t.me/{context.bot.username}")])
+        rows.append([B("❌ لغو سفارش", callback_data=f"shop:cancel:{oid}")])
+        rows.append([B("🔙 بازگشت به فروشگاه", callback_data="shop:menu")])
+        await _utils.safe_answer(q)
+        await edit(text, rows)
+        raise _stop()
+
+    if act == "cancel":
+        n = await _exec("UPDATE shop_orders SET status='cancelled', updated_at=%s WHERE id=%s AND user_id=%s "
+                        "AND status IN ('awaiting_receipt','pending')", (time.time(), arg, uid))
+        await _utils.safe_answer(q, "✅ سفارش لغو شد" if n else "این سفارش قابل لغو نیست", show_alert=True)
+        await edit("❌ سفارش لغو شد.", [[B("🔙 بازگشت به فروشگاه", callback_data="shop:menu")]])
+        raise _stop()
+
+    await _utils.safe_answer(q)
+    raise _stop()
+
+
+async def _h_precheckout(update, context):
+    pq = update.pre_checkout_query
+    payload = pq.invoice_payload or ""
+    if not payload.startswith("zarshop:"):
+        return
+    ok = False
+    try:
+        await _ensure_tables()
+        o = await _fetch("SELECT * FROM shop_orders WHERE id=%s", (int(payload.split(":")[1]),), one=True)
+        ok = bool(o and o["status"] == "pending" and int(o["user_id"]) == pq.from_user.id
+                  and int(o["amount"]) == pq.total_amount and pq.currency == "XTR")
+    except Exception:
+        logger.exception("precheckout error")
+    try:
+        if ok:
+            await pq.answer(ok=True)
+        else:
+            await pq.answer(ok=False, error_message="این سفارش معتبر نیست یا قبلاً پرداخت شده.")
+    except Exception:
+        pass
+    raise _stop()
+
+
+async def _h_paid(update, context):
+    msg = update.effective_message
+    sp = msg.successful_payment
+    if not sp or not (sp.invoice_payload or "").startswith("zarshop:"):
+        return
+    oid = int(sp.invoice_payload.split(":")[1])
+    try:
+        buyer, text = await _deliver_order(oid, ("pending", "cancelled"), charge_id=sp.telegram_payment_charge_id)
+    except Exception:
+        logger.exception("deliver stars order failed")
+        buyer, text = None, "خطا در تحویل"
+    if buyer:
+        await msg.reply_text(text, parse_mode="HTML")
+    else:
+        await msg.reply_text("⚠️ پرداخت انجام شد ولی تحویل خودکار ناموفق بود — به پشتیبانی پیام بده. کد سفارش: #" + str(oid))
+    for admin_id in _owner_ids():
+        await _notify(admin_id, f"💎 <b>خرید با استارز</b>\n👤 {_esc(update.effective_user.first_name)} ({update.effective_user.id})\n"
+                                f"🧾 سفارش #{oid} — ⭐ {sp.total_amount}\n{'✅ تحویل شد' if buyer else '⚠️ ' + _esc(text)}",
+                      context.bot)
+    raise _stop()
+
+
+async def _h_receipt(update, context):
+    from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M
+    msg = update.effective_message
+    uid = update.effective_user.id
+    try:
+        await _ensure_tables()
+        o = await _fetch("SELECT * FROM shop_orders WHERE user_id=%s AND status='awaiting_receipt' AND created_at > %s "
+                         "ORDER BY id DESC LIMIT 1", (uid, time.time() - 86400), one=True)
+    except Exception:
+        return
+    if not o:
+        return  # عکس مربوط به فروشگاه نیست
+    file_id = msg.photo[-1].file_id
+    await _exec("UPDATE shop_orders SET status='review', receipt_file_id=%s, updated_at=%s WHERE id=%s",
+                (file_id, time.time(), o["id"]))
+    caption = (f"🧾 رسید جدید — سفارش #{o['id']}\n👤 {update.effective_user.first_name} ({uid})\n"
+               f"🛒 {o['title']}\n💰 {_fmt(o['amount'])} تومان")
+    kb = M([[B("✅ تأیید و تحویل", callback_data=f"shop:ok:{o['id']}"), B("❌ رد", callback_data=f"shop:no:{o['id']}")]])
+    sent = False
+    for admin_id in _owner_ids():
+        try:
+            await context.bot.send_photo(admin_id, file_id, caption=caption, reply_markup=kb)
+            sent = True
+        except Exception:
+            pass
+    await msg.reply_text(f"✅ رسید سفارش #{o['id']} ثبت شد و برای بررسی ارسال شد.\nبعد از تأیید، خرید خودکار تحویل می‌شود."
+                         + ("" if sent else "\n(مدیر می‌تواند از پنل مدیریت هم بررسی کند)"))
+    raise _stop()
+
+
+# ─── API پنل: فروشگاه ───
+@_admin
+async def admin_shop_products(request, body):
+    prods = await _shop_products(active_only=False)
+    sold = await _fetch("SELECT product_id, COUNT(*) AS c FROM shop_orders WHERE status='paid' GROUP BY product_id")
+    sold_map = {int(r["product_id"]): int(r["c"]) for r in sold}
+    out = []
+    for p in prods:
+        rw = _loads(p["rewards"])
+        out.append({"id": int(p["id"]), "title": p["title"], "description": p["description"] or "", "rewards": rw,
+                    "rewards_text": _rewards_text(_rewards_list(rw)).replace("• ", ""),
+                    "price_toman": int(p["price_toman"] or 0), "price_stars": int(p["price_stars"] or 0),
+                    "active": bool(p["active"]), "sort": int(p["sort"] or 0), "sold": sold_map.get(int(p["id"]), 0)})
+    return _json({"ok": True, "products": out, "card_number": await _get_setting("card_number"),
+                  "card_holder": await _get_setting("card_holder")})
+
+
+@_admin
+async def admin_shop_save(request, body):
+    await _ensure_tables()
+    pid = _to_int(body.get("id"), 0) or 0
+    title = str(body.get("title") or "").strip()[:64]
+    if not title:
+        return _err("عنوان محصول را وارد کن")
+    rewards, e = _clean_rewards(body.get("rewards"))
+    if e:
+        return _err(e)
+    toman = max(0, _to_int(body.get("price_toman"), 0) or 0)
+    stars = max(0, min(100_000, _to_int(body.get("price_stars"), 0) or 0))
+    if not toman and not stars:
+        return _err("حداقل یکی از قیمت‌ها (تومان یا استارز) را وارد کن")
+    desc = str(body.get("description") or "")[:500]
+    sort = _to_int(body.get("sort"), 0) or 0
+    rj = json.dumps(rewards, ensure_ascii=False)
+    if pid:
+        await _exec("UPDATE shop_products SET title=%s, description=%s, rewards=%s, price_toman=%s, price_stars=%s, sort=%s "
+                    "WHERE id=%s", (title, desc, rj, toman, stars, sort, pid))
+    else:
+        await _exec("INSERT INTO shop_products (title, description, rewards, price_toman, price_stars, active, sort, created_at) "
+                    "VALUES (%s,%s,%s,%s,%s,1,%s,%s)", (title, desc, rj, toman, stars, sort, time.time()))
+    return _json({"ok": True})
+
+
+@_admin
+async def admin_shop_toggle(request, body):
+    await _ensure_tables()
+    n = await _exec("UPDATE shop_products SET active = 1 - active WHERE id=%s", (_to_int(body.get("id"), 0),))
+    return _json({"ok": bool(n)})
+
+
+@_admin
+async def admin_shop_delete(request, body):
+    await _ensure_tables()
+    n = await _exec("DELETE FROM shop_products WHERE id=%s", (_to_int(body.get("id"), 0),))
+    return _json({"ok": bool(n)})
+
+
+@_admin
+async def admin_shop_settings(request, body):
+    card = re.sub(r"[^\d\-\s]", "", str(body.get("card_number") or "").translate(_FA_DIGITS)).strip()[:30]
+    await _set_setting("card_number", card)
+    await _set_setting("card_holder", str(body.get("card_holder") or "").strip()[:64])
+    return _json({"ok": True})
+
+
+@_admin
+async def admin_shop_orders(request, body):
+    await _ensure_tables()
+    status = str(body.get("status") or "")
+    args, where = (), ""
+    if status in ("pending", "awaiting_receipt", "review", "paid", "rejected", "cancelled"):
+        where, args = "WHERE o.status=%s", (status,)
+    rows = await _fetch("SELECT o.*, u.first_name, u.username FROM shop_orders o LEFT JOIN users u ON u.user_id=o.user_id "
+                        f"{where} ORDER BY o.id DESC LIMIT 200", args)
+    rev = await _fetch("SELECT COUNT(*) AS c FROM shop_orders WHERE status='review'", one=True)
+    return _json({"ok": True, "review_count": int(rev["c"]), "orders": [{
+        "id": int(r["id"]), "user_id": int(r["user_id"]), "name": r["first_name"] or "", "username": r["username"] or "",
+        "title": r["title"], "method": r["method"], "amount": int(r["amount"]), "status": r["status"],
+        "receipt": bool(r["receipt_file_id"]), "created_at": float(r["created_at"])} for r in rows]})
+
+
+@_admin
+async def admin_shop_approve(request, body):
+    oid = _to_int(body.get("id"), 0)
+    buyer, text = await _deliver_order(oid, ("review", "awaiting_receipt", "pending"))
+    if not buyer:
+        return _err(re.sub(r"<[^>]+>", "", text))
+    await _notify(buyer, text)
+    return _json({"ok": True})
+
+
+@_admin
+async def admin_shop_reject(request, body):
+    oid = _to_int(body.get("id"), 0)
+    o = await _fetch("SELECT user_id FROM shop_orders WHERE id=%s", (oid,), one=True)
+    n = await _exec("UPDATE shop_orders SET status='rejected', updated_at=%s WHERE id=%s "
+                    "AND status IN ('review','awaiting_receipt','pending')", (time.time(), oid))
+    if not n:
+        return _err("این سفارش قابل رد نیست")
+    if o:
+        await _notify(int(o["user_id"]), f"❌ سفارش #{oid} تأیید نشد. در صورت مشکل با پشتیبانی تماس بگیر.")
+    return _json({"ok": True})
+
+
+@_admin
+async def admin_receipt(request, body):
+    oid = _to_int(request.match_info.get("oid"), 0)
+    o = await _fetch("SELECT receipt_file_id FROM shop_orders WHERE id=%s", (oid,), one=True)
+    if not o or not o["receipt_file_id"] or not _bot_app:
+        return web.Response(status=404, text="رسید پیدا نشد")
+    f = await _bot_app.bot.get_file(o["receipt_file_id"])
+    data = await f.download_as_bytearray()
+    return web.Response(body=bytes(data), content_type="image/jpeg")
 
 
 # ═══════════ سرور ═══════════
@@ -1720,9 +2412,13 @@ def create_app() -> web.Application:
         "stats": admin_stats, "search": admin_search, "user": admin_user, "adjust": admin_adjust,
         "gifts/list": admin_gifts_list, "gifts/create": admin_gifts_create,
         "gifts/toggle": admin_gifts_toggle, "gifts/delete": admin_gifts_delete,
+        "shop/products": admin_shop_products, "shop/save": admin_shop_save, "shop/toggle": admin_shop_toggle,
+        "shop/delete": admin_shop_delete, "shop/orders": admin_shop_orders, "shop/approve": admin_shop_approve,
+        "shop/reject": admin_shop_reject, "shop/settings": admin_shop_settings,
     }
     for p, h in admin_routes.items():
         app.router.add_post(f"/admin/api/{p}", h)
+    app.router.add_get("/admin/receipt/{oid}", admin_receipt)
     routes = {
         "/api/me": api_me, "/api/balance": api_balance, "/api/solo/state": api_solo_state,
         "/api/solo/mines/start": api_mines_start, "/api/solo/mines/reveal": api_mines_reveal,
