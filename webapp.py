@@ -63,6 +63,7 @@ MIN_BET = int(os.getenv("MINIAPP_MIN_BET") or getattr(config, "MINIAPP_MIN_BET",
 LAUNCHER_MAX = int(os.getenv("LAUNCHER_MAX_PER_ITEM") or 3)  # از هر وسیله شلیک حداکثر ۳ عدد
 DEFENSE_MAX = 1                                               # از هر سیستم دفاعی فقط ۱ عدد
 _banned: set = set()                                          # کاربران بن‌شده (کش حافظه)
+_bot_off = False                                              # حالت خاموشی بات (از پنل مدیریت)
 
 ADMIN_USERNAME = (os.getenv("ADMIN_USERNAME") or getattr(config, "ADMIN_USERNAME", "") or "admin").strip()
 ADMIN_PASSWORD = (os.getenv("ADMIN_PASSWORD") or getattr(config, "ADMIN_PASSWORD", "") or "admin").strip()
@@ -1338,6 +1339,7 @@ async def admin_stats(request, body):
     return _json({"ok": True, "users": int(s["users"]), "balance": int(s["bal"]), "bank": int(s["bank"]),
                   "gifts": int(gc["c"]), "games": sum(1 for g in _active_games.values() if not g.finished),
                   "queue": len(_waiting), "redis": _redis_on(), "default_password": ADMIN_PASSWORD == "admin",
+                  "bot_off": _bot_off,
                   "catalog": _catalog()})
 
 
@@ -1717,7 +1719,7 @@ def setup_bot(app):
     from telegram.ext import (CallbackQueryHandler, CommandHandler, MessageHandler, PreCheckoutQueryHandler,
                               TypeHandler, filters)
     patch_bot_ui()
-    app.add_handler(TypeHandler(Update, _h_ban_gate), group=-100)  # کاربر بن‌شده → ربات برایش کار نمی‌کند
+    app.add_handler(TypeHandler(Update, _h_bot_gate), group=-100)  # حالت خاموشی/بن → ربات جواب نمی‌دهد
     app.add_handler(CallbackQueryHandler(_h_check_membership, pattern=r"^check_membership$"), group=-2)
     app.add_handler(CallbackQueryHandler(_h_lb_cb, pattern=r"^lb:"), group=-2)
     app.add_handler(CommandHandler("start", _h_start_shop, filters=filters.ChatType.PRIVATE), group=-2)
@@ -2412,10 +2414,14 @@ async def _load_bans():
     logger.info(f"🚫 {len(_banned)} کاربر بن‌شده بارگذاری شد")
 
 
-async def _h_ban_gate(update, context):
-    """اولین هندلر: کاربر بن‌شده هیچ پاسخی از ربات نمی‌گیرد"""
+async def _h_bot_gate(update, context):
+    """اولین هندلر: در حالت خاموشی بات یا کاربر بن‌شده، هیچ پاسخی داده نمی‌شود"""
     u = update.effective_user
-    if not u or u.id not in _banned:
+    if not u:
+        return
+    if _bot_off and u.id not in _owner_ids():
+        raise _stop()
+    if u.id not in _banned:
         return
     try:
         if update.pre_checkout_query:
@@ -2455,6 +2461,20 @@ async def _kick_from_games(uid: int):
                 await _settle(g, g.opp(uid), f"{g.name(uid)} از ربات محروم شد")
     async with _ulock(uid):
         await _close_solo_session(uid)
+
+
+@_admin
+async def admin_bot_toggle(request, body):
+    """خاموش/روشن کردن بات از پنل مدیریت"""
+    global _bot_off
+    if isinstance(body.get("off"), bool):
+        _bot_off = body["off"]
+    else:
+        _bot_off = not _bot_off
+    logger.warning(f"🤖 بات {'🔴 خاموش' if _bot_off else '🟢 روشن'} شد (از پنل مدیریت)")
+    for admin_id in _owner_ids():
+        await _notify(admin_id, f"🤖 وضعیت ربات تغییر کرد:\n{'🔴 <b>خاموش</b> — ربات به جز ادمین‌ها جواب نمی‌دهد' if _bot_off else '🟢 <b>روشن</b>'}")
+    return _json({"ok": True, "off": _bot_off})
 
 
 @_admin
@@ -2652,7 +2672,7 @@ def create_app() -> web.Application:
         "shop/products": admin_shop_products, "shop/save": admin_shop_save, "shop/toggle": admin_shop_toggle,
         "shop/delete": admin_shop_delete, "shop/orders": admin_shop_orders, "shop/approve": admin_shop_approve,
         "shop/reject": admin_shop_reject, "shop/settings": admin_shop_settings,
-        "ban": admin_ban, "unban": admin_unban,
+        "ban": admin_ban, "unban": admin_unban, "bot/toggle": admin_bot_toggle,
     }
     for p, h in admin_routes.items():
         app.router.add_post(f"/admin/api/{p}", h)
