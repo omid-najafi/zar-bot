@@ -74,6 +74,7 @@ a{color:var(--gold)}
     <button class="tab" data-t="gifts">🎁 کدهای هدیه</button>
     <button class="tab" data-t="shop">🛒 فروشگاه</button>
     <button class="tab" data-t="orders">🧾 سفارش‌ها <span class="badge hidden" id="ord-badge"></span></button>
+    <button class="tab" data-t="admins">🛡 ادمین‌ها</button>
   </div>
 
   <!-- کاربران -->
@@ -144,6 +145,20 @@ a{color:var(--gold)}
       <div style="overflow-x:auto"><table><thead><tr><th>#</th><th>کاربر</th><th>محصول</th><th>مبلغ</th><th>وضعیت</th><th>زمان</th><th></th></tr></thead><tbody id="o-list"></tbody></table></div>
     </div>
   </section>
+
+  <!-- ادمین‌ها -->
+  <section id="t-admins" class="hidden">
+    <div class="card">
+      <h3>➕ افزودن ادمین</h3>
+      <div class="row">
+        <input id="ad-id" inputmode="numeric" style="flex:1" placeholder="آیدی عددی کاربر (مثلاً 123456789)">
+        <input id="ad-note" style="flex:1" placeholder="یادداشت (اختیاری)">
+        <button class="btn gold" onclick="addAdmin()">🛡 ادمین کن</button>
+      </div>
+      <p class="muted" style="line-height:2">کاربر باید قبلاً ربات را استارت کرده باشد. ادمین: رسیدهای کارت به کارت را می‌گیرد و تأیید یا رد می‌کند، اعلان خریدها را می‌گیرد، در حالت خاموشی ربات برایش کار می‌کند و تا وقتی ادمین است بن نمی‌شود. ورود به این پنل همچنان فقط با نام کاربری و رمز است.</p>
+    </div>
+    <div class="card"><h3>📋 ادمین‌های ربات</h3><div style="overflow-x:auto"><table><thead><tr><th>کاربر</th><th>آیدی</th><th>نوع</th><th>یادداشت</th><th>تاریخ افزودن</th><th></th></tr></thead><tbody id="ad-list"></tbody></table></div></div>
+  </section>
 </div>
 <div id="toast"></div>
 <script>
@@ -166,8 +181,8 @@ async function api(path, body) {
 }
 document.querySelectorAll('.tab').forEach(b => b.onclick = () => {
   document.querySelectorAll('.tab').forEach(x => x.classList.toggle('on', x === b));
-  ['users', 'gifts', 'shop', 'orders'].forEach(t => $('#t-' + t).classList.toggle('hidden', b.dataset.t !== t));
-  ({ gifts: loadGifts, shop: loadProducts, orders: loadOrders }[b.dataset.t] || (() => {}))();
+  ['users', 'gifts', 'shop', 'orders', 'admins'].forEach(t => $('#t-' + t).classList.toggle('hidden', b.dataset.t !== t));
+  ({ gifts: loadGifts, shop: loadProducts, orders: loadOrders, admins: loadAdmins }[b.dataset.t] || (() => {}))();
 });
 
 /* ── سازنده جایزه (مشترک کد هدیه و محصول) ── */
@@ -353,6 +368,38 @@ async function loadOrders() {
 async function orderAct(act, id) {
   if (!confirm(act === 'approve' ? 'سفارش #' + id + ' تأیید و تحویل شود؟' : 'سفارش #' + id + ' رد شود؟')) return;
   try { await api('shop/' + act, { id }); toast('✅ انجام شد', 'ok'); loadOrders(); } catch (e) { toast(e.message, 'err'); }
+}
+
+/* ── ادمین‌ها ── */
+const ROLE = { owner: ['👑 مالک', 'wait'], env: ['⚙️ تنظیمات سرور', ''], panel: ['🛡 ادمین', 'ok'] };
+async function loadAdmins() {
+  try {
+    const d = await api('admins/list');
+    $('#ad-list').innerHTML = d.admins.length ? d.admins.map(a => {
+      const r = ROLE[a.role] || [a.role, ''];
+      return `<tr><td><b>${esc(a.name || '—')}</b>${a.username ? ' <span class="muted">@' + esc(a.username) + '</span>' : ''}</td>
+        <td><code>${a.user_id}</code></td><td><span class="pill ${r[1]}">${r[0]}</span></td>
+        <td class="muted">${esc(a.note || '—')}</td><td class="muted">${a.added_at ? dt(a.added_at) : '—'}</td>
+        <td>${a.removable ? `<button class="btn red sm" onclick="removeAdmin(${a.user_id})">🗑 حذف</button>` : ''}</td></tr>`;
+    }).join('') : '<tr><td colspan="6" class="muted">ادمینی ثبت نشده</td></tr>';
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function addAdmin() {
+  const id = num($('#ad-id').value);
+  if (!id) { toast('آیدی عددی را وارد کن', 'err'); return; }
+  let name = '';
+  try { const u = await api('user', { user_id: id }); name = u.user.first_name || ''; }
+  catch (e) { toast(e.message, 'err'); return; }
+  if (!confirm('«' + (name || id) + '» با آیدی ' + id + ' ادمین ربات شود؟')) return;
+  try {
+    await api('admins/add', { user_id: id, note: $('#ad-note').value });
+    toast('🛡 ادمین اضافه شد', 'ok'); $('#ad-id').value = ''; $('#ad-note').value = ''; loadAdmins();
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function removeAdmin(id) {
+  if (!confirm('دسترسی ادمین ' + id + ' برداشته شود؟')) return;
+  try { await api('admins/remove', { user_id: id }); toast('✅ ادمین حذف شد', 'ok'); loadAdmins(); }
+  catch (e) { toast(e.message, 'err'); }
 }
 loadStats();
 </script>
