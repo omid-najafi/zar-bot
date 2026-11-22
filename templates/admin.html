@@ -75,6 +75,7 @@ a{color:var(--gold)}
     <button class="tab" data-t="shop">🛒 فروشگاه</button>
     <button class="tab" data-t="orders">🧾 سفارش‌ها <span class="badge hidden" id="ord-badge"></span></button>
     <button class="tab" data-t="admins">🛡 ادمین‌ها</button>
+    <button class="tab" data-t="vip">👑 کاربران VIP</button>
   </div>
 
   <!-- کاربران -->
@@ -97,6 +98,7 @@ a{color:var(--gold)}
         <label>🏦 بانک<input id="g-bank" inputmode="numeric"></label>
         <label>⭐ لول (افزایش)<input id="g-levels" inputmode="numeric"></label>
         <label>✨ XP<input id="g-xp" inputmode="numeric"></label>
+        <label>👑 VIP (روز)<input id="g-vip" inputmode="numeric"></label>
         <label>👥 حداکثر استفاده (۰ = نامحدود)<input id="g-max" inputmode="numeric"></label>
         <label>🔒 حداقل لول کاربر<input id="g-minlvl" inputmode="numeric"></label>
         <label>⌛ انقضا (ساعت، ۰ = همیشگی)<input id="g-exp" inputmode="numeric"></label>
@@ -129,6 +131,7 @@ a{color:var(--gold)}
         <label>🏦 بانک<input id="p-bank" inputmode="numeric"></label>
         <label>⭐ لول (افزایش)<input id="p-levels" inputmode="numeric"></label>
         <label>✨ XP<input id="p-xp" inputmode="numeric"></label>
+        <label>👑 VIP (روز)<input id="p-vip" inputmode="numeric"></label>
       </div>
       <label class="muted" style="display:grid;gap:5px;margin-top:10px">توضیحات<textarea id="p-desc" rows="2"></textarea></label>
       <div id="p-builder"></div>
@@ -159,6 +162,15 @@ a{color:var(--gold)}
     </div>
     <div class="card"><h3>📋 ادمین‌های ربات</h3><div style="overflow-x:auto"><table><thead><tr><th>کاربر</th><th>آیدی</th><th>نوع</th><th>یادداشت</th><th>تاریخ افزودن</th><th></th></tr></thead><tbody id="ad-list"></tbody></table></div></div>
   </section>
+
+  <!-- کاربران VIP -->
+  <section id="t-vip" class="hidden">
+    <div class="card">
+      <h3>👑 کاربران VIP فعال</h3>
+      <p class="muted">مزایا: تا ۶ وسیله شلیک از هر نوع، +۵ ظرفیت هر مهمات در انبار، +۱۰٪ سود ملک و کارگر، سود بانک ۵٪</p>
+      <div style="overflow-x:auto"><table><thead><tr><th>کاربر</th><th>آیدی</th><th>انقضا</th><th>روز باقی‌مانده</th><th></th></tr></thead><tbody id="vip-list"></tbody></table></div>
+    </div>
+  </section>
 </div>
 <div id="toast"></div>
 <script>
@@ -181,8 +193,8 @@ async function api(path, body) {
 }
 document.querySelectorAll('.tab').forEach(b => b.onclick = () => {
   document.querySelectorAll('.tab').forEach(x => x.classList.toggle('on', x === b));
-  ['users', 'gifts', 'shop', 'orders', 'admins'].forEach(t => $('#t-' + t).classList.toggle('hidden', b.dataset.t !== t));
-  ({ gifts: loadGifts, shop: loadProducts, orders: loadOrders, admins: loadAdmins }[b.dataset.t] || (() => {}))();
+  ['users', 'gifts', 'shop', 'orders', 'admins', 'vip'].forEach(t => $('#t-' + t).classList.toggle('hidden', b.dataset.t !== t));
+  ({ gifts: loadGifts, shop: loadProducts, orders: loadOrders, admins: loadAdmins, vip: loadVips }[b.dataset.t] || (() => {}))();
 });
 
 /* ── سازنده جایزه (مشترک کد هدیه و محصول) ── */
@@ -204,7 +216,7 @@ function renderChips(px) {
   $('#' + px + '-chips').innerHTML = out.join('');
 }
 function collectRewards(px) {
-  return { coins: num($('#' + px + '-coins').value), bank: num($('#' + px + '-bank').value), levels: num($('#' + px + '-levels').value), xp: num($('#' + px + '-xp').value),
+  return { coins: num($('#' + px + '-coins').value), bank: num($('#' + px + '-bank').value), levels: num($('#' + px + '-levels').value), xp: num($('#' + px + '-xp').value), vip_days: num($('#' + px + '-vip').value),
     properties: RB[px].properties, workers: RB[px].workers, items: RB[px].items };
 }
 $('#g-builder').innerHTML = builderHtml('g');
@@ -260,7 +272,8 @@ function renderUser() {
       <button class="btn ghost" onclick="openUser(${u.user_id})">🔄</button></div></div>
     ${u.banned ? '<div class="warn" style="margin:0 0 12px">🚫 این کاربر بن است: ربات برایش کار نمی‌کند، کسی نمی‌تواند به او حمله کند یا پول انتقال دهد.</div>' : ''}
     <table><thead><tr><th>مورد</th><th>فعلی</th><th>مقدار</th><th></th></tr></thead><tbody>
-      ${adjRow('💰 موجودی', 'coins', fmt(u.balance))}${adjRow('🏦 بانک', 'bank', fmt(u.bank))}${adjRow('⭐ لول', 'levels', fmt(u.level))}${adjRow('✨ XP', 'xp', fmt(u.xp))}</tbody></table>
+      ${adjRow('💰 موجودی', 'coins', fmt(u.balance))}${adjRow('🏦 بانک', 'bank', fmt(u.bank))}${adjRow('⭐ لول', 'levels', fmt(u.level))}${adjRow('✨ XP', 'xp', fmt(u.xp))}
+      ${adjRow('🏭 انبار', 'warehouse', 'لول ' + fmt(u.warehouse_level || 1))}${adjRow('👑 VIP', 'vip_days', u.vip_until > Date.now() / 1000 ? fmt(Math.round((u.vip_until - Date.now() / 1000) / 86400)) + ' روز مانده' : '—')}</tbody></table>
     ${u.gifts.length ? `<p class="muted">🎁 کدهای استفاده‌شده: ${u.gifts.map(g => '<code>' + esc(g.code) + '</code>').join(' ')}</p>` : ''}</div>
     <div class="grid2">${tbl('🏠 ملک‌ها', CAT.properties, u.properties, 'property', CAT.max_per_key)}${tbl('👷 کارگرها', CAT.workers, u.workers, 'worker', CAT.max_per_key)}</div>
     ${tbl('💀 اینونتوری بازار سیاه', CAT.items, u.items, 'item', 0)}`;
@@ -284,7 +297,7 @@ async function createGift() {
     const d = await api('gifts/create', { code: $('#g-code').value, rewards: collectRewards('g'), max_uses: num($('#g-max').value), min_level: num($('#g-minlvl').value),
       expires_hours: num($('#g-exp').value), note: $('#g-note').value });
     toast('✅ کد ساخته شد: ' + d.code, 'ok');
-    ['#g-code', '#g-coins', '#g-bank', '#g-levels', '#g-xp', '#g-max', '#g-minlvl', '#g-exp', '#g-note'].forEach(s => $(s).value = '');
+    ['#g-code', '#g-coins', '#g-bank', '#g-levels', '#g-xp', '#g-vip', '#g-max', '#g-minlvl', '#g-exp', '#g-note'].forEach(s => $(s).value = '');
     RB.g = { properties: {}, workers: {}, items: {} }; renderChips('g'); loadGifts(); loadStats();
   } catch (e) { toast(e.message, 'err'); }
 }
@@ -324,7 +337,7 @@ async function saveSettings() {
   try { await api('shop/settings', { card_number: $('#s-card').value, card_holder: $('#s-holder').value }); toast('✅ ذخیره شد', 'ok'); } catch (e) { toast(e.message, 'err'); }
 }
 function resetProduct() {
-  ['#p-id', '#p-title', '#p-toman', '#p-stars', '#p-sort', '#p-coins', '#p-bank', '#p-levels', '#p-xp', '#p-desc'].forEach(s => $(s).value = '');
+  ['#p-id', '#p-title', '#p-toman', '#p-stars', '#p-sort', '#p-coins', '#p-bank', '#p-levels', '#p-xp', '#p-vip', '#p-desc'].forEach(s => $(s).value = '');
   RB.p = { properties: {}, workers: {}, items: {} }; renderChips('p');
   $('#p-form-title').textContent = '➕ افزودن محصول'; $('#p-cancel').classList.add('hidden');
 }
@@ -332,7 +345,7 @@ function editProduct(id) {
   const p = PRODUCTS.find(x => x.id === id); if (!p) return;
   const r = p.rewards || {};
   $('#p-id').value = p.id; $('#p-title').value = p.title; $('#p-desc').value = p.description; $('#p-toman').value = p.price_toman || ''; $('#p-stars').value = p.price_stars || '';
-  $('#p-sort').value = p.sort || ''; $('#p-coins').value = r.coins || ''; $('#p-bank').value = r.bank || ''; $('#p-levels').value = r.levels || ''; $('#p-xp').value = r.xp || '';
+  $('#p-sort').value = p.sort || ''; $('#p-coins').value = r.coins || ''; $('#p-bank').value = r.bank || ''; $('#p-levels').value = r.levels || ''; $('#p-xp').value = r.xp || ''; $('#p-vip').value = r.vip_days || '';
   RB.p = { properties: Object.assign({}, r.properties), workers: Object.assign({}, r.workers), items: Object.assign({}, r.items) }; renderChips('p');
   $('#p-form-title').textContent = '✏️ ویرایش محصول #' + p.id; $('#p-cancel').classList.remove('hidden');
   window.scrollTo({ top: $('#p-form-title').offsetTop - 20, behavior: 'smooth' });
@@ -399,6 +412,23 @@ async function addAdmin() {
 async function removeAdmin(id) {
   if (!confirm('دسترسی ادمین ' + id + ' برداشته شود؟')) return;
   try { await api('admins/remove', { user_id: id }); toast('✅ ادمین حذف شد', 'ok'); loadAdmins(); }
+  catch (e) { toast(e.message, 'err'); }
+}
+
+/* ── کاربران VIP ── */
+async function loadVips() {
+  try {
+    const d = await api('vip/list');
+    $('#vip-list').innerHTML = d.vips.length ? d.vips.map(v => `<tr>
+      <td><b>${esc(v.name || '—')}</b>${v.username ? ' <span class="muted">@' + esc(v.username) + '</span>' : ''}</td>
+      <td><code>${v.user_id}</code></td><td class="muted">${dt(v.until)}</td><td><b>${fmt(v.days_left)}</b> روز</td>
+      <td style="white-space:nowrap"><button class="btn green sm" onclick="vipAct(${v.user_id},30)">+۳۰ روز</button> <button class="btn red sm" onclick="vipAct(${v.user_id},-9999)">حذف VIP</button></td></tr>`).join('')
+      : '<tr><td colspan="5" class="muted">کاربر VIP فعالی نیست</td></tr>';
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function vipAct(id, days) {
+  if (!confirm(days > 0 ? '۳۰ روز به VIP این کاربر اضافه شود؟' : 'VIP این کاربر حذف شود؟')) return;
+  try { await api('adjust', { user_id: id, kind: 'vip_days', amount: days }); toast('✅ انجام شد', 'ok'); loadVips(); }
   catch (e) { toast(e.message, 'err'); }
 }
 loadStats();
