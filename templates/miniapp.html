@@ -386,6 +386,7 @@ const S = {
   me: null, games: {}, list: [], wheel: [], tab: '1p', screen: 'home', bet: {},
   solo: null, soloKey: null, busy: false,
   queue: null, queueEnd: 0, gameId: null, game: null, lastGameKey: '', deadlineAt: 0, turnTimeout: 45,
+  xp: { min: 15, max: 2500, divisor: 10000 },
   resultShown: null, acting: false, authFailed: false, timers: {}
 };
 const GRAD = {
@@ -406,6 +407,7 @@ const fmtPlain = n => Number(n || 0).toLocaleString('en-US');
 const toEn = s => String(s || '').replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d)).replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d));
 const parseNum = s => { const v = parseInt(toEn(s).replace(/[^\d]/g, ''), 10); return isNaN(v) ? 0 : v; };
 const short = n => n >= 1e6 ? (n / 1e6).toLocaleString('fa-IR', { maximumFractionDigits: 1 }) + 'M' : n >= 1e3 ? (n / 1e3).toLocaleString('fa-IR', { maximumFractionDigits: 1 }) + 'K' : fmt(n);
+const xpFor = bet => Math.max(S.xp.min, Math.min(S.xp.max, Math.floor((Number(bet) || 0) / S.xp.divisor)));
 const initial = name => (String(name || '?').trim()[0] || '?').toUpperCase();
 function haptic(type) { try { if (!tg || !tg.HapticFeedback) return; if (type === 'ok' || type === 'err' || type === 'warn') tg.HapticFeedback.notificationOccurred(type === 'ok' ? 'success' : type === 'err' ? 'error' : 'warning'); else tg.HapticFeedback.impactOccurred(type || 'light'); } catch (e) {} }
 
@@ -476,12 +478,43 @@ function confirmBox(title, text, okLabel) {
     $('#cf-yes').onclick = () => { closeModal(); resolve(true); };
   });
 }
-function showAuthError() {
+async function botLinkBtn() {
+  try {
+    const r = await fetch('/api/config'); const d = await r.json();
+    if (d.bot_username) return `<a class="btn btn-gold" style="display:block;text-align:center;text-decoration:none;margin-top:16px" href="https://t.me/${d.bot_username}?start=webapp" target="_blank">🔗 دریافت لینک ورود به کازینو</a>`;
+  } catch (e) {}
+  return '';
+}
+async function showAuthError() {
   hideSplash();
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   $('#screen-home').classList.add('active');
+  const btn = await botLinkBtn();
   $('#screen-home').innerHTML = `<div class="fatal"><div class="e">🔒</div><h3>احراز هویت ناموفق</h3>
-    <p style="color:var(--muted);line-height:2">مینی‌اپ را از دکمه «🎲 قمارخانه زنده» داخل ربات باز کن.<br>اگر از قبل باز بود، یک بار ببند و دوباره باز کن.</p></div>`;
+    <p style="color:var(--muted);line-height:2">به نظر می‌رسد مینی‌اپ خارج از تلگرام یا با یک پروکسی باز شده است.<br>
+    برای ورود، یک <b>لینک شخصی</b> از ربات بگیر و روی آن بزن:</p>${btn}
+    <p class="hint" style="margin-top:12px">یا مینی‌اپ را از دکمه‌ی «🎰 کازینو» داخل ربات باز کن.</p></div>`;
+}
+function showLanding() {
+  hideSplash();
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  $('#screen-home').classList.add('active');
+  $('#screen-home').innerHTML = `<div class="hero" style="text-align:center">
+      <h1>🎲 قمارخانه زر</h1><p>برای ورود یکی از گزینه‌ها را انتخاب کن:</p></div>
+    <button class="btn btn-gold" id="ld-casino" style="margin-bottom:10px">🎲 ورود به کازینو</button>
+    <button class="btn btn-ghost" id="ld-admin">🛠 پنل مدیریت</button>
+    <div id="ld-box"></div>`;
+  $('#ld-admin').onclick = () => { location.href = '/admin'; };
+  $('#ld-casino').onclick = async () => {
+    const box = $('#ld-box');
+    box.innerHTML = '<p class="hint" style="text-align:center;margin-top:14px">⏳ در حال بررسی...</p>';
+    const btn = await botLinkBtn();
+    box.innerHTML = `<div class="panel" style="margin-top:14px;text-align:center">
+      <p style="line-height:2;margin:0 0 12px">برای ورود به کازینو، یک <b>لینک شخصی</b> از ربات بگیر:<br>
+      <span class="muted">۱) روی دکمه بزن ۲) ربات لینک را می‌فرستد ۳) روی لینک بزن</span></p>
+      ${btn || '<p class="hint">نام کاربری ربات تنظیم نشده است.</p>'}
+      <p class="hint" style="margin-top:10px">یا مینی‌اپ را از دکمه‌ی «🎰 کازینو» داخل تلگرام باز کن.</p></div>`;
+  };
 }
 function hideSplash() { const s = $('#splash'); if (s) { s.classList.add('out'); setTimeout(() => s.remove(), 450); } }
 function cardHtml(c, cls, attrs) {
@@ -516,6 +549,7 @@ function applyMe(d) {
   S.me = d.user; S.list = d.games || []; S.games = {}; S.list.forEach(g => S.games[g.key] = g);
   S.wheel = d.wheel_segments || []; S.solo = d.solo || null; S.turnTimeout = d.turn_timeout || 45;
   S.me.commission = (typeof d.commission === 'number') ? d.commission : 0.05;
+  if (d.xp) S.xp = d.xp;
   $('#me-name').textContent = S.me.name; $('#me-avatar').textContent = initial(S.me.name);
   $('#me-lvl').textContent = 'لول ' + fmt(S.me.level || 1);
   setBalance(S.me.balance);
@@ -563,14 +597,17 @@ function betControl(key, id) {
     <div class="betrow"><button data-bk="${id}" data-op="half">½</button><input id="${id}" inputmode="numeric" autocomplete="off" value="${fmtPlain(v)}"><button data-bk="${id}" data-op="double">2×</button></div>
     <div class="chips">${chipsFor(g).map(c => `<button class="chip" data-bk="${id}" data-op="set" data-v="${c}">${short(c)}</button>`).join('')}
     <button class="chip" data-bk="${id}" data-op="max">حداکثر</button></div>
-    <div class="hint">حداقل ${fmt(g.min_bet)} — حداکثر ${fmt(g.max_bet)}</div></div>`;
+    <div class="hint">حداقل ${fmt(g.min_bet)} — حداکثر ${fmt(g.max_bet)}</div>
+    <div class="hint" id="${id}-xp" style="color:var(--gold)"></div></div>`;
 }
 function bindBet(key, id) {
   const input = document.getElementById(id); if (!input) return;
   const g = S.games[key];
   const clamp = v => Math.max(g.min_bet, Math.min(g.max_bet, v));
-  input.addEventListener('blur', () => { const v = clamp(parseNum(input.value) || g.min_bet); input.value = fmtPlain(v); S.bet[key] = v; });
-  input.addEventListener('input', () => { S.bet[key] = parseNum(input.value); });
+  const xpEl = document.getElementById(id + '-xp');
+  const updXp = () => { if (xpEl) xpEl.textContent = '⭐ برد = ' + fmt(xpFor(parseNum(input.value) || g.min_bet)) + ' XP'; };
+  input.addEventListener('blur', () => { const v = clamp(parseNum(input.value) || g.min_bet); input.value = fmtPlain(v); S.bet[key] = v; updXp(); });
+  input.addEventListener('input', () => { S.bet[key] = parseNum(input.value); updXp(); });
   input.parentElement.parentElement.addEventListener('click', e => {
     const b = e.target.closest('[data-bk]'); if (!b || b.dataset.bk !== id) return;
     let v = parseNum(input.value) || g.min_bet;
@@ -578,8 +615,9 @@ function bindBet(key, id) {
     else if (b.dataset.op === 'double') v = v * 2;
     else if (b.dataset.op === 'set') v = Number(b.dataset.v);
     else if (b.dataset.op === 'max') v = Math.min(g.max_bet, (S.me && S.me.balance) || g.min_bet);
-    v = clamp(v); input.value = fmtPlain(v); S.bet[key] = v; haptic();
+    v = clamp(v); input.value = fmtPlain(v); S.bet[key] = v; haptic(); updXp();
   });
+  updXp();
 }
 function readBet(key, id) {
   const g = S.games[key], el = document.getElementById(id);
@@ -1219,8 +1257,8 @@ async function boot() {
     try { tg.disableVerticalSwipes && tg.disableVerticalSwipes(); } catch (e) {}
     try { tg.BackButton.onClick(handleBack); } catch (e) {}
   }
-  // باز شدن دامنه در مرورگر (بدون تلگرام) → پنل مدیریت (نیاز به نام کاربری و رمز)
-  if (!AUTH.initData && !AUTH.token) { location.replace('/admin'); return; }
+  // بدون احراز هویت: داخل تلگرام (پروکسی/کلاینت دیگر) → صفحه‌ی لینک ورود | مرورگر معمولی → صفحه‌ی انتخاب
+  if (!AUTH.initData && !AUTH.token) { tg ? showAuthError() : showLanding(); return; }
   try {
     const d = await api('me');
     applyMe(d); S.me.commission = d.commission;
