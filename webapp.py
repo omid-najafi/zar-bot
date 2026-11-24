@@ -2346,6 +2346,21 @@ def setup_bot(app):
     app.add_handler(CallbackQueryHandler(_h_bank_cb, pattern=r"^bank:(menu|withdraw)$"), group=-2)
     app.add_handler(CallbackQueryHandler(_h_bm_guard, pattern=r"^bm:buy:"), group=-2)
     app.add_handler(CallbackQueryHandler(_h_bm_post, pattern=r"^bm:buy:"), group=1)
+
+    async def _on_error(update, context):
+        """هندلر خطای سراسری: هیچ خطایی بی‌سر و صدا نمی‌ماند و دکمه‌ها هرگز «مرده» به نظر نمی‌رسند"""
+        try:
+            logger.exception(f"❌ خطای رسیدگی‌نشده در ربات: {getattr(context, 'error', None)}")
+        except Exception:
+            pass
+        try:
+            if update and getattr(update, "callback_query", None):
+                await update.callback_query.answer("❌ خطایی رخ داد — دوباره تلاش کن", show_alert=True)
+        except Exception:
+            pass
+
+    if hasattr(app, "add_error_handler"):
+        app.add_error_handler(_on_error)
     cmds = _cmd_map()
     if cmds:
         rx = r"^(" + "|".join(re.escape(c) for c in cmds) + r")$"
@@ -3181,37 +3196,54 @@ def _detect_section(update) -> str | None:
 
 async def _h_bot_gate(update, context):
     """اولین هندلر: حالت خاموشی کل بات، خاموشی بخش‌ها و کاربران بن‌شده"""
-    u = update.effective_user
-    if not u:
-        return
-    is_adm = u.id in _owner_ids()
-    if _bot_off and not is_adm:
-        off_msg = _ctrl_text("bot_off_msg", "")
-        if off_msg:
-            try:
-                if update.callback_query:
-                    await update.callback_query.answer(off_msg[:190], show_alert=True)
-                elif update.effective_chat and update.effective_chat.type == "private" and update.effective_message:
-                    await update.effective_message.reply_text(off_msg)
-            except Exception:
-                pass
-        raise _stop()
-    if u.id in _banned:
-        pass
-    else:
-        if not is_adm and _controls.get("disabled_sections"):
-            sec = _detect_section(update)
-            if sec and _section_disabled(sec):
-                msg_txt = _ctrl_text("section_off", "⛔ این بخش موقتاً توسط مدیریت غیرفعال شده است.")
+    try:
+        u = update.effective_user
+        if not u:
+            return
+        try:
+            is_adm = u.id in _owner_ids()
+        except Exception:
+            is_adm = True   # اگر لیست ادمین‌ها خراب شد، کاربران نباید قفل شوند
+        if _bot_off and not is_adm:
+            off_msg = _ctrl_text("bot_off_msg", "")
+            if off_msg:
                 try:
                     if update.callback_query:
-                        await update.callback_query.answer(msg_txt[:190], show_alert=True)
-                    elif update.effective_message:
-                        await update.effective_message.reply_text(msg_txt)
+                        await update.callback_query.answer(off_msg[:190], show_alert=True)
+                    elif update.effective_chat and update.effective_chat.type == "private" and update.effective_message:
+                        await update.effective_message.reply_text(off_msg)
                 except Exception:
                     pass
-                raise _stop()
-        return
+            raise _stop()
+        if u.id not in _banned:
+            if not is_adm and _controls.get("disabled_sections"):
+                try:
+                    sec = _detect_section(update)
+                except Exception:
+                    sec = None
+                if sec and sec in _controls["disabled_sections"]:
+                    msg_txt = _ctrl_text("section_off", "⛔ این بخش موقتاً توسط مدیریت غیرفعال شده است.")
+                    try:
+                        if update.callback_query:
+                            await update.callback_query.answer(msg_txt[:190], show_alert=True)
+                        elif update.effective_message:
+                            await update.effective_message.reply_text(msg_txt)
+                    except Exception:
+                        pass
+                    raise _stop()
+        else:
+            try:
+                if update.callback_query:
+                    await update.callback_query.answer("🚫 شما از ربات محروم شده‌اید.", show_alert=True)
+                elif update.effective_chat and update.effective_chat.type == "private" and update.effective_message:
+                    await update.effective_message.reply_text("🚫 شما از ربات محروم شده‌اید.")
+            except Exception:
+                pass
+            raise _stop()
+    except Exception:
+        # هیچ خطایی در گیت نباید ربات را از کار بیندازد
+        logger.exception("bot_gate error — ادامه بدون اعمال گیت")
+    return
     try:
         if update.pre_checkout_query:
             await update.pre_checkout_query.answer(ok=False, error_message="🚫 شما از ربات محروم شده‌اید")
@@ -3541,33 +3573,76 @@ async def admin_unban(request, body):
 
 
 # ═══════════ جوین اجباری (رفع باگ مالکیت پیام) ═══════════
+_mem_cache: dict = {}          # user_id -> (is_joined, missing[], ts, ttl)
+_MEM_TTL_OK = 900              # نتیجه‌ی مثبت: ۱۵ دقیقه
+_MEM_TTL_NO = 45               # نتیجه‌ی منفی: ۴۵ ثانیه (جلوگیری از هجوم بی‌پایان به API تلگرام)
+_MEM_TIMEOUT = 6               # هرگز بیش از ۶ ثانیه روی چک عضویت منتظر نمان
+
+
+async def _cached_membership(bot, user_id: int):
+    now = time.time()
+    hit = _mem_cache.get(int(user_id))
+    if hit and now < hit[2] + hit[3]:
+        return hit[0], hit[1]
+    if not _utils:
+        return True, []
+    try:
+        res = await asyncio.wait_for(_utils.check_membership_quiet(bot, user_id), timeout=_MEM_TIMEOUT)
+        is_joined, missing = res
+    except asyncio.TimeoutError:
+        logger.warning(f"⚠️ چک عضویت {user_id} تایم‌اوت خورد — فرض می‌کنیم عضو است")
+        _mem_cache[int(user_id)] = (True, [], now, 60)
+        return True, []
+    except Exception:
+        logger.exception(f"⚠️ چک عضویت {user_id} خطا داد — fail-open")
+        _mem_cache[int(user_id)] = (True, [], now, 60)
+        return True, []
+    _mem_cache[int(user_id)] = (is_joined, list(missing or []), now,
+                                _MEM_TTL_OK if is_joined else _MEM_TTL_NO)
+    if len(_mem_cache) > 8000:
+        cutoff = now - _MEM_TTL_OK - 5
+        for uid, v in list(_mem_cache.items()):
+            if v[2] < cutoff:
+                _mem_cache.pop(uid, None)
+    return is_joined, missing
+
+
 async def verify_membership_owned(update, context) -> bool:
-    """مثل utils.verify_membership ولی پیام جوین به نام همان کاربر ثبت می‌شود و نتیجه مثبت کش می‌شود"""
+    """مثل utils.verify_membership ولی با کش مثبت/منفی، تایم‌اوت و fail-open — هرگز ربات را قفل نمی‌کند"""
     user = update.effective_user
     if not user:
         return False
-    is_joined, missing = await _utils.check_membership_quiet(context.bot, user.id)
+    try:
+        is_joined, missing = await _cached_membership(context.bot, user.id)
+    except Exception:
+        logger.exception("verify_membership fail-open")
+        return True   # خطای ناشناخته هرگز نباید ربات را قطع کند
     if is_joined:
+        return True
+    if not _utils:
         return True
     text, kb = _utils.get_join_text(missing), _utils.get_join_keyboard()
     q = update.callback_query
     m = None
-    if q:
-        await _utils.safe_answer(q, "❌ هنوز عضو نشدی!", show_alert=True)
-        if not _not_owner(q):
-            m = await _utils.safe_edit(q, text, kb)
-        if m is None:
-            try:
-                m = await q.from_user.send_message(text, parse_mode="HTML", reply_markup=kb)
-            except Exception:
-                m = None
-    elif update.effective_message:
-        try:
+    try:
+        if q:
+            await _utils.safe_answer(q, "❌ هنوز عضو نشدی!", show_alert=True)
+            if not _not_owner(q):
+                m = await _utils.safe_edit(q, text, kb)
+            if m is None:
+                try:
+                    m = await q.from_user.send_message(text, parse_mode="HTML", reply_markup=kb)
+                except Exception:
+                    m = None
+        elif update.effective_message:
             m = await update.effective_message.reply_text(text, parse_mode="HTML", reply_markup=kb)
-        except Exception as e:
-            logger.warning(f"ارسال پیام جوین ناموفق: {e}")
+    except Exception as e:
+        logger.warning(f"ارسال پیام جوین ناموفق: {e}")
     if m:
-        _utils.remember_owner(m, user.id)
+        try:
+            _utils.remember_owner(m, user.id)
+        except Exception:
+            pass
     return False
 
 
