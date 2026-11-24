@@ -72,6 +72,17 @@ _banned: set = set()                                          # کاربران �
 _bot_off = False                                              # حالت خاموشی بات (از پنل مدیریت)
 _admins: set = set()                                          # ادمین‌های افزوده‌شده از پنل (کش حافظه)
 
+# بخش‌های قابل خاموش/روشن کردن از پنل مدیریت
+SECTIONS = [
+    ("bank", "🏦 بانک"), ("property", "🏠 ملک‌ها"), ("worker", "👷 کارگرها"), ("casino", "🎰 کازینو"),
+    ("missions", "🎯 ماموریت‌ها"), ("transfer", "💸 انتقال"), ("kabareh", "🎭 کاباره زر"),
+    ("leaderboard", "🏆 لیدربورد"), ("blackmarket", "💀 بازار سیاه"), ("shop", "💎 خرید کوین و لول"),
+    ("gift", "🎁 کد هدیه"), ("help", "📚 راهنما"),
+]
+_settings_cache: dict = {}
+_settings_at = 0.0
+_settings_loaded = False
+
 ADMIN_USERNAME = (os.getenv("ADMIN_USERNAME") or getattr(config, "ADMIN_USERNAME", "") or "admin").strip()
 ADMIN_PASSWORD = (os.getenv("ADMIN_PASSWORD") or getattr(config, "ADMIN_PASSWORD", "") or "admin").strip()
 
@@ -322,6 +333,9 @@ async def _take_bet(uid: int, game_key: str, bet) -> str | None:
     g = GAMES.get(game_key)
     if not g:
         return "بازی نامعتبر است"
+    s = await _get_settings()
+    if s.get(f"game_off:{game_key}") == "1":
+        return "این بازی فعلاً غیرفعال است"
     if not isinstance(bet, int) or bet <= 0:
         return "مبلغ شرط نامعتبر است"
     if bet < g["min_bet"]:
@@ -806,6 +820,12 @@ def _auth(handler):
         if user.get("_banned"):
             return _err("🚫 شما از ربات محروم شده‌اید", 403, "banned")
         try:
+            s = await _get_settings()
+            if s.get("section_off:casino") == "1":
+                return _err("🎰 کازینو فعلاً غیرفعال است", 403, "casino_off")
+        except Exception:
+            pass
+        try:
             return await handler(request, user)
         except Exception as e:
             logger.exception(f"❌ خطای مینی‌اپ در {request.path}: {e}")
@@ -1169,7 +1189,7 @@ async def api_me(request, user):
         "ok": True,
         "user": {"id": uid, "name": _uname(user), "balance": await _balance(uid),
                  "level": _calc_level(int(user.get("total_xp", 0) or 0))},
-        "games": [dict(key=k, **v) for k, v in GAMES.items()], "commission": COMMISSION_RATE,
+        "games": _games_for_client(await _get_settings()), "commission": COMMISSION_RATE,
         "match_timeout": MATCH_TIMEOUT, "turn_timeout": TURN_TIMEOUT, "max_bet": MAX_BET,
         "xp": {"min": XP_MIN, "max": XP_MAX, "divisor": XP_DIVISOR},
         "wheel_segments": casino.WHEEL_SEGMENTS, "queue": _queue_info(uid), "game_id": g.game_id if g else None,
@@ -1341,6 +1361,12 @@ async def _sweeper():
             for k, t in list(_ban_notified.items()):
                 if now - t > 600:
                     _ban_notified.pop(k, None)
+            try:
+                await _get_settings()
+                if _utils and hasattr(_utils, "build_main_menu_kb"):
+                    _utils.MAIN_MENU_KB = _utils.build_main_menu_kb()
+            except Exception:
+                pass
             if len(_user_locks) > 5000:
                 for uid, lk in list(_user_locks.items()):
                     if not lk.locked():
@@ -1598,6 +1624,8 @@ _pending_launch: dict = {}
 
 
 def casino_text() -> str:
+    if _settings_cache.get("casino_text"):
+        return _settings_cache["casino_text"]
     n1 = sum(1 for g in GAMES.values() if g["type"] == "1p")
     n2 = sum(1 for g in GAMES.values() if g["type"] == "2p")
     return ("🎰 <b>کازینو زر</b>\n━━━━━━━━━━━━━━━━━━\n"
@@ -1611,14 +1639,24 @@ def patch_bot_ui():
         from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M
 
         def build_main_menu_kb():
-            return M([
-                [B("🏦 بانک", callback_data="bank:menu"), B("🏠 ملک‌ها", callback_data="prop:menu")],
-                [B("👷 کارگرها", callback_data="worker:menu"), casino.miniapp_button("🎰 کازینو")],
-                [B("🎯 ماموریت‌ها", callback_data="mission:menu"), B("💸 انتقال", callback_data="transfer:start")],
-                [B("🎭 کاباره زر", callback_data="kabareh:menu"), B("🏆 لیدربورد", callback_data="lb:menu")],
-                [B("💀 بازار سیاه", callback_data="bm:menu:0"), B("💎 خرید کوین و لول", callback_data="shop:menu")],
-                [B("📚 راهنما", callback_data="help:menu")],
-            ])
+            s = _settings_cache
+
+            def on(key):
+                return s.get(f"section_off:{key}") != "1"
+
+            items = []
+            if on("bank"): items.append(B("🏦 بانک", callback_data="bank:menu"))
+            if on("property"): items.append(B("🏠 ملک‌ها", callback_data="prop:menu"))
+            if on("worker"): items.append(B("👷 کارگرها", callback_data="worker:menu"))
+            if on("casino"): items.append(casino.miniapp_button("🎰 کازینو"))
+            if on("missions"): items.append(B("🎯 ماموریت‌ها", callback_data="mission:menu"))
+            if on("transfer"): items.append(B("💸 انتقال", callback_data="transfer:start"))
+            if on("kabareh"): items.append(B("🎭 کاباره زر", callback_data="kabareh:menu"))
+            if on("leaderboard"): items.append(B("🏆 لیدربورد", callback_data="lb:menu"))
+            if on("blackmarket"): items.append(B("💀 بازار سیاه", callback_data="bm:menu:0"))
+            if on("shop"): items.append(B("💎 خرید کوین و لول", callback_data="shop:menu"))
+            if on("help"): items.append(B("📚 راهنما", callback_data="help:menu"))
+            return M([items[i:i + 2] for i in range(0, len(items), 2)])
 
         _utils.build_main_menu_kb = build_main_menu_kb
         _utils.MAIN_MENU_KB = build_main_menu_kb()
@@ -1686,6 +1724,10 @@ async def _h_gift(update, context):
         return
     if _utils:
         _utils.log_group_chat_id(update)
+    s = await _get_settings()
+    if s.get("section_off:gift") == "1":
+        await msg.reply_text("🎁 کد هدیه فعلاً غیرفعال است.")
+        raise _stop()
     m = re.match(r"^\s*هدیه\s*زر\s+(\S+)\s*$", msg.text)
     if not m:
         await msg.reply_text("🎁 برای استفاده از کد هدیه بنویس:\n<code>هدیه زر کد</code>", parse_mode="HTML")
@@ -1704,6 +1746,10 @@ async def _h_casino_text(update, context):
         _utils.log_group_chat_id(update)
         if not await _utils.verify_membership(update, context):
             raise _stop()
+    s = await _get_settings()
+    if s.get("section_off:casino") == "1":
+        await msg.reply_text("🎰 کازینو فعلاً غیرفعال است.")
+        raise _stop()
     await msg.reply_text(casino_text(), parse_mode="HTML", reply_markup=casino.miniapp_keyboard(back=False))
     raise _stop()
 
@@ -1880,6 +1926,7 @@ def setup_bot(app):
                               TypeHandler, filters)
     patch_bot_ui()
     app.add_handler(TypeHandler(Update, _h_bot_gate), group=-100)  # حالت خاموشی/بن → ربات جواب نمی‌دهد
+    app.add_handler(CallbackQueryHandler(_h_section_gate), group=-2)  # بخش خاموش → دکمه کار نمی‌کند
     app.add_handler(CallbackQueryHandler(_h_check_membership, pattern=r"^check_membership$"), group=-2)
     app.add_handler(CallbackQueryHandler(_h_lb_cb, pattern=r"^lb:"), group=-2)
     app.add_handler(CommandHandler("start", _h_start_shop, filters=filters.ChatType.PRIVATE), group=-2)
@@ -2048,6 +2095,7 @@ def _damage_report(d: dict) -> str:
 # ═══════════ راهنمای صفحه‌بندی‌شده ═══════════
 # ═══════════════════════════════════════════════
 def _help_pages() -> list:
+    s = _settings_cache
     c = config
     bm = _bm_items()
     one = [g for g in GAMES.values() if g["type"] == "1p"]
@@ -2113,7 +2161,11 @@ def _help_pages() -> list:
           " • به کاربران بن‌شده نمی‌توان حمله کرد یا پول انتقال داد\n"
           " • بمب‌ها قابل دفاع نیستند، فقط موشک و پهپاد\n"
           " • هر شلیک یک مهمات مصرف می‌کند")
-    return [p1, p2, p3, p4, p5]
+    pages = [p1, p2, p3, p4, p5]
+    for i in range(5):
+        if s.get(f"help_page:{i + 1}"):
+            pages[i] = s[f"help_page:{i + 1}"]
+    return pages
 
 
 def _not_owner(q) -> bool:
@@ -2159,15 +2211,47 @@ def _owner_ids() -> set:
     return _env_admin_ids() | _admins
 
 
+async def _get_settings(force: bool = False) -> dict:
+    """کش تنظیمات (۳۰ ثانیه) — برای منو، بازی‌ها، متن‌ها و رنگ‌ها"""
+    global _settings_cache, _settings_at, _settings_loaded
+    now = time.time()
+    if force or not _settings_loaded or now - _settings_at > 30:
+        try:
+            await _ensure_tables()
+            rows = await _fetch("SELECT k, v FROM zar_settings")
+            _settings_cache = {r["k"]: r["v"] for r in rows}
+            _settings_at = now
+            _settings_loaded = True
+        except Exception:
+            pass
+    return _settings_cache
+
+
 async def _get_setting(k: str, default: str = "") -> str:
-    await _ensure_tables()
-    r = await _fetch("SELECT v FROM zar_settings WHERE k=%s", (k,), one=True)
-    return (r["v"] if r else "") or default
+    s = await _get_settings()
+    return s.get(k) or default
 
 
 async def _set_setting(k: str, v: str):
     await _ensure_tables()
     await _exec("INSERT INTO zar_settings (k, v) VALUES (%s,%s) ON DUPLICATE KEY UPDATE v=VALUES(v)", (k, v))
+    _settings_cache[k] = v
+    _settings_at = time.time()
+
+
+def _games_for_client(s: dict) -> list:
+    """لیست بازی‌ها برای مینی‌اپ — با اعمال خاموشی و نام/توضیح سفارشی"""
+    out = []
+    for k, v in GAMES.items():
+        if s.get(f"game_off:{k}") == "1":
+            continue
+        g = dict(key=k, **v)
+        if s.get(f"game_name:{k}"):
+            g["name"] = s[f"game_name:{k}"]
+        if s.get(f"game_desc:{k}"):
+            g["desc"] = s[f"game_desc:{k}"]
+        out.append(g)
+    return out
 
 
 def _clean_rewards(raw) -> tuple:
@@ -2600,6 +2684,50 @@ async def admin_receipt(request, body):
 
 
 # ═══════════════════════════════════════════════
+# ═══════════ گیت بخش‌های ربات (خاموش/روشن از پنل) ═══════════
+# ═══════════════════════════════════════════════
+def _section_for_callback(data: str) -> str | None:
+    if data.startswith("bank:"):
+        return "bank"
+    if data.startswith("prop:"):
+        return "property"
+    if data.startswith("worker:"):
+        return "worker"
+    if data.startswith("mission:"):
+        return "missions"
+    if data.startswith("transfer:") or data.startswith("tr:"):
+        return "transfer"
+    if data.startswith("kabareh:"):
+        return "kabareh"
+    if data.startswith("lb:"):
+        return "leaderboard"
+    if data.startswith("bm:"):
+        return "blackmarket"
+    if data.startswith("shop:"):
+        return "shop"
+    if data.startswith("help:"):
+        return "help"
+    if data in ("game:menu", "game:casino") or data.startswith("casino:"):
+        return "casino"
+    return None
+
+
+async def _h_section_gate(update, context):
+    """اگر بخش مربوط به این دکمه خاموش باشد، جلوی ادامه را می‌گیرد"""
+    q = update.callback_query
+    sec = _section_for_callback(q.data or "")
+    if not sec:
+        return
+    s = await _get_settings()
+    if s.get(f"section_off:{sec}") == "1":
+        try:
+            await q.answer("🚫 این بخش فعلاً غیرفعال است", show_alert=True)
+        except Exception:
+            pass
+        raise _stop()
+
+
+# ═══════════════════════════════════════════════
 # ═══════════ بن کاربر ═══════════
 # ═══════════════════════════════════════════════
 _ban_notified: dict = {}
@@ -2732,6 +2860,50 @@ async def admin_admins_remove(request, body):
         return _err("این کاربر ادمین نیست")
     await _notify(uid, "ℹ️ دسترسی ادمین شما برداشته شد.")
     logger.warning(f"🛡 ادمین از پنل حذف شد: {uid}")
+    return _json({"ok": True})
+
+
+@_admin
+async def admin_settings_get(request, body):
+    """همه‌ی تنظیمات قابل ویرایش: بازی‌ها، بخش‌ها، متن‌ها و رنگ‌ها"""
+    await _ensure_tables()
+    s = await _get_settings(force=True)
+    games = [{"key": k, "name": s.get(f"game_name:{k}", v["name"]), "desc": s.get(f"game_desc:{k}", v["desc"]),
+              "emoji": v["emoji"], "type": v["type"], "off": s.get(f"game_off:{k}") == "1"}
+             for k, v in GAMES.items()]
+    sections = [{"key": k, "name": n, "off": s.get(f"section_off:{k}") == "1"} for k, n in SECTIONS]
+    texts = {"casino_text": s.get("casino_text", "")}
+    texts.update({f"help_page:{i}": s.get(f"help_page:{i}", "") for i in range(1, 6)})
+    theme = {k[6:]: v for k, v in s.items() if k.startswith("theme:") and v}
+    return _json({"ok": True, "games": games, "sections": sections, "texts": texts, "theme": theme,
+                  "defaults": {"casino_text": casino_text(), "help_pages": _help_pages()}})
+
+
+@_admin
+async def admin_settings_save(request, body):
+    """ذخیره‌ی تنظیمات — مقدار خالی یعنی بازگشت به پیش‌فرض"""
+    await _ensure_tables()
+    data = body.get("settings") or {}
+    if not isinstance(data, dict):
+        return _err("داده نامعتبر است")
+    prefixes = ("game_off:", "game_name:", "game_desc:", "section_off:", "help_page:", "casino_text", "theme:")
+    for k, v in data.items():
+        if not any(k.startswith(p) for p in prefixes):
+            continue
+        v = str(v or "")[:4000]
+        if k.startswith("theme:") and v and not re.fullmatch(r"#[0-9a-fA-F]{6}", v):
+            return _err(f"رنگ نامعتبر برای {k}")
+        if k.startswith("game_name:") and GAMES.get(k.split(":", 1)[1], {}).get("name") == v:
+            v = ""
+        if k.startswith("game_desc:") and GAMES.get(k.split(":", 1)[1], {}).get("desc") == v:
+            v = ""
+        if v == "":
+            await _exec("DELETE FROM zar_settings WHERE k=%s", (k,))
+            _settings_cache.pop(k, None)
+        else:
+            await _exec("INSERT INTO zar_settings (k, v) VALUES (%s,%s) ON DUPLICATE KEY UPDATE v=VALUES(v)", (k, v))
+            _settings_cache[k] = v
+    _settings_at = time.time()
     return _json({"ok": True})
 
 
@@ -3128,6 +3300,14 @@ async def handle_index(request):
         html = MINIAPP_HTML.read_text(encoding="utf-8")
     except FileNotFoundError:
         return web.Response(text="miniapp.html not found", status=500)
+    try:
+        s = await _get_settings()
+        theme = {k[6:]: v for k, v in s.items() if k.startswith("theme:") and re.fullmatch(r"#[0-9a-fA-F]{6}", v or "")}
+        if theme:
+            css = ":root{" + "".join(f"--{k}:{v};" for k, v in theme.items()) + "}"
+            html = html.replace("</head>", f"<style>{css}</style></head>", 1)
+    except Exception:
+        pass
     return web.Response(text=html, content_type="text/html", charset="utf-8", headers={"Cache-Control": "no-cache"})
 
 
@@ -3167,7 +3347,7 @@ def create_app() -> web.Application:
         "shop/reject": admin_shop_reject, "shop/settings": admin_shop_settings,
         "ban": admin_ban, "unban": admin_unban, "bot/toggle": admin_bot_toggle,
         "admins/list": admin_admins_list, "admins/add": admin_admins_add, "admins/remove": admin_admins_remove,
-        "vip/list": admin_vip_list,
+        "vip/list": admin_vip_list, "settings/get": admin_settings_get, "settings/save": admin_settings_save,
     }
     for p, h in admin_routes.items():
         app.router.add_post(f"/admin/api/{p}", h)
