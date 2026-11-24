@@ -1962,7 +1962,6 @@ def patch_bot_ui():
     if not getattr(getattr(db, "apply_damage", None), "_zar", False):
         _orig_apply_damage = getattr(db, "apply_damage", None)
         db.apply_damage = apply_damage_split
-        logger.warning("💥 سیستم تخریب حمله فعال شد: پول، دارایی‌ها و XP/لول هدف کم می‌شود (کاربران: برقراری موشک/پهپاد/بمب)")
     if hasattr(db, "transfer_coins") and not getattr(db.transfer_coins, "_zar", False):
         _orig_transfer = db.transfer_coins
         db.transfer_coins = _transfer_guarded
@@ -2346,21 +2345,6 @@ def setup_bot(app):
     app.add_handler(CallbackQueryHandler(_h_bank_cb, pattern=r"^bank:(menu|withdraw)$"), group=-2)
     app.add_handler(CallbackQueryHandler(_h_bm_guard, pattern=r"^bm:buy:"), group=-2)
     app.add_handler(CallbackQueryHandler(_h_bm_post, pattern=r"^bm:buy:"), group=1)
-
-    async def _on_error(update, context):
-        """هندلر خطای سراسری: هیچ خطایی بی‌سر و صدا نمی‌ماند و دکمه‌ها هرگز «مرده» به نظر نمی‌رسند"""
-        try:
-            logger.exception(f"❌ خطای رسیدگی‌نشده در ربات: {getattr(context, 'error', None)}")
-        except Exception:
-            pass
-        try:
-            if update and getattr(update, "callback_query", None):
-                await update.callback_query.answer("❌ خطایی رخ داد — دوباره تلاش کن", show_alert=True)
-        except Exception:
-            pass
-
-    if hasattr(app, "add_error_handler"):
-        app.add_error_handler(_on_error)
     cmds = _cmd_map()
     if cmds:
         rx = r"^(" + "|".join(re.escape(c) for c in cmds) + r")$"
@@ -2411,55 +2395,6 @@ _rng = random.SystemRandom()
 _last_damage: dict = {}
 _orig_apply_damage = None
 _bot_app = None
-_xp_cols_ok: bool | None = None
-
-
-async def _has_xp_cols() -> bool:
-    """آیا ستون‌های total_xp و level در جدول users وجود دارند؟ (یک‌بار بررسی و کش می‌شود)"""
-    global _xp_cols_ok
-    if _xp_cols_ok is not None:
-        return _xp_cols_ok
-    try:
-        rows = await _fetch("SELECT COLUMN_NAME FROM information_schema.COLUMNS "
-                            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME='users'")
-        cols = {(r or {}).get("COLUMN_NAME") for r in (rows or [])}
-        _xp_cols_ok = {"total_xp", "level"} <= cols
-    except Exception:
-        logger.exception("بررسی ستون‌های users ناموفق بود")
-        _xp_cols_ok = False
-    if not _xp_cols_ok:
-        logger.warning("⚠️ ستون‌های total_xp/level در جدول users پیدا نشد — پول و دارایی‌ها کم می‌شوند ولی XP کم نمی‌شود")
-    return _xp_cols_ok
-
-
-async def _xp_only_deduct(target_id: int, pct: float) -> dict | None:
-    """کسر XP و به‌روزرسانی لول — کاملاً جدا از بقیهٔ خسارت تا هیچ خطایی آن را خراب نکند"""
-    if pct <= 0:
-        return None
-    if not await _has_xp_cols():
-        logger.warning(f"⚠️ کسر XP برای {target_id} انجام نشد — ستون total_xp/level در جدول users نیست")
-        return None
-
-    async def run(cur):
-        await cur.execute("SELECT total_xp FROM users WHERE user_id=%s FOR UPDATE", (target_id,))
-        r = await cur.fetchone()
-        if not r:
-            return None
-        cur_xp = max(0, int(r["total_xp"] or 0))
-        old_lvl = _calc_level(cur_xp)
-        xp_lost = int(cur_xp * pct)
-        new_xp = max(0, cur_xp - xp_lost)
-        new_lvl = _calc_level(new_xp)
-        await cur.execute("UPDATE users SET total_xp=%s, level=%s WHERE user_id=%s", (new_xp, new_lvl, target_id))
-        return {"xp_lost": xp_lost, "old_lvl": old_lvl, "new_lvl": new_lvl}
-
-    try:
-        res = await _tx(run)
-        _invalidate(target_id)
-        return res
-    except Exception:
-        logger.exception(f"⚠️ کسر XP برای کاربر {target_id} ناموفق")
-        return None
 
 
 def _esc(s) -> str:
@@ -2473,22 +2408,26 @@ async def apply_damage_split(target_id, damage_percent, *args, **kwargs) -> int:
     و با درصد کمتر از ۱۰۰ هیچ‌وقت همه‌ی دارایی‌ها یک‌جا صفر نمی‌شود.
     خروجی: ارزش کل خسارت (برای پیام bot.py)
     """
-    xp_ok = await _has_xp_cols()
+    try:
+        pct = max(0.0, min(float(damage_percent), 1.0))
+        target_id = int(target_id)
+    except (TypeError, ValueError):
+        return 0
+    if pct <= 0 or target_id in _banned:
+        return 0
 
     async def run(cur):
-        if xp_ok:
-            await cur.execute("SELECT balance, bank_balance, total_xp, level FROM users WHERE user_id=%s FOR UPDATE", (target_id,))
-        else:
-            await cur.execute("SELECT balance, bank_balance FROM users WHERE user_id=%s FOR UPDATE", (target_id,))
+        await cur.execute("SELECT balance, bank_balance, total_xp, level FROM users WHERE user_id=%s FOR UPDATE",
+                          (target_id,))
         u = await cur.fetchone()
         if not u:
             return None
         bal, bank = max(0, int(u["balance"] or 0)), max(0, int(u["bank_balance"] or 0))
-        cur_xp = max(0, int(u.get("total_xp") or 0)) if xp_ok else 0
-        old_lvl = _calc_level(cur_xp) if xp_ok else 1
-        xp_lost = int(cur_xp * pct) if xp_ok else 0
+        cur_xp = max(0, int(u.get("total_xp") or 0))
+        old_lvl = _calc_level(cur_xp)
+        xp_lost = int(cur_xp * pct)
         new_xp = max(0, cur_xp - xp_lost)
-        new_lvl = _calc_level(new_xp) if xp_ok else 1
+        new_lvl = _calc_level(new_xp)
         await cur.execute("SELECT id, asset_type, asset_key, purchase_price FROM assets WHERE user_id=%s FOR UPDATE",
                           (target_id,))
         assets = list(await cur.fetchall())
@@ -2508,15 +2447,10 @@ async def apply_damage_split(target_id, damage_percent, *args, **kwargs) -> int:
         from_bal = min(bal, money_part)
         from_bank = min(bank, money_part - from_bal)
         money_part = from_bal + from_bank
-        set_parts = ["balance = balance - %s", "bank_balance = bank_balance - %s"]
-        set_args = [from_bal, from_bank]
-        if xp_ok:
-            set_parts.append("total_xp = %s")
-            set_args.append(new_xp)
-            set_parts.append("level = %s")
-            set_args.append(new_lvl)
-        set_args.append(target_id)
-        await cur.execute("UPDATE users SET " + ", ".join(set_parts) + " WHERE user_id=%s", tuple(set_args))
+        await cur.execute(
+            "UPDATE users SET balance = balance - %s, bank_balance = bank_balance - %s, "
+            "total_xp = %s, level = %s WHERE user_id=%s",
+            (from_bal, from_bank, new_xp, new_lvl, target_id))
         if removed:
             ids = [int(a["id"]) for a in removed]
             await cur.execute(f"DELETE FROM assets WHERE id IN ({','.join(['%s'] * len(ids))})", ids)
@@ -2528,30 +2462,13 @@ async def apply_damage_split(target_id, damage_percent, *args, **kwargs) -> int:
     try:
         res = await _tx(run)
     except Exception:
-        logger.exception("apply_damage_split error — تلاش برای مسیرهای جایگزین")
-        total = 0
+        logger.exception("apply_damage_split error — استفاده از نسخه قدیمی")
         if _orig_apply_damage:
-            try:
-                total = int(await _orig_apply_damage(target_id, damage_percent, *args, **kwargs) or 0)
-            except Exception:
-                logger.exception("مسیر پولی نسخه قدیمی هم ناموفق بود")
-        # XP را مستقل کم کن (حتی اگر مسیر پولی شکست خورده باشد)
-        xpres = await _xp_only_deduct(target_id, pct)
-        if xpres:
-            res = {"money": 0, "assets": [], "asset_value": 0, "total": total, **xpres}
-            res["t"] = time.time()
-            _last_damage[target_id] = res
-        _invalidate(target_id)
-        return total
+            return await _orig_apply_damage(target_id, damage_percent, *args, **kwargs)
+        return 0
     _invalidate(target_id)
     if not res:
-        if pct > 0 and xp_ok:  # چیزی برای کسر مالی نبود؛ فقط XP را جداگانه کم کن
-            xpres = await _xp_only_deduct(target_id, pct)
-            if xpres and xpres.get("xp_lost", 0) > 0:
-                d = {"money": 0, "assets": [], "asset_value": 0, "total": 0, **xpres, "t": time.time()}
-                _last_damage[target_id] = d
         return 0
-    logger.info(f"💥 حمله به {target_id}: پول={res['money']} | XP−{res.get('xp_lost', 0)} (لول {res.get('old_lvl', 1)}→{res.get('new_lvl', 1)}) | دارایی={len(res['assets'])}")
     res["t"] = time.time()
     _last_damage[target_id] = res
     return res["total"]
@@ -3196,54 +3113,37 @@ def _detect_section(update) -> str | None:
 
 async def _h_bot_gate(update, context):
     """اولین هندلر: حالت خاموشی کل بات، خاموشی بخش‌ها و کاربران بن‌شده"""
-    try:
-        u = update.effective_user
-        if not u:
-            return
-        try:
-            is_adm = u.id in _owner_ids()
-        except Exception:
-            is_adm = True   # اگر لیست ادمین‌ها خراب شد، کاربران نباید قفل شوند
-        if _bot_off and not is_adm:
-            off_msg = _ctrl_text("bot_off_msg", "")
-            if off_msg:
-                try:
-                    if update.callback_query:
-                        await update.callback_query.answer(off_msg[:190], show_alert=True)
-                    elif update.effective_chat and update.effective_chat.type == "private" and update.effective_message:
-                        await update.effective_message.reply_text(off_msg)
-                except Exception:
-                    pass
-            raise _stop()
-        if u.id not in _banned:
-            if not is_adm and _controls.get("disabled_sections"):
-                try:
-                    sec = _detect_section(update)
-                except Exception:
-                    sec = None
-                if sec and sec in _controls["disabled_sections"]:
-                    msg_txt = _ctrl_text("section_off", "⛔ این بخش موقتاً توسط مدیریت غیرفعال شده است.")
-                    try:
-                        if update.callback_query:
-                            await update.callback_query.answer(msg_txt[:190], show_alert=True)
-                        elif update.effective_message:
-                            await update.effective_message.reply_text(msg_txt)
-                    except Exception:
-                        pass
-                    raise _stop()
-        else:
+    u = update.effective_user
+    if not u:
+        return
+    is_adm = u.id in _owner_ids()
+    if _bot_off and not is_adm:
+        off_msg = _ctrl_text("bot_off_msg", "")
+        if off_msg:
             try:
                 if update.callback_query:
-                    await update.callback_query.answer("🚫 شما از ربات محروم شده‌اید.", show_alert=True)
+                    await update.callback_query.answer(off_msg[:190], show_alert=True)
                 elif update.effective_chat and update.effective_chat.type == "private" and update.effective_message:
-                    await update.effective_message.reply_text("🚫 شما از ربات محروم شده‌اید.")
+                    await update.effective_message.reply_text(off_msg)
             except Exception:
                 pass
-            raise _stop()
-    except Exception:
-        # هیچ خطایی در گیت نباید ربات را از کار بیندازد
-        logger.exception("bot_gate error — ادامه بدون اعمال گیت")
-    return
+        raise _stop()
+    if u.id in _banned:
+        pass
+    else:
+        if not is_adm and _controls.get("disabled_sections"):
+            sec = _detect_section(update)
+            if sec and _section_disabled(sec):
+                msg_txt = _ctrl_text("section_off", "⛔ این بخش موقتاً توسط مدیریت غیرفعال شده است.")
+                try:
+                    if update.callback_query:
+                        await update.callback_query.answer(msg_txt[:190], show_alert=True)
+                    elif update.effective_message:
+                        await update.effective_message.reply_text(msg_txt)
+                except Exception:
+                    pass
+                raise _stop()
+        return
     try:
         if update.pre_checkout_query:
             await update.pre_checkout_query.answer(ok=False, error_message="🚫 شما از ربات محروم شده‌اید")
@@ -3573,76 +3473,33 @@ async def admin_unban(request, body):
 
 
 # ═══════════ جوین اجباری (رفع باگ مالکیت پیام) ═══════════
-_mem_cache: dict = {}          # user_id -> (is_joined, missing[], ts, ttl)
-_MEM_TTL_OK = 900              # نتیجه‌ی مثبت: ۱۵ دقیقه
-_MEM_TTL_NO = 45               # نتیجه‌ی منفی: ۴۵ ثانیه (جلوگیری از هجوم بی‌پایان به API تلگرام)
-_MEM_TIMEOUT = 6               # هرگز بیش از ۶ ثانیه روی چک عضویت منتظر نمان
-
-
-async def _cached_membership(bot, user_id: int):
-    now = time.time()
-    hit = _mem_cache.get(int(user_id))
-    if hit and now < hit[2] + hit[3]:
-        return hit[0], hit[1]
-    if not _utils:
-        return True, []
-    try:
-        res = await asyncio.wait_for(_utils.check_membership_quiet(bot, user_id), timeout=_MEM_TIMEOUT)
-        is_joined, missing = res
-    except asyncio.TimeoutError:
-        logger.warning(f"⚠️ چک عضویت {user_id} تایم‌اوت خورد — فرض می‌کنیم عضو است")
-        _mem_cache[int(user_id)] = (True, [], now, 60)
-        return True, []
-    except Exception:
-        logger.exception(f"⚠️ چک عضویت {user_id} خطا داد — fail-open")
-        _mem_cache[int(user_id)] = (True, [], now, 60)
-        return True, []
-    _mem_cache[int(user_id)] = (is_joined, list(missing or []), now,
-                                _MEM_TTL_OK if is_joined else _MEM_TTL_NO)
-    if len(_mem_cache) > 8000:
-        cutoff = now - _MEM_TTL_OK - 5
-        for uid, v in list(_mem_cache.items()):
-            if v[2] < cutoff:
-                _mem_cache.pop(uid, None)
-    return is_joined, missing
-
-
 async def verify_membership_owned(update, context) -> bool:
-    """مثل utils.verify_membership ولی با کش مثبت/منفی، تایم‌اوت و fail-open — هرگز ربات را قفل نمی‌کند"""
+    """مثل utils.verify_membership ولی پیام جوین به نام همان کاربر ثبت می‌شود و نتیجه مثبت کش می‌شود"""
     user = update.effective_user
     if not user:
         return False
-    try:
-        is_joined, missing = await _cached_membership(context.bot, user.id)
-    except Exception:
-        logger.exception("verify_membership fail-open")
-        return True   # خطای ناشناخته هرگز نباید ربات را قطع کند
+    is_joined, missing = await _utils.check_membership_quiet(context.bot, user.id)
     if is_joined:
-        return True
-    if not _utils:
         return True
     text, kb = _utils.get_join_text(missing), _utils.get_join_keyboard()
     q = update.callback_query
     m = None
-    try:
-        if q:
-            await _utils.safe_answer(q, "❌ هنوز عضو نشدی!", show_alert=True)
-            if not _not_owner(q):
-                m = await _utils.safe_edit(q, text, kb)
-            if m is None:
-                try:
-                    m = await q.from_user.send_message(text, parse_mode="HTML", reply_markup=kb)
-                except Exception:
-                    m = None
-        elif update.effective_message:
-            m = await update.effective_message.reply_text(text, parse_mode="HTML", reply_markup=kb)
-    except Exception as e:
-        logger.warning(f"ارسال پیام جوین ناموفق: {e}")
-    if m:
+    if q:
+        await _utils.safe_answer(q, "❌ هنوز عضو نشدی!", show_alert=True)
+        if not _not_owner(q):
+            m = await _utils.safe_edit(q, text, kb)
+        if m is None:
+            try:
+                m = await q.from_user.send_message(text, parse_mode="HTML", reply_markup=kb)
+            except Exception:
+                m = None
+    elif update.effective_message:
         try:
-            _utils.remember_owner(m, user.id)
-        except Exception:
-            pass
+            m = await update.effective_message.reply_text(text, parse_mode="HTML", reply_markup=kb)
+        except Exception as e:
+            logger.warning(f"ارسال پیام جوین ناموفق: {e}")
+    if m:
+        _utils.remember_owner(m, user.id)
     return False
 
 
