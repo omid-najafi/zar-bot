@@ -11,7 +11,7 @@
 :root{
   --bg:#07070c;--bg2:#0e0e17;--panel:rgba(255,255,255,.045);--panel2:rgba(255,255,255,.08);
   --line:rgba(255,255,255,.08);--text:#f4f4f7;--muted:#9a9ab0;--gold:#f5c451;--gold2:#d99a1e;
-  --red:#e11d48;--red2:#9f1239;--green:#10b981;--blue:#38bdf8;--radius:18px;
+  --red:#e11d48;--red2:#9f1239;--green:#10b981;--green2:#047857;--blue:#38bdf8;--radius:18px;
   --safe-b:env(safe-area-inset-bottom,0px);
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -88,7 +88,7 @@ input{font-family:inherit}
 .btn:active{transform:scale(.98)}
 .btn-gold{background:linear-gradient(135deg,#ffd978,var(--gold2));color:#1d1200;box-shadow:0 10px 26px -8px rgba(245,196,81,.7)}
 .btn-red{background:linear-gradient(135deg,#fb3b65,var(--red2));color:#fff;box-shadow:0 10px 26px -8px rgba(225,29,72,.7)}
-.btn-green{background:linear-gradient(135deg,#34d399,#047857);color:#02140d;box-shadow:0 10px 26px -8px rgba(16,185,129,.7)}
+.btn-green{background:linear-gradient(135deg,var(--green),var(--green2));color:#02140d;box-shadow:0 10px 26px -8px rgba(16,185,129,.7)}
 .btn-ghost{background:var(--panel2);border:1px solid var(--line);color:var(--text)}
 .row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .row3{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
@@ -495,27 +495,7 @@ async function showAuthError() {
     برای ورود، یک <b>لینک شخصی</b> از ربات بگیر و روی آن بزن:</p>${btn}
     <p class="hint" style="margin-top:12px">یا مینی‌اپ را از دکمه‌ی «🎰 کازینو» داخل ربات باز کن.</p></div>`;
 }
-function showLanding() {
-  hideSplash();
-  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
-  $('#screen-home').classList.add('active');
-  $('#screen-home').innerHTML = `<div class="hero" style="text-align:center">
-      <h1>🎲 قمارخانه زر</h1><p>برای ورود یکی از گزینه‌ها را انتخاب کن:</p></div>
-    <button class="btn btn-gold" id="ld-casino" style="margin-bottom:10px">🎲 ورود به کازینو</button>
-    <button class="btn btn-ghost" id="ld-admin">🛠 پنل مدیریت</button>
-    <div id="ld-box"></div>`;
-  $('#ld-admin').onclick = () => { location.href = '/admin'; };
-  $('#ld-casino').onclick = async () => {
-    const box = $('#ld-box');
-    box.innerHTML = '<p class="hint" style="text-align:center;margin-top:14px">⏳ در حال بررسی...</p>';
-    const btn = await botLinkBtn();
-    box.innerHTML = `<div class="panel" style="margin-top:14px;text-align:center">
-      <p style="line-height:2;margin:0 0 12px">برای ورود به کازینو، یک <b>لینک شخصی</b> از ربات بگیر:<br>
-      <span class="muted">۱) روی دکمه بزن ۲) ربات لینک را می‌فرستد ۳) روی لینک بزن</span></p>
-      ${btn || '<p class="hint">نام کاربری ربات تنظیم نشده است.</p>'}
-      <p class="hint" style="margin-top:10px">یا مینی‌اپ را از دکمه‌ی «🎰 کازینو» داخل تلگرام باز کن.</p></div>`;
-  };
-}
+
 function hideSplash() { const s = $('#splash'); if (s) { s.classList.add('out'); setTimeout(() => s.remove(), 450); } }
 function cardHtml(c, cls, attrs) {
   cls = cls || ''; attrs = attrs || '';
@@ -1257,8 +1237,8 @@ async function boot() {
     try { tg.disableVerticalSwipes && tg.disableVerticalSwipes(); } catch (e) {}
     try { tg.BackButton.onClick(handleBack); } catch (e) {}
   }
-  // بدون احراز هویت: داخل تلگرام (پروکسی/کلاینت دیگر) → صفحه‌ی لینک ورود | مرورگر معمولی → صفحه‌ی انتخاب
-  if (!AUTH.initData && !AUTH.token) { tg ? showAuthError() : showLanding(); return; }
+  // بدون احراز هویت: داخل تلگرام (پروکسی/کلاینت دیگر) → صفحه‌ی لینک ورود | با لینک (مرورگر) → رمز پنل مدیریت
+  if (!AUTH.initData && !AUTH.token) { tg ? showAuthError() : location.replace('/admin'); return; }
   try {
     const d = await api('me');
     applyMe(d); S.me.commission = d.commission;
