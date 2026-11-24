@@ -105,7 +105,6 @@ a{color:var(--gold)}
     <button class="tab" data-t="orders">🧾 سفارش‌ها <span class="badge hidden" id="ord-badge"></span></button>
     <button class="tab" data-t="ctrl">🎛 کنترل و متن‌ها</button>
     <button class="tab" data-t="design">🎨 دیزاین</button>
-    <button class="tab" data-t="items">➕ آیتم جدید</button>
     <button class="tab" data-t="admins">🛡 ادمین‌ها</button>
   </div>
 
@@ -266,58 +265,12 @@ a{color:var(--gold)}
       </div>
       <p class="muted" style="margin-top:10px">تغییرات بلافاصله روی همه‌ی دکمه‌های مینی‌اپ و پنل مدیریت اعمال می‌شود.</p>
     </div>
-  </section>
 
-  <!-- افزودن آیتم جدید: ملک، کارگر، بازار سیاه -->
-  <section id="t-items" class="hidden">
     <div class="card">
-      <h3>➕ افزودن آیتم جدید</h3>
-      <div class="form">
-        <label>نوع آیتم
-          <select id="it-kind" onchange="syncItemForm()">
-            <option value="property">🏠 ملک جدید</option>
-            <option value="worker">👷 کارگر جدید</option>
-            <option value="bm_item">💀 آیتم بازار سیاه</option>
-          </select>
-        </label>
-        <label>کلید انگلیسی (key)<input id="it-key" placeholder="مثلاً: villa_2" style="direction:ltr;text-align:left"></label>
-        <label>نام نمایشی<input id="it-name" placeholder="مثلاً: ویلای لوکس"></label>
-        <label>ایموجی<input id="it-emoji" placeholder="🏠" style="text-align:center"></label>
-        <label>قیمت (زرکوین)<input id="it-price" inputmode="numeric" placeholder="مثلاً 5000000"></label>
-        <label id="it-income-wrap">درآمد روزانه (زرکوین)<input id="it-income" inputmode="numeric" placeholder="مثلاً 1750000"></label>
-      </div>
-
-      <div id="it-bm-fields" class="hidden">
-        <div class="form" style="margin-top:10px">
-          <label>نوع آیتم بازار سیاه
-            <select id="it-type" onchange="syncBmForm()">
-              <option value="projectile">💥 مهمات (قابل شلیک)</option>
-              <option value="launcher">🚀 وسیله شلیک (لانچر)</option>
-              <option value="defense">🛡️ سیستم دفاعی</option>
-            </select>
-          </label>
-          <label id="it-dmg-wrap">درصد تخریب (٪)<input id="it-dmg" inputmode="numeric" placeholder="مثلاً 25"></label>
-          <label id="it-cmd-wrap">دستور شلیک (متن پیام)<input id="it-cmd" placeholder="مثلاً: شلیک موشک جدید"></label>
-          <label id="it-dtype-wrap">قابل دفاع در برابر
-            <select id="it-dtype"><option value="">بمب (قابل دفاع نیست)</option><option value="missile_defense">موشک (پدافند موشکی)</option><option value="drone_defense">پهپاد (ضدپهپاد)</option></select>
-          </label>
-          <label id="it-chance-wrap" class="hidden">درصد دفاع (٪)<input id="it-chance" inputmode="numeric" placeholder="مثلاً 35"></label>
-          <label id="it-against-wrap" class="hidden">دفاع در برابر
-            <select id="it-against"><option value="missile_defense">موشک</option><option value="drone_defense">پهپاد</option></select>
-          </label>
-        </div>
-        <div id="it-launch-wrap" class="hidden" style="margin-top:10px">
-          <label class="muted">این وسیله می‌تواند کدام مهمات را شلیک کند؟ (تیک بزن)</label>
-          <div class="tgrid" id="it-launches" style="margin-top:6px"></div>
-        </div>
-      </div>
-
-      <button class="btn gold" style="margin-top:14px;width:100%" onclick="addItem()">➕ افزودن آیتم</button>
-      <p class="muted" style="margin-top:10px">آیتم بلافاصله در ربات (منوی ملک‌ها/کارگرها/بازار سیاه) و مینی‌اپ فعال می‌شود. کلید باید یکتا و انگلیسی باشد.</p>
+      <h3>🔘 رنگ دکمه‌های منوی اصلی بات</h3>
+      <p class="muted" style="line-height:2">تلگرام رنگ واقعی برای دکمه‌های منوی اصلی ندارد؛ رنگ با یک ایموجی دایره رنگی قبل از متن دکمه نمایش داده می‌شود. برای هر دکمه یک رنگ انتخاب کن و «ذخیره و اعمال دیزاین» را بزن.</p>
+      <div class="cgrid" id="menu-colors-grid"></div>
     </div>
-    <div class="card"><h3>🏠 ملک‌های افزوده‌شده</h3><div style="overflow-x:auto"><table><thead><tr><th>آیتم</th><th>کلید</th><th>قیمت</th><th>درآمد روزانه</th><th></th></tr></thead><tbody id="it-props"></tbody></table></div></div>
-    <div class="card"><h3>👷 کارگرهای افزوده‌شده</h3><div style="overflow-x:auto"><table><thead><tr><th>آیتم</th><th>کلید</th><th>قیمت</th><th>درآمد روزانه</th><th></th></tr></thead><tbody id="it-works"></tbody></table></div></div>
-    <div class="card"><h3>💀 آیتم‌های بازار سیاه افزوده‌شده</h3><div style="overflow-x:auto"><table><thead><tr><th>آیتم</th><th>کلید</th><th>نوع</th><th>قیمت</th><th>جزئیات</th><th></th></tr></thead><tbody id="it-bms"></tbody></table></div></div>
   </section>
 
   <!-- ادمین‌ها -->
@@ -390,8 +343,8 @@ async function api(path, body) {
 }
 document.querySelectorAll('.tab').forEach(b => b.onclick = () => {
   document.querySelectorAll('.tab').forEach(x => x.classList.toggle('on', x === b));
-  ['users', 'vip', 'gifts', 'shop', 'orders', 'ctrl', 'design', 'items', 'admins'].forEach(t => $('#t-' + t).classList.toggle('hidden', b.dataset.t !== t));
-  ({ vip: loadVips, gifts: loadGifts, shop: loadProducts, orders: loadOrders, ctrl: loadControls, design: loadDesign, items: loadItems, admins: loadAdmins }[b.dataset.t] || (() => {}))();
+  ['users', 'vip', 'gifts', 'shop', 'orders', 'ctrl', 'design', 'admins'].forEach(t => $('#t-' + t).classList.toggle('hidden', b.dataset.t !== t));
+  ({ vip: loadVips, gifts: loadGifts, shop: loadProducts, orders: loadOrders, ctrl: loadControls, design: loadDesign, admins: loadAdmins }[b.dataset.t] || (() => {}))();
 });
 
 /* ── سازنده جایزه (مشترک کد هدیه و محصول) ── */
@@ -684,6 +637,18 @@ const PRESETS = {
   sunset:  { btn_primary: '#ea580c', btn_gold: '#facc15', btn_green: '#22c55e', btn_blue: '#fb7185', btn_gold_text: '#240f02', bg_color: '#0f0805' },
 };
 let CUR_DESIGN = Object.assign({}, PRESETS.classic);
+const MENU_COLORS = [['', 'بدون رنگ'], ['🔴', '🔴 قرمز'], ['🟠', '🟠 نارنجی'], ['🟡', '🟡 زرد'], ['🟢', '🟢 سبز'], ['🔵', '🔵 آبی'], ['🟣', '🟣 بنفش'], ['🟤', '🟤 قهوه‌ای'], ['⚫', '⚫ مشکی'], ['⚪', '⚪ سفید']];
+let CUR_MENU_COLORS = {};
+let MENU_BTNS = [];
+function renderMenuColorsGrid() {
+  $('#menu-colors-grid').innerHTML = MENU_BTNS.map(b => `<div class="cbox">
+    <span style="font-size:22px;flex:none" id="mc-prev-${b.key}">${CUR_MENU_COLORS[b.key] || '⬜'}</span>
+    <div style="flex:1;min-width:0"><div style="font-size:12.5px;font-weight:700">${esc(b.label)}</div>
+    <select id="mc-${b.key}" onchange="onMenuColor('${b.key}',this.value)" style="width:100%;margin-top:4px">
+      ${MENU_COLORS.map(([v, l]) => `<option value="${v}" ${(CUR_MENU_COLORS[b.key] || '') === v ? 'selected' : ''}>${l}</option>`).join('')}
+    </select></div></div>`).join('');
+}
+function onMenuColor(k, v) { CUR_MENU_COLORS[k] = v; const p = $('#mc-prev-' + k); if (p) p.textContent = v || '⬜'; }
 function renderDesignGrid() {
   $('#design-grid').innerHTML = DESIGN_FIELDS.map(([k, lbl]) => `<div class="cbox">
     <input type="color" id="dc-${k}" value="${CUR_DESIGN[k]}" oninput="onPickColor('${k}',this.value)">
@@ -696,92 +661,24 @@ function onPickColor(k, v) { CUR_DESIGN[k] = v; const t = $('#dt-' + k); if (t) 
 function onHexColor(k, v) { if (/^#[0-9a-fA-F]{6}$/.test(v.trim())) { CUR_DESIGN[k] = v.trim(); const c = $('#dc-' + k); if (c) c.value = v.trim(); applyAdminDesign(CUR_DESIGN); $('#design-preview').style.background = CUR_DESIGN.bg_color; } }
 function applyPreset(name) { if (!PRESETS[name]) return; CUR_DESIGN = Object.assign({}, PRESETS[name]); renderDesignGrid(); }
 async function loadDesign() {
-  try { const d = await api('design/get'); CUR_DESIGN = Object.assign({}, PRESETS.classic, d.design || {}); renderDesignGrid(); }
-  catch (e) { if (e.message !== 'auth') toast(e.message, 'err'); }
+  try {
+    const d = await api('design/get');
+    CUR_DESIGN = Object.assign({}, PRESETS.classic, d.design || {});
+    renderDesignGrid();
+    CUR_MENU_COLORS = Object.assign({}, d.menu_colors || {});
+    MENU_BTNS = d.menu_buttons || [];
+    renderMenuColorsGrid();
+  } catch (e) { if (e.message !== 'auth') toast(e.message, 'err'); }
 }
 async function saveDesign(reset) {
   try {
-    const d = await api('design/save', reset ? { reset: true } : { design: CUR_DESIGN });
-    CUR_DESIGN = Object.assign({}, d.design); renderDesignGrid();
-    toast(reset ? '↩️ دیزاین به پیش‌فرض برگشت' : '🎨 دیزاین ذخیره و اعمال شد', 'ok');
+    const d = await api('design/save', reset ? { reset: true } : { design: CUR_DESIGN, menu_colors: CUR_MENU_COLORS });
+    CUR_DESIGN = Object.assign({}, d.design);
+    CUR_MENU_COLORS = Object.assign({}, d.menu_colors || {});
+    renderDesignGrid();
+    renderMenuColorsGrid();
+    toast(reset ? '↩️ دیزاین و رنگ دکمه‌ها به پیش‌فرض برگشت' : '🎨 دیزاین و رنگ دکمه‌های منوی اصلی ذخیره و اعمال شد', 'ok');
   } catch (e) { toast(e.message, 'err'); }
-}
-
-/* ── افزودن آیتم جدید: ملک، کارگر، بازار سیاه ── */
-const BM_TYPE_FA = { launcher: '🚀 لانچر', projectile: '💥 مهمات', defense: '🛡️ دفاعی' };
-function syncItemForm() {
-  const kind = $('#it-kind').value;
-  const isBm = kind === 'bm_item';
-  $('#it-income-wrap').style.display = isBm ? 'none' : '';
-  $('#it-bm-fields').classList.toggle('hidden', !isBm);
-  if (isBm) syncBmForm();
-}
-function syncBmForm() {
-  const t = $('#it-type').value;
-  $('#it-dmg-wrap').style.display = t === 'projectile' ? '' : 'none';
-  $('#it-cmd-wrap').style.display = t === 'projectile' ? '' : 'none';
-  $('#it-dtype-wrap').style.display = t === 'projectile' ? '' : 'none';
-  $('#it-chance-wrap').classList.toggle('hidden', t !== 'defense');
-  $('#it-against-wrap').classList.toggle('hidden', t !== 'defense');
-  $('#it-launch-wrap').classList.toggle('hidden', t !== 'launcher');
-}
-function fillLaunchOptions() {
-  const box = $('#it-launches');
-  if (!box || !CAT) return;
-  const projs = (CAT.items || []).filter(i => i.type === 'projectile');
-  box.innerHTML = projs.length ? projs.map(i => `<label class="titem"><span>${i.emoji} ${esc(i.name)}</span>
-    <input type="checkbox" data-launch="${i.key}"></label>`).join('') : '<span class="muted">هنوز مهماتی در config نیست</span>';
-}
-async function loadItems() {
-  try {
-    const d = await api('items/list');
-    const row = (kind, it, extra) => `<tr><td>${it.emoji} <b>${esc(it.name)}</b></td><td><code>${esc(it.key)}</code></td>${extra}
-      <td><button class="btn red sm" onclick="deleteItem('${kind}','${esc(it.key)}')">🗑 حذف</button></td></tr>`;
-    $('#it-props').innerHTML = d.properties.length ? d.properties.map(it => row('property', it,
-      `<td>${fmt(it.price)}</td><td>${fmt(it.income)}</td>`)).join('') : '<tr><td colspan="5" class="muted">ملک جدیدی اضافه نشده</td></tr>';
-    $('#it-works').innerHTML = d.workers.length ? d.workers.map(it => row('worker', it,
-      `<td>${fmt(it.price)}</td><td>${fmt(it.income)}</td>`)).join('') : '<tr><td colspan="5" class="muted">کارگر جدیدی اضافه نشده</td></tr>';
-    $('#it-bms').innerHTML = d.bm_items.length ? d.bm_items.map(it => {
-      const dt = it.data || {};
-      let det = '';
-      if (it.type === 'projectile') det = `💥 ${fmt(Math.round((dt.damage || 0) * 100))}٪ تخریب · <code>${esc(dt.command || '')}</code>`;
-      else if (it.type === 'launcher') det = `🚀 شلیک: ${(dt.launches || []).join('، ')}`;
-      else det = `🛡️ ${fmt(Math.round((dt.defense_chance || 0) * 100))}٪ دفاع`;
-      return row('bm_item', it, `<td>${BM_TYPE_FA[it.type] || it.type}</td><td>${fmt(it.price)}</td><td style="font-size:12px">${det}</td>`);
-    }).join('') : '<tr><td colspan="6" class="muted">آیتم بازار سیاه جدیدی اضافه نشده</td></tr>';
-    fillLaunchOptions();
-  } catch (e) { if (e.message !== 'auth') toast(e.message, 'err'); }
-}
-async function addItem() {
-  const kind = $('#it-kind').value;
-  const body = { kind, key: $('#it-key').value.trim().toLowerCase(), name: $('#it-name').value.trim(),
-    emoji: $('#it-emoji').value.trim() || '•', price: num($('#it-price').value) };
-  if (kind !== 'bm_item') {
-    body.income = num($('#it-income').value);
-  } else {
-    body.item_type = $('#it-type').value;
-    if (body.item_type === 'projectile') {
-      body.damage = num($('#it-dmg').value);
-      body.command = $('#it-cmd').value.trim();
-      body.defense_type = $('#it-dtype').value;
-    } else if (body.item_type === 'defense') {
-      body.defense_chance = num($('#it-chance').value);
-      body.defends_against = $('#it-against').value;
-    } else {
-      body.launches = [...document.querySelectorAll('[data-launch]:checked')].map(i => i.dataset.launch);
-    }
-  }
-  try {
-    await api('items/add', body);
-    toast('➕ آیتم جدید اضافه شد و در ربات فعال است', 'ok');
-    ['#it-key', '#it-name', '#it-emoji', '#it-price', '#it-income', '#it-dmg', '#it-cmd', '#it-chance'].forEach(s => { const el = $(s); if (el) el.value = ''; });
-    loadItems();
-  } catch (e) { toast(e.message, 'err'); }
-}
-async function deleteItem(kind, key) {
-  if (!confirm('آیتم «' + key + '» حذف شود؟ (کاربرانی که آن را دارند، آن را نگه می‌دارند)')) return;
-  try { await api('items/delete', { kind, key }); toast('🗑 آیتم حذف شد', 'ok'); loadItems(); }
-  catch (e) { toast(e.message, 'err'); }
 }
 loadStats();
 </script>
