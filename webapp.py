@@ -433,6 +433,18 @@ async def _ensure_tables():
                 await cur.execute(
                     "CREATE TABLE IF NOT EXISTS bank_locks (user_id BIGINT PRIMARY KEY, unlock_at DOUBLE NOT NULL) "
                     "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
+                await cur.execute(
+                    "CREATE TABLE IF NOT EXISTS custom_properties (item_key VARCHAR(64) PRIMARY KEY, name VARCHAR(100) NOT NULL, "
+                    "emoji VARCHAR(16) NOT NULL DEFAULT '🏠', price BIGINT NOT NULL DEFAULT 0, income BIGINT NOT NULL DEFAULT 0, "
+                    "created_at DOUBLE NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
+                await cur.execute(
+                    "CREATE TABLE IF NOT EXISTS custom_workers (item_key VARCHAR(64) PRIMARY KEY, name VARCHAR(100) NOT NULL, "
+                    "emoji VARCHAR(16) NOT NULL DEFAULT '👷', price BIGINT NOT NULL DEFAULT 0, income BIGINT NOT NULL DEFAULT 0, "
+                    "created_at DOUBLE NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
+                await cur.execute(
+                    "CREATE TABLE IF NOT EXISTS custom_bm_items (item_key VARCHAR(64) PRIMARY KEY, name VARCHAR(100) NOT NULL, "
+                    "emoji VARCHAR(16) NOT NULL DEFAULT '💀', price BIGINT NOT NULL DEFAULT 0, item_type VARCHAR(16) NOT NULL DEFAULT 'projectile', "
+                    "data TEXT NULL, created_at DOUBLE NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
                 try:
                     await cur.execute("ALTER TABLE inventory ADD COLUMN last_used DOUBLE NULL DEFAULT NULL")
                 except Exception:
@@ -1865,43 +1877,8 @@ async def _accrue_income_vip(user_id: int, *args, **kwargs):
 _accrue_income_vip._zar = True
 
 
-async def _credit_vip_bonuses(orig_fn, *args, **kwargs):
-    """قبل از پرداخت خودکار، سهم اضافه VIP را محاسبه و پس از پرداخت اصلی واریز می‌کند"""
-    now_t = time.time()
-    bonuses = {}
-    base_rate = max(0.0001, float(getattr(config, "BANK_RATE", 0.02)))
-    if _orig_peek_income:
-        for uid, exp in list(_vip_expires.items()):
-            if exp <= now_t:
-                continue
-            try:
-                a_inc, b_int, _ = await _orig_peek_income(uid)
-                ex = int(a_inc * VIP_INCOME_BONUS) + int(b_int * max(0.0, VIP_BANK_RATE / base_rate - 1.0))
-                if ex > 0:
-                    bonuses[uid] = ex
-            except Exception:
-                pass
-    res = await orig_fn(*args, **kwargs)
-    for uid, ex in bonuses.items():
-        try:
-            await db.add_balance(uid, ex)
-        except Exception:
-            pass
-    return res
-
-
-async def _hourly_payout_vip(*args, **kwargs):
-    return await _credit_vip_bonuses(_orig_hourly_payout, *args, **kwargs)
-
-
-_hourly_payout_vip._zar = True
-
-
-async def _daily_payout_vip(*args, **kwargs):
-    return await _credit_vip_bonuses(_orig_daily_payout, *args, **kwargs)
-
-
-_daily_payout_vip._zar = True
+# نکته‌ی عملکردی: مزیت +۱۰٪ سود VIP فقط هنگام برداشت دستی (accrue_income) اعمال می‌شود.
+# پیچیدن پرداخت خودکار ساعتی/روزانه حذف شد تا ربات کند نشود.
 
 
 def _patch_blackmarket_kb():
@@ -1977,12 +1954,7 @@ def patch_bot_ui():
     if hasattr(db, "accrue_income") and not getattr(db.accrue_income, "_zar", False):
         _orig_accrue_income = db.accrue_income
         db.accrue_income = _accrue_income_vip
-    if hasattr(db, "hourly_payout") and not getattr(db.hourly_payout, "_zar", False):
-        _orig_hourly_payout = db.hourly_payout
-        db.hourly_payout = _hourly_payout_vip
-    if hasattr(db, "daily_payout") and not getattr(db.daily_payout, "_zar", False):
-        _orig_daily_payout = db.daily_payout
-        db.daily_payout = _daily_payout_vip
+    # پرداخت خودکار ساعتی/روزانه دست نمی‌خورد (برای سرعت ربات)
     if _utils and not getattr(getattr(_utils, "verify_membership", None), "_zar", False):
         _utils.verify_membership = verify_membership_owned
     t = getattr(config, "HELP_TEXT", "") or ""
@@ -2076,18 +2048,19 @@ def _cap_text(key: str, cap: int = 0, vip: bool = False, wh_lvl: int = 1) -> str
 
 async def _h_bm_guard(update, context):
     """سقف خرید بازار سیاه: پدافند ۱ | وسیله شلیک ۳ (VIP: ۶) | مهمات طبق لول انبار (VIP: +۵)"""
-    q = update.callback_query
-    parts = (q.data or "").split(":")
-    key = parts[2] if len(parts) > 2 else ""
-    if _not_owner(q):
-        return
-    uid = q.from_user.id
-    cap = await _item_cap_for(uid, key)
-    if not cap:
-        return
     try:
+        q = update.callback_query
+        parts = (q.data or "").split(":")
+        key = parts[2] if len(parts) > 2 else ""
+        if _not_owner(q):
+            return
+        uid = q.from_user.id
+        cap = await _item_cap_for(uid, key)
+        if not cap:
+            return
         have = await _count_items(uid, key)
     except Exception:
+        logger.exception("bm_guard error (ignored)")
         return
     if have >= cap:
         wh = await get_warehouse_level(uid)
@@ -2168,80 +2141,100 @@ async def _build_warehouse_view(uid: int):
 
 
 async def _h_warehouse_cb(update, context):
-    q = update.callback_query
-    uid = q.from_user.id
-    if _not_owner(q):
-        await _utils.safe_answer(q, "❌ این منو برای شما نیست!\nبرای منوی خودت /menu را بفرست.", show_alert=True)
-        raise _stop()
-    if _utils and not await _utils.verify_membership(update, context):
-        raise _stop()
-    await db.ensure_user(q.from_user)
-    if q.data == "bm:wh_upgrade":
-        async with _ulock(uid):
-            lvl = await get_warehouse_level(uid)
-            if lvl >= WAREHOUSE_MAX_LEVEL:
-                await _utils.safe_answer(q, "🏆 انبارت همین الان در حداکثر لول (۱۰) است!", show_alert=True)
-            else:
-                cost = warehouse_upgrade_cost(lvl)
-                if not await db.deduct_balance(uid, cost):
-                    await _utils.safe_answer(q, f"❌ موجودی کافی نیست!\nنیاز به {_fmt(cost)} زرکوین داری.", show_alert=True)
+    try:
+        q = update.callback_query
+        uid = q.from_user.id
+        if _not_owner(q):
+            await _utils.safe_answer(q, "❌ این منو برای شما نیست!\nبرای منوی خودت /menu را بفرست.", show_alert=True)
+            raise _stop()
+        if _utils and not await _utils.verify_membership(update, context):
+            raise _stop()
+        await db.ensure_user(q.from_user)
+        if q.data == "bm:wh_upgrade":
+            async with _ulock(uid):
+                lvl = await get_warehouse_level(uid)
+                if lvl >= WAREHOUSE_MAX_LEVEL:
+                    await _utils.safe_answer(q, "🏆 انبارت همین الان در حداکثر لول (۱۰) است!", show_alert=True)
                 else:
-                    new_lvl = lvl + 1
-                    await _ensure_tables()
-                    await _exec("INSERT INTO user_warehouse (user_id, level, updated_at) VALUES (%s,%s,%s) "
-                                "ON DUPLICATE KEY UPDATE level=VALUES(level), updated_at=VALUES(updated_at)",
-                                (uid, new_lvl, time.time()))
-                    _warehouse_lvl[uid] = new_lvl
-                    await _utils.safe_answer(q, f"✅ انبار به لول {new_lvl} ارتقا یافت! ظرفیت هر مهمات: {ammo_cap(new_lvl, is_vip(uid))}", show_alert=True)
-    else:
-        await _utils.safe_answer(q)
-    text, kb = await _build_warehouse_view(uid)
-    m = await _utils.safe_edit(q, text, kb)
-    if m:
-        _utils.remember_owner(m, uid)
-    raise _stop()
+                    cost = warehouse_upgrade_cost(lvl)
+                    if not await db.deduct_balance(uid, cost):
+                        await _utils.safe_answer(q, f"❌ موجودی کافی نیست!\nنیاز به {_fmt(cost)} زرکوین داری.", show_alert=True)
+                    else:
+                        new_lvl = lvl + 1
+                        await _ensure_tables()
+                        await _exec("INSERT INTO user_warehouse (user_id, level, updated_at) VALUES (%s,%s,%s) "
+                                    "ON DUPLICATE KEY UPDATE level=VALUES(level), updated_at=VALUES(updated_at)",
+                                    (uid, new_lvl, time.time()))
+                        _warehouse_lvl[uid] = new_lvl
+                        await _utils.safe_answer(q, f"✅ انبار به لول {new_lvl} ارتقا یافت! ظرفیت هر مهمات: {ammo_cap(new_lvl, is_vip(uid))}", show_alert=True)
+        else:
+            await _utils.safe_answer(q)
+        text, kb = await _build_warehouse_view(uid)
+        m = await _utils.safe_edit(q, text, kb)
+        if m:
+            _utils.remember_owner(m, uid)
+        raise _stop()
+    except Exception:
+        logger.exception("warehouse_cb error (fallback به هندلر اصلی)")
+        return
 
 
 async def _h_bank_cb(update, context):
     """نمایش سود واقعی (۲٪ عادی / ۵٪ VIP) و اعمال قفل ۵ ساعته برداشت بانک"""
-    q = update.callback_query
-    uid = q.from_user.id
-    if _not_owner(q):
-        await _utils.safe_answer(q, "❌ این منو برای شما نیست!\nبرای منوی خودت /menu را بفرست.", show_alert=True)
-        raise _stop()
-    if _utils and not await _utils.verify_membership(update, context):
-        raise _stop()
-    if q.data == "bank:withdraw":
-        rem = await _bank_lock_remaining(uid)
-        if rem > 0:
-            await _utils.safe_answer(q, f"🔒 برداشت از بانک قفل است!\nتا {_fmt_rem(rem)} دیگر نمی‌تونی برداشت کنی (قفل ۵ ساعته پس از واریز).", show_alert=True)
+    try:
+        q = update.callback_query
+        uid = q.from_user.id
+        if _not_owner(q):
+            await _utils.safe_answer(q, "❌ این منو برای شما نیست!\nبرای منوی خودت /menu را بفرست.", show_alert=True)
             raise _stop()
-        return  # آزاد است → هندلر اصلی bot.py اجرا شود
-    await _utils.safe_answer(q)
-    await db.ensure_user(q.from_user)
-    u = await db.get_user(uid)
-    bal = int(u["balance"]) if u else 0
-    bank = int(u["bank_balance"]) if u else 0
-    card = _utils.format_card(u["card_number"]) if (u and _utils) else "-"
-    vip = is_vip(uid)
-    rate = VIP_BANK_RATE if vip else float(getattr(config, "BANK_RATE", 0.02))
-    interest = int(bank * rate)
-    rem = await _bank_lock_remaining(uid)
-    lock_line = f"\n🔒 قفل برداشت: <b>تا {_fmt_rem(rem)} دیگر</b>" if rem > 0 else "\n🔓 برداشت: <b>آزاد</b> (پس از هر واریز ۵ ساعت قفل می‌شود)"
-    rate_lbl = f"{int(rate * 100)}٪ 👑 VIP" if vip else f"{int(rate * 100)}٪"
-    text = (f"🏦 <b>بانک زرکوین</b>\n━━━━━━━━━━━━━━━━━━\n"
-            f"💳 <code>{card}</code>\n\n"
-            f"💰 کیف پول: <b>{_fmt(bal)}</b>\n"
-            f"🏦 بانک: <b>{_fmt(bank)}</b>\n"
-            f"📈 سود روزانه ({rate_lbl}): <b>{_fmt(interest)}</b>{lock_line}")
-    m = await _utils.safe_edit(q, text, _utils.BANK_MENU_KB if _utils else None)
-    if m and _utils:
-        _utils.remember_owner(m, uid)
-    raise _stop()
+        if _utils and not await _utils.verify_membership(update, context):
+            raise _stop()
+        if q.data == "bank:withdraw":
+            rem = await _bank_lock_remaining(uid)
+            if rem > 0:
+                await _utils.safe_answer(q, f"🔒 برداشت از بانک قفل است!\nتا {_fmt_rem(rem)} دیگر نمی‌تونی برداشت کنی (قفل ۵ ساعته پس از واریز).", show_alert=True)
+                raise _stop()
+            return  # آزاد است → هندلر اصلی bot.py اجرا شود
+        await _utils.safe_answer(q)
+        await db.ensure_user(q.from_user)
+        u = await db.get_user(uid)
+        bal = int(u["balance"]) if u else 0
+        bank = int(u["bank_balance"]) if u else 0
+        card = _utils.format_card(u["card_number"]) if (u and _utils) else "-"
+        vip = is_vip(uid)
+        rate = VIP_BANK_RATE if vip else float(getattr(config, "BANK_RATE", 0.02))
+        interest = int(bank * rate)
+        rem = await _bank_lock_remaining(uid)
+        lock_line = f"\n🔒 قفل برداشت: <b>تا {_fmt_rem(rem)} دیگر</b>" if rem > 0 else "\n🔓 برداشت: <b>آزاد</b> (پس از هر واریز ۵ ساعت قفل می‌شود)"
+        rate_lbl = f"{int(rate * 100)}٪ 👑 VIP" if vip else f"{int(rate * 100)}٪"
+        text = (f"🏦 <b>بانک زرکوین</b>\n━━━━━━━━━━━━━━━━━━\n"
+                f"💳 <code>{card}</code>\n\n"
+                f"💰 کیف پول: <b>{_fmt(bal)}</b>\n"
+                f"🏦 بانک: <b>{_fmt(bank)}</b>\n"
+                f"📈 سود روزانه ({rate_lbl}): <b>{_fmt(interest)}</b>{lock_line}")
+        m = await _utils.safe_edit(q, text, _utils.BANK_MENU_KB if _utils else None)
+        if m and _utils:
+            _utils.remember_owner(m, uid)
+        raise _stop()
+    except Exception:
+        logger.exception("bank_cb error (fallback به هندلر اصلی)")
+        return  # خطا → هندلر اصلی bot.py تلاش می‌کند
+
+
+_cmd_map_cache: dict | None = None
 
 
 def _cmd_map() -> dict:
-    return {v["command"]: k for k, v in _bm_items().items() if v.get("type") == "projectile" and v.get("command")}
+    global _cmd_map_cache
+    if _cmd_map_cache is not None:
+        return _cmd_map_cache
+    _cmd_map_cache = {v["command"]: k for k, v in _bm_items().items() if v.get("type") == "projectile" and v.get("command")}
+    return _cmd_map_cache
+
+
+def _invalidate_cmd_map():
+    global _cmd_map_cache
+    _cmd_map_cache = None
 
 
 async def _h_attack_pre(update, context):
@@ -2301,11 +2294,11 @@ async def _h_attack_post(update, context):
         rep = msg.reply_to_message if msg else None
         tgt = rep.from_user.id if rep and rep.from_user else None
         d = _last_damage.pop(tgt, None) if tgt else None
-        if d and time.time() - d["t"] < 60 and (d["total"] > 0 or d.get("xp_lost", 0) > 0):
+        if d and time.time() - d["t"] < 60 and d["total"] > 0:
             report = _damage_report(d)
             await msg.reply_text(f"🏚 <b>جزئیات خسارت</b>\n━━━━━━━━━━━━━━━━━━\n{report}\n\n💥 مجموع خسارت مالی: <b>{_fmt(d['total'])}</b>",
                                  parse_mode="HTML")
-            if d["assets"] or d.get("xp_lost"):
+            if d["assets"]:
                 try:
                     await context.bot.send_message(tgt, f"🏚 <b>در حمله این موارد از دست رفت:</b>\n{report}",
                                                    parse_mode="HTML")
@@ -2371,6 +2364,7 @@ def setup_bot(app):
             await _load_vips()
             await _load_bank_locks()
             await _load_controls_and_design()
+            await _load_custom_items()
             await _seed_vip_products()
         except Exception:
             logger.exception("بارگذاری ادمین/VIP/تنظیمات ناموفق")
@@ -2403,7 +2397,8 @@ def _esc(s) -> str:
 
 async def apply_damage_split(target_id, damage_percent, *args, **kwargs) -> int:
     """
-    همان درصد تخریب وسیله از پول هدف (کیف پول + بانک)، از XP/لول او و از «تعداد» ملک‌ها و کارگرهایش کم می‌شود.
+    همان درصد تخریب وسیله فقط از پول هدف (کیف پول + بانک) و از «تعداد» ملک‌ها و کارگرهایش کم می‌شود.
+    XP و لول کاربر هرگز کم نمی‌شود.
     ملک/کارگرهای نابودشده تصادفی انتخاب می‌شوند. گرد کردن احتمالی است (مثلاً ۲۰٪ از ۳ ملک = ۰٫۶ → با احتمال ۶۰٪ یکی)
     و با درصد کمتر از ۱۰۰ هیچ‌وقت همه‌ی دارایی‌ها یک‌جا صفر نمی‌شود.
     خروجی: ارزش کل خسارت (برای پیام bot.py)
@@ -2417,17 +2412,11 @@ async def apply_damage_split(target_id, damage_percent, *args, **kwargs) -> int:
         return 0
 
     async def run(cur):
-        await cur.execute("SELECT balance, bank_balance, total_xp, level FROM users WHERE user_id=%s FOR UPDATE",
-                          (target_id,))
+        await cur.execute("SELECT balance, bank_balance FROM users WHERE user_id=%s FOR UPDATE", (target_id,))
         u = await cur.fetchone()
         if not u:
             return None
         bal, bank = max(0, int(u["balance"] or 0)), max(0, int(u["bank_balance"] or 0))
-        cur_xp = max(0, int(u.get("total_xp") or 0))
-        old_lvl = _calc_level(cur_xp)
-        xp_lost = int(cur_xp * pct)
-        new_xp = max(0, cur_xp - xp_lost)
-        new_lvl = _calc_level(new_xp)
         await cur.execute("SELECT id, asset_type, asset_key, purchase_price FROM assets WHERE user_id=%s FOR UPDATE",
                           (target_id,))
         assets = list(await cur.fetchall())
@@ -2442,22 +2431,19 @@ async def apply_damage_split(target_id, damage_percent, *args, **kwargs) -> int:
             if pct < 1 and n > 1:
                 k = min(k, n - 1)
         removed = _rng.sample(assets, k) if k else []
-        if money_part <= 0 and not removed and xp_lost <= 0:
+        if money_part <= 0 and not removed:
             return None
         from_bal = min(bal, money_part)
         from_bank = min(bank, money_part - from_bal)
         money_part = from_bal + from_bank
-        await cur.execute(
-            "UPDATE users SET balance = balance - %s, bank_balance = bank_balance - %s, "
-            "total_xp = %s, level = %s WHERE user_id=%s",
-            (from_bal, from_bank, new_xp, new_lvl, target_id))
+        await cur.execute("UPDATE users SET balance = balance - %s, bank_balance = bank_balance - %s WHERE user_id=%s",
+                          (from_bal, from_bank, target_id))
         if removed:
             ids = [int(a["id"]) for a in removed]
             await cur.execute(f"DELETE FROM assets WHERE id IN ({','.join(['%s'] * len(ids))})", ids)
         asset_value = sum(int(a["purchase_price"] or 0) for a in removed)
         return {"money": money_part, "assets": [(a["asset_type"], a["asset_key"]) for a in removed],
-                "asset_value": asset_value, "total": money_part + asset_value,
-                "xp_lost": xp_lost, "old_lvl": old_lvl, "new_lvl": new_lvl}
+                "asset_value": asset_value, "total": money_part + asset_value}
 
     try:
         res = await _tx(run)
@@ -2479,10 +2465,6 @@ apply_damage_split._zar = True
 
 def _damage_report(d: dict) -> str:
     lines = [f"💰 پول: {_fmt(d['money'])}"]
-    if d.get("xp_lost"):
-        ol, nl = d.get("old_lvl", 1), d.get("new_lvl", 1)
-        lvl_txt = f" (لول {ol} ← {nl})" if nl != ol else f" (لول {nl})"
-        lines.append(f"⭐ XP: -{_fmt(d['xp_lost'])}{lvl_txt}")
     counts = {}
     for t, k in d["assets"]:
         counts[(t, k)] = counts.get((t, k), 0) + 1
@@ -2564,8 +2546,8 @@ def _help_pages() -> list:
           "۱. وسیله شلیک و مهمات را از بازار سیاه بخر\n۲. روی پیام هدف ریپلای کن\n۳. دستور شلیک را بفرست:\n"
           + cmds + "\n\n⚠️ <b>قوانین:</b>\n"
           f" • هر وسیله شلیک بعد از شلیک {LAUNCH_COOLDOWN // 60} دقیقه خنک می‌شود؛ با چند وسیله می‌توانی پشت‌سرهم شلیک کنی\n"
-          " • همان درصد تخریب وسیله از پول (کیف + بانک)، XP/لول و تعداد ملک‌ها و کارگرهای هدف کم می‌شود؛ "
-          "ملک و کارگرهای نابودشده تصادفی انتخاب می‌شوند\n"
+          " • همان درصد تخریب وسیله از پول (کیف + بانک) و تعداد ملک‌ها و کارگرهای هدف کم می‌شود؛ "
+          "ملک و کارگرهای نابودشده تصادفی انتخاب می‌شوند (XP و لول کم نمی‌شود)\n"
           " • به کاربران بن‌شده نمی‌توان حمله کرد یا پول انتقال داد\n"
           " • بمب‌ها قابل دفاع نیستند، فقط موشک و پهپاد\n"
           " • هر شلیک یک مهمات مصرف می‌کند")
@@ -2600,13 +2582,20 @@ async def _h_help_cb(update, context):
 # ═══════════════════════════════════════════════
 # ═══════════ فروشگاه: خرید کوین و لول ═══════════
 # ═══════════════════════════════════════════════
+_env_admin_cache: set | None = None
+
+
 def _env_admin_ids() -> set:
     """مالک (OWNER_ID) + آیدی‌های SHOP_ADMIN_IDS — از تنظیمات سرور می‌آیند و از پنل قابل حذف نیستند"""
+    global _env_admin_cache
+    if _env_admin_cache is not None:
+        return _env_admin_cache
     ids = {int(getattr(config, "OWNER_ID", 0) or 0)}
     for x in (os.getenv("SHOP_ADMIN_IDS") or "").split(","):
         if x.strip().isdigit():
             ids.add(int(x.strip()))
     ids.discard(0)
+    _env_admin_cache = ids
     return ids
 
 
@@ -3112,25 +3101,37 @@ def _detect_section(update) -> str | None:
 
 
 async def _h_bot_gate(update, context):
-    """اولین هندلر: حالت خاموشی کل بات، خاموشی بخش‌ها و کاربران بن‌شده"""
-    u = update.effective_user
-    if not u:
-        return
-    is_adm = u.id in _owner_ids()
-    if _bot_off and not is_adm:
-        off_msg = _ctrl_text("bot_off_msg", "")
-        if off_msg:
+    """اولین هندلر: حالت خاموشی کل بات، خاموشی بخش‌ها و کاربران بن‌شده.
+    ⚠️ این هندلر هرگز نباید ربات را از کار بیندازد؛ هر خطا فقط لاگ می‌شود و ربات ادامه می‌دهد."""
+    try:
+        u = update.effective_user
+        if not u:
+            return
+        is_adm = u.id in _owner_ids()
+        if _bot_off and not is_adm:
+            off_msg = _ctrl_text("bot_off_msg", "")
+            if off_msg:
+                try:
+                    if update.callback_query:
+                        await update.callback_query.answer(off_msg[:190], show_alert=True)
+                    elif update.effective_chat and update.effective_chat.type == "private" and update.effective_message:
+                        await update.effective_message.reply_text(off_msg)
+                except Exception:
+                    pass
+            raise _stop()
+        if u.id in _banned:
             try:
-                if update.callback_query:
-                    await update.callback_query.answer(off_msg[:190], show_alert=True)
+                if update.pre_checkout_query:
+                    await update.pre_checkout_query.answer(ok=False, error_message="🚫 شما از ربات محروم شده‌اید")
+                elif update.callback_query:
+                    await update.callback_query.answer("🚫 شما از ربات محروم شده‌اید", show_alert=True)
                 elif update.effective_chat and update.effective_chat.type == "private" and update.effective_message:
-                    await update.effective_message.reply_text(off_msg)
+                    if time.time() - _ban_notified.get(u.id, 0) > 600:
+                        _ban_notified[u.id] = time.time()
+                        await update.effective_message.reply_text("🚫 شما از ربات محروم شده‌اید.")
             except Exception:
                 pass
-        raise _stop()
-    if u.id in _banned:
-        pass
-    else:
+            raise _stop()
         if not is_adm and _controls.get("disabled_sections"):
             sec = _detect_section(update)
             if sec and _section_disabled(sec):
@@ -3143,19 +3144,10 @@ async def _h_bot_gate(update, context):
                 except Exception:
                     pass
                 raise _stop()
-        return
-    try:
-        if update.pre_checkout_query:
-            await update.pre_checkout_query.answer(ok=False, error_message="🚫 شما از ربات محروم شده‌اید")
-        elif update.callback_query:
-            await update.callback_query.answer("🚫 شما از ربات محروم شده‌اید", show_alert=True)
-        elif update.effective_chat and update.effective_chat.type == "private" and update.effective_message:
-            if time.time() - _ban_notified.get(u.id, 0) > 600:
-                _ban_notified[u.id] = time.time()
-                await update.effective_message.reply_text("🚫 شما از ربات محروم شده‌اید.")
     except Exception:
-        pass
-    raise _stop()
+        # هیچ خطایی در این گیت نباید باعث از کار افتادن دستورات ربات شود
+        logger.exception("bot_gate error (ignored)")
+        return
 
 
 async def _transfer_guarded(sender_id, recipient_id, *args, **kwargs):
@@ -3322,6 +3314,143 @@ async def _load_controls_and_design():
     raw_d = _loads(await _get_setting("design", "{}"))
     for k, dv in _DEFAULT_DESIGN.items():
         _design[k] = _clean_hex(raw_d.get(k), dv)
+
+
+# ═══════════ آیتم‌های سفارشی (افزودن از پنل: ملک، کارگر، بازار سیاه) ═══════════
+def _valid_item_key(key: str) -> bool:
+    return bool(re.fullmatch(r"[a-z0-9_]{2,40}", key or ""))
+
+
+async def _load_custom_items():
+    """خواندن آیتم‌های افزوده‌شده از پنل و ادغام در config (ربات و مینی‌اپ آن‌ها را می‌بینند)"""
+    await _ensure_tables()
+    try:
+        for r in await _fetch("SELECT * FROM custom_properties"):
+            config.PROPERTIES[r["item_key"]] = {"name": r["name"], "emoji": r["emoji"], "price": int(r["price"]),
+                                                "income": int(r["income"]), "_custom": True}
+        for r in await _fetch("SELECT * FROM custom_workers"):
+            config.WORKERS[r["item_key"]] = {"name": r["name"], "emoji": r["emoji"], "price": int(r["price"]),
+                                             "income": int(r["income"]), "_custom": True}
+        for r in await _fetch("SELECT * FROM custom_bm_items"):
+            data = _loads(r["data"])
+            item = {"name": r["name"], "emoji": r["emoji"], "price": int(r["price"]), "type": r["item_type"], "_custom": True}
+            item.update({k: v for k, v in data.items() if k not in ("name", "emoji", "price", "type")})
+            config.BLACKMARKET_ITEMS[r["item_key"]] = item
+        _invalidate_cmd_map()
+        logger.info("➕ آیتم‌های سفارشی (ملک/کارگر/بازار سیاه) از پنل بارگذاری شد")
+    except Exception:
+        logger.exception("بارگذاری آیتم‌های سفارشی ناموفق")
+
+
+@_admin
+async def admin_items_list(request, body):
+    await _ensure_tables()
+    props = await _fetch("SELECT * FROM custom_properties ORDER BY price ASC")
+    works = await _fetch("SELECT * FROM custom_workers ORDER BY price ASC")
+    bms = await _fetch("SELECT * FROM custom_bm_items ORDER BY price ASC")
+    return _json({
+        "ok": True,
+        "properties": [{"key": r["item_key"], "name": r["name"], "emoji": r["emoji"], "price": int(r["price"]),
+                        "income": int(r["income"])} for r in props],
+        "workers": [{"key": r["item_key"], "name": r["name"], "emoji": r["emoji"], "price": int(r["price"]),
+                     "income": int(r["income"])} for r in works],
+        "bm_items": [{"key": r["item_key"], "name": r["name"], "emoji": r["emoji"], "price": int(r["price"]),
+                      "type": r["item_type"], "data": _loads(r["data"])} for r in bms],
+    })
+
+
+@_admin
+async def admin_items_add(request, body):
+    kind = str(body.get("kind") or "")
+    key = str(body.get("key") or "").strip().lower()
+    name = str(body.get("name") or "").strip()[:100]
+    emoji = str(body.get("emoji") or "").strip()[:16] or "•"
+    price = _to_int(body.get("price"), 0) or 0
+    if not _valid_item_key(key):
+        return _err("کلید (key) باید انگلیسی، عدد و _ باشد (۲ تا ۴۰ کاراکتر) — مثلاً: villa_2")
+    if not name:
+        return _err("نام را وارد کن")
+    if price <= 0:
+        return _err("قیمت باید بیشتر از صفر باشد")
+    await _ensure_tables()
+    now_t = time.time()
+    if kind in ("property", "worker"):
+        income = _to_int(body.get("income"), 0) or 0
+        if income <= 0:
+            return _err("درآمد روزانه باید بیشتر از صفر باشد")
+        store = config.PROPERTIES if kind == "property" else config.WORKERS
+        if key in store:
+            return _err("این کلید از قبل وجود دارد")
+        tbl = "custom_properties" if kind == "property" else "custom_workers"
+        await _exec(f"INSERT INTO {tbl} (item_key, name, emoji, price, income, created_at) VALUES (%s,%s,%s,%s,%s,%s)",
+                    (key, name, emoji, price, income, now_t))
+        store[key] = {"name": name, "emoji": emoji, "price": price, "income": income, "_custom": True}
+        logger.warning(f"➕ ملک/کارگر جدید از پنل: {kind}:{key} ({name})")
+        return _json({"ok": True})
+    if kind == "bm_item":
+        itype = str(body.get("item_type") or "projectile")
+        if itype not in ("launcher", "projectile", "defense"):
+            return _err("نوع آیتم نامعتبر است")
+        if key in config.BLACKMARKET_ITEMS:
+            return _err("این کلید از قبل وجود دارد")
+        data = {}
+        if itype == "launcher":
+            launches = [str(x).strip() for x in (body.get("launches") or []) if str(x).strip() in config.BLACKMARKET_ITEMS]
+            if not launches:
+                return _err("حداقل یک مهمات قابل شلیک برای این وسیله انتخاب کن")
+            data["launches"] = launches
+        elif itype == "projectile":
+            dmg = _to_int(body.get("damage"), 0) or 0
+            cmd = str(body.get("command") or "").strip()[:64]
+            if dmg <= 0 or dmg > 100:
+                return _err("درصد تخریب باید بین ۱ تا ۱۰۰ باشد")
+            if not cmd:
+                return _err("دستور شلیک را وارد کن (مثلاً: شلیک موشک جدید)")
+            data["damage"] = dmg / 100.0
+            data["command"] = cmd
+            dtype = str(body.get("defense_type") or "")
+            data["defense_type"] = dtype if dtype in ("missile_defense", "drone_defense") else None
+        else:  # defense
+            chance = _to_int(body.get("defense_chance"), 0) or 0
+            against = str(body.get("defends_against") or "")
+            if chance <= 0 or chance > 100:
+                return _err("درصد دفاع باید بین ۱ تا ۱۰۰ باشد")
+            if against not in ("missile_defense", "drone_defense"):
+                return _err("دفاع در برابر چه چیزی؟ (موشک یا پهپاد)")
+            data["defense_chance"] = chance / 100.0
+            data["defends_against"] = against
+        await _exec("INSERT INTO custom_bm_items (item_key, name, emoji, price, item_type, data, created_at) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s)", (key, name, emoji, price, itype, json.dumps(data, ensure_ascii=False), now_t))
+        item = {"name": name, "emoji": emoji, "price": price, "type": itype, "_custom": True}
+        item.update(data)
+        config.BLACKMARKET_ITEMS[key] = item
+        _invalidate_cmd_map()
+        logger.warning(f"➕ آیتم بازار سیاه جدید از پنل: {key} ({name})")
+        return _json({"ok": True})
+    return _err("نوع آیتم نامعتبر است")
+
+
+@_admin
+async def admin_items_delete(request, body):
+    kind = str(body.get("kind") or "")
+    key = str(body.get("key") or "").strip()
+    await _ensure_tables()
+    if kind == "property":
+        n = await _exec("DELETE FROM custom_properties WHERE item_key=%s", (key,))
+        config.PROPERTIES.pop(key, None)
+    elif kind == "worker":
+        n = await _exec("DELETE FROM custom_workers WHERE item_key=%s", (key,))
+        config.WORKERS.pop(key, None)
+    elif kind == "bm_item":
+        n = await _exec("DELETE FROM custom_bm_items WHERE item_key=%s", (key,))
+        config.BLACKMARKET_ITEMS.pop(key, None)
+        _invalidate_cmd_map()
+    else:
+        return _err("نوع آیتم نامعتبر است")
+    if not n:
+        return _err("آیتم پیدا نشد (فقط آیتم‌های افزوده‌شده از پنل قابل حذف‌اند)")
+    logger.warning(f"🗑 آیتم سفارشی حذف شد: {kind}:{key}")
+    return _json({"ok": True})
 
 
 @_admin
@@ -3654,6 +3783,7 @@ def create_app() -> web.Application:
         "vip/list": admin_vip_list, "vip/set": admin_vip_set, "vip/remove": admin_vip_remove,
         "controls/get": admin_controls_get, "controls/save": admin_controls_save,
         "design/get": admin_design_get, "design/save": admin_design_save,
+        "items/list": admin_items_list, "items/add": admin_items_add, "items/delete": admin_items_delete,
     }
     for p, h in admin_routes.items():
         app.router.add_post(f"/admin/api/{p}", h)
