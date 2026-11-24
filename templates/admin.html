@@ -76,6 +76,7 @@ a{color:var(--gold)}
     <button class="tab" data-t="orders">🧾 سفارش‌ها <span class="badge hidden" id="ord-badge"></span></button>
     <button class="tab" data-t="admins">🛡 ادمین‌ها</button>
     <button class="tab" data-t="vip">👑 کاربران VIP</button>
+    <button class="tab" data-t="settings">⚙️ تنظیمات</button>
   </div>
 
   <!-- کاربران -->
@@ -171,6 +172,34 @@ a{color:var(--gold)}
       <div style="overflow-x:auto"><table><thead><tr><th>کاربر</th><th>آیدی</th><th>انقضا</th><th>روز باقی‌مانده</th><th></th></tr></thead><tbody id="vip-list"></tbody></table></div>
     </div>
   </section>
+
+  <!-- تنظیمات -->
+  <section id="t-settings" class="hidden">
+    <div class="card">
+      <h3>🎮 بازی‌های کازینو</h3>
+      <p class="muted">بازی خاموش‌شده در مینی‌اپ دیده نمی‌شود و نمی‌توان روی آن شرط بست.</p>
+      <div id="set-games"></div>
+    </div>
+    <div class="card">
+      <h3>🧩 بخش‌های ربات</h3>
+      <p class="muted">بخش خاموش‌شده از منوی اصلی حذف می‌شود و دکمه‌های قدیمی‌اش هم کار نمی‌کنند.</p>
+      <div id="set-sections"></div>
+    </div>
+    <div class="card">
+      <h3>📝 متن‌ها</h3>
+      <label class="muted" style="display:grid;gap:5px">متن پیام کازینو (خالی = پیش‌فرض)<textarea id="tx-casino" rows="3"></textarea></label>
+      <div id="set-help"></div>
+    </div>
+    <div class="card">
+      <h3>🎨 دیزاین مینی‌اپ (رنگ دکمه‌ها)</h3>
+      <div class="form" id="set-theme"></div>
+      <div class="row" style="margin-top:14px">
+        <button class="btn gold" style="flex:1" onclick="saveAllSettings()">💾 ذخیره همه تنظیمات</button>
+        <button class="btn ghost" onclick="resetTheme()">↩️ بازنشانی رنگ‌ها</button>
+      </div>
+      <p class="muted">تغییر رنگ‌ها فوری روی مینی‌اپ اعمال می‌شود (بعد از یک رفرش).</p>
+    </div>
+  </section>
 </div>
 <div id="toast"></div>
 <script>
@@ -193,8 +222,8 @@ async function api(path, body) {
 }
 document.querySelectorAll('.tab').forEach(b => b.onclick = () => {
   document.querySelectorAll('.tab').forEach(x => x.classList.toggle('on', x === b));
-  ['users', 'gifts', 'shop', 'orders', 'admins', 'vip'].forEach(t => $('#t-' + t).classList.toggle('hidden', b.dataset.t !== t));
-  ({ gifts: loadGifts, shop: loadProducts, orders: loadOrders, admins: loadAdmins, vip: loadVips }[b.dataset.t] || (() => {}))();
+  ['users', 'gifts', 'shop', 'orders', 'admins', 'vip', 'settings'].forEach(t => $('#t-' + t).classList.toggle('hidden', b.dataset.t !== t));
+  ({ gifts: loadGifts, shop: loadProducts, orders: loadOrders, admins: loadAdmins, vip: loadVips, settings: loadSettings }[b.dataset.t] || (() => {}))();
 });
 
 /* ── سازنده جایزه (مشترک کد هدیه و محصول) ── */
@@ -429,6 +458,48 @@ async function loadVips() {
 async function vipAct(id, days) {
   if (!confirm(days > 0 ? '۳۰ روز به VIP این کاربر اضافه شود؟' : 'VIP این کاربر حذف شود؟')) return;
   try { await api('adjust', { user_id: id, kind: 'vip_days', amount: days }); toast('✅ انجام شد', 'ok'); loadVips(); }
+  catch (e) { toast(e.message, 'err'); }
+}
+
+/* ── تنظیمات ── */
+let SET = null;
+const THEME_FIELDS = [['gold', 'طلایی (دکمه اصلی)'], ['gold2', 'طلایی تیره'], ['red', 'قرمز'], ['red2', 'قرمز تیره'], ['green', 'سبز'], ['green2', 'سبز تیره'], ['blue', 'آبی'], ['bg', 'پس‌زمینه'], ['text', 'متن'], ['muted', 'متن کم‌رنگ']];
+const THEME_DEFAULTS = { gold: '#f5c451', gold2: '#d99a1e', red: '#e11d48', red2: '#9f1239', green: '#10b981', green2: '#047857', blue: '#38bdf8', bg: '#07070c', text: '#f4f4f7', muted: '#9a9ab0' };
+async function loadSettings() {
+  try {
+    const d = await api('settings/get'); SET = d;
+    $('#set-games').innerHTML = d.games.map(g => `<div class="card" style="padding:12px;margin-bottom:8px;opacity:${g.off ? '.55' : '1'}">
+      <div class="row" style="justify-content:space-between"><b>${g.emoji} ${esc(g.name)}</b>
+        <label class="row" style="gap:6px"><input type="checkbox" id="goff-${g.key}" ${g.off ? '' : 'checked'} onchange="this.closest('.card').style.opacity=this.checked?1:.55"> فعال</label></div>
+      <div class="form" style="margin-top:8px"><label>نام<input id="gname-${g.key}" value="${esc(g.name)}"></label>
+        <label>توضیح<input id="gdesc-${g.key}" value="${esc(g.desc)}"></label></div></div>`).join('');
+    $('#set-sections').innerHTML = d.sections.map(s => `<div class="row" style="justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--line)">
+      <span>${esc(s.name)}</span><label class="row" style="gap:6px"><input type="checkbox" id="soff-${s.key}" ${s.off ? '' : 'checked'}> فعال</label></div>`).join('');
+    $('#tx-casino').value = d.texts.casino_text || '';
+    $('#tx-casino').placeholder = d.defaults.casino_text;
+    $('#set-help').innerHTML = d.defaults.help_pages.map((p, i) => `<label class="muted" style="display:grid;gap:5px;margin-top:10px">صفحه راهنما ${i + 1} (خالی = پیش‌فرض)<textarea id="help-${i + 1}" rows="4">${esc(d.texts['help_page:' + (i + 1)] || '')}</textarea><small>متن فعلی: ${esc(p.slice(0, 100))}...</small></label>`).join('');
+    $('#set-theme').innerHTML = THEME_FIELDS.map(([k, l]) => `<label>${l}<input type="color" id="th-${k}" value="${d.theme[k] || THEME_DEFAULTS[k]}" style="height:44px;padding:2px"></label>`).join('');
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function saveAllSettings() {
+  if (!SET) return;
+  const s = {};
+  SET.games.forEach(g => {
+    s['game_off:' + g.key] = $('#goff-' + g.key).checked ? '' : '1';
+    s['game_name:' + g.key] = $('#gname-' + g.key).value.trim();
+    s['game_desc:' + g.key] = $('#gdesc-' + g.key).value.trim();
+  });
+  SET.sections.forEach(x => { s['section_off:' + x.key] = $('#soff-' + x.key).checked ? '' : '1'; });
+  s['casino_text'] = $('#tx-casino').value.trim();
+  for (let i = 1; i <= 5; i++) s['help_page:' + i] = $('#help-' + i).value.trim();
+  THEME_FIELDS.forEach(([k]) => { s['theme:' + k] = $('#th-' + k).value; });
+  try { await api('settings/save', { settings: s }); toast('✅ تنظیمات ذخیره شد', 'ok'); }
+  catch (e) { toast(e.message, 'err'); }
+}
+async function resetTheme() {
+  if (!confirm('رنگ‌های مینی‌اپ به حالت پیش‌فرض برگردد؟')) return;
+  const s = {}; THEME_FIELDS.forEach(([k]) => { s['theme:' + k] = ''; });
+  try { await api('settings/save', { settings: s }); loadSettings(); toast('✅ رنگ‌ها بازنشانی شد', 'ok'); }
   catch (e) { toast(e.message, 'err'); }
 }
 loadStats();
