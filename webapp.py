@@ -64,6 +64,7 @@ LAUNCHER_MAX = int(os.getenv("LAUNCHER_MAX_PER_ITEM") or 3)  # از هر وسی�
 VIP_LAUNCHER_MAX = 6                                          # برای کاربران VIP: حداکثر ۶ عدد از هر وسیله شلیک
 DEFENSE_MAX = 1                                               # از هر سیستم دفاعی فقط ۱ عدد
 WAREHOUSE_MAX_LEVEL = 10                                      # حداکثر لول انبار (لول ۱ = ۲ تا → لول ۱۰ = ۲۰ تا)
+WAREHOUSE_UPGRADE_BASE = 1_000_000                            # مبلغ پایه ارتقای انبار (قابل تغییر از پنل)
 VIP_AMMO_BONUS = 5                                            # +۵ ظرفیت برای هر مهمات در هر لول انبار برای VIP
 VIP_INCOME_BONUS = 0.10                                       # +۱۰٪ سود بیشتر از ملک و کارگر برای VIP
 VIP_BANK_RATE = 0.05                                          # سود روزانه ۵٪ بانک برای VIP
@@ -450,6 +451,10 @@ async def _ensure_tables():
                     "CREATE TABLE IF NOT EXISTS bot_admins (user_id BIGINT PRIMARY KEY, note VARCHAR(255) NULL, "
                     "added_at DOUBLE NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
                 await cur.execute(
+                    "CREATE TABLE IF NOT EXISTS game_items (category VARCHAR(32) NOT NULL, item_key VARCHAR(64) NOT NULL, "
+                    "data TEXT NOT NULL, active TINYINT NOT NULL DEFAULT 1, sort INT NOT NULL DEFAULT 0, "
+                    "PRIMARY KEY (category, item_key)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
+                await cur.execute(
                     "CREATE TABLE IF NOT EXISTS vip_users (user_id BIGINT PRIMARY KEY, expires_at DOUBLE NOT NULL, "
                     "note VARCHAR(255) NULL, updated_at DOUBLE NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
                 await cur.execute(
@@ -525,8 +530,8 @@ def vip_days_left(uid: int) -> int:
 
 
 def warehouse_upgrade_cost(cur_level: int) -> int:
-    """قیمت ارتقا از لول فعلی به لول بعدی: (2 ** level) * 1,000,000"""
-    return (2 ** max(1, int(cur_level))) * 1_000_000
+    """قیمت ارتقا از لول فعلی به لول بعدی: (2 ** level) * WAREHOUSE_UPGRADE_BASE"""
+    return (2 ** max(1, int(cur_level))) * WAREHOUSE_UPGRADE_BASE
 
 
 async def get_warehouse_level(uid: int) -> int:
@@ -2362,11 +2367,11 @@ async def _h_attack_post(update, context):
         rep = msg.reply_to_message if msg else None
         tgt = rep.from_user.id if rep and rep.from_user else None
         d = _last_damage.pop(tgt, None) if tgt else None
-        if d and time.time() - d["t"] < 60 and (d["total"] > 0 or d.get("xp_lost", 0) > 0):
+        if d and time.time() - d["t"] < 60 and d["total"] > 0:
             report = _damage_report(d)
             await msg.reply_text(f"🏚 <b>جزئیات خسارت</b>\n━━━━━━━━━━━━━━━━━━\n{report}\n\n💥 مجموع خسارت مالی: <b>{_fmt(d['total'])}</b>",
                                  parse_mode="HTML")
-            if d["assets"] or d.get("xp_lost"):
+            if d["assets"]:
                 try:
                     await context.bot.send_message(tgt, f"🏚 <b>در حمله این موارد از دست رفت:</b>\n{report}",
                                                    parse_mode="HTML")
@@ -2433,6 +2438,8 @@ def setup_bot(app):
             await _load_bank_locks()
             await _load_controls_and_design()
             await _seed_vip_products()
+            await _load_game_items()
+            await _load_game_settings()
         except Exception:
             logger.exception("بارگذاری ادمین/VIP/تنظیمات ناموفق")
 
@@ -2464,7 +2471,8 @@ def _esc(s) -> str:
 
 async def apply_damage_split(target_id, damage_percent, *args, **kwargs) -> int:
     """
-    همان درصد تخریب وسیله از پول هدف (کیف پول + بانک)، از XP/لول او و از «تعداد» ملک‌ها و کارگرهایش کم می‌شود.
+    همان درصد تخریب وسیله از پول هدف (کیف پول + بانک) و از «تعداد» ملک‌ها و کارگرهایش کم می‌شود.
+    XP و لول هدف هرگز کم نمی‌شود.
     ملک/کارگرهای نابودشده تصادفی انتخاب می‌شوند. گرد کردن احتمالی است (مثلاً ۲۰٪ از ۳ ملک = ۰٫۶ → با احتمال ۶۰٪ یکی)
     و با درصد کمتر از ۱۰۰ هیچ‌وقت همه‌ی دارایی‌ها یک‌جا صفر نمی‌شود.
     خروجی: ارزش کل خسارت (برای پیام bot.py)
@@ -2478,17 +2486,12 @@ async def apply_damage_split(target_id, damage_percent, *args, **kwargs) -> int:
         return 0
 
     async def run(cur):
-        await cur.execute("SELECT balance, bank_balance, total_xp, level FROM users WHERE user_id=%s FOR UPDATE",
+        await cur.execute("SELECT balance, bank_balance FROM users WHERE user_id=%s FOR UPDATE",
                           (target_id,))
         u = await cur.fetchone()
         if not u:
             return None
         bal, bank = max(0, int(u["balance"] or 0)), max(0, int(u["bank_balance"] or 0))
-        cur_xp = max(0, int(u.get("total_xp") or 0))
-        old_lvl = _calc_level(cur_xp)
-        xp_lost = int(cur_xp * pct)
-        new_xp = max(0, cur_xp - xp_lost)
-        new_lvl = _calc_level(new_xp)
         await cur.execute("SELECT id, asset_type, asset_key, purchase_price FROM assets WHERE user_id=%s FOR UPDATE",
                           (target_id,))
         assets = list(await cur.fetchall())
@@ -2503,22 +2506,20 @@ async def apply_damage_split(target_id, damage_percent, *args, **kwargs) -> int:
             if pct < 1 and n > 1:
                 k = min(k, n - 1)
         removed = _rng.sample(assets, k) if k else []
-        if money_part <= 0 and not removed and xp_lost <= 0:
+        if money_part <= 0 and not removed:
             return None
         from_bal = min(bal, money_part)
         from_bank = min(bank, money_part - from_bal)
         money_part = from_bal + from_bank
         await cur.execute(
-            "UPDATE users SET balance = balance - %s, bank_balance = bank_balance - %s, "
-            "total_xp = %s, level = %s WHERE user_id=%s",
-            (from_bal, from_bank, new_xp, new_lvl, target_id))
+            "UPDATE users SET balance = balance - %s, bank_balance = bank_balance - %s WHERE user_id=%s",
+            (from_bal, from_bank, target_id))
         if removed:
             ids = [int(a["id"]) for a in removed]
             await cur.execute(f"DELETE FROM assets WHERE id IN ({','.join(['%s'] * len(ids))})", ids)
         asset_value = sum(int(a["purchase_price"] or 0) for a in removed)
         return {"money": money_part, "assets": [(a["asset_type"], a["asset_key"]) for a in removed],
-                "asset_value": asset_value, "total": money_part + asset_value,
-                "xp_lost": xp_lost, "old_lvl": old_lvl, "new_lvl": new_lvl}
+                "asset_value": asset_value, "total": money_part + asset_value}
 
     try:
         res = await _tx(run)
@@ -2540,10 +2541,6 @@ apply_damage_split._zar = True
 
 def _damage_report(d: dict) -> str:
     lines = [f"💰 پول: {_fmt(d['money'])}"]
-    if d.get("xp_lost"):
-        ol, nl = d.get("old_lvl", 1), d.get("new_lvl", 1)
-        lvl_txt = f" (لول {ol} ← {nl})" if nl != ol else f" (لول {nl})"
-        lines.append(f"⭐ XP: -{_fmt(d['xp_lost'])}{lvl_txt}")
     counts = {}
     for t, k in d["assets"]:
         counts[(t, k)] = counts.get((t, k), 0) + 1
@@ -2625,7 +2622,7 @@ def _help_pages() -> list:
           "۱. وسیله شلیک و مهمات را از بازار سیاه بخر\n۲. روی پیام هدف ریپلای کن\n۳. دستور شلیک را بفرست:\n"
           + cmds + "\n\n⚠️ <b>قوانین:</b>\n"
           f" • هر وسیله شلیک بعد از شلیک {LAUNCH_COOLDOWN // 60} دقیقه خنک می‌شود؛ با چند وسیله می‌توانی پشت‌سرهم شلیک کنی\n"
-          " • همان درصد تخریب وسیله از پول (کیف + بانک)، XP/لول و تعداد ملک‌ها و کارگرهای هدف کم می‌شود؛ "
+          " • همان درصد تخریب وسیله از پول (کیف + بانک) و تعداد ملک‌ها و کارگرهای هدف کم می‌شود (XP و لول کم نمی‌شود)؛ "
           "ملک و کارگرهای نابودشده تصادفی انتخاب می‌شوند\n"
           " • به کاربران بن‌شده نمی‌توان حمله کرد یا پول انتقال داد\n"
           " • بمب‌ها قابل دفاع نیستند، فقط موشک و پهپاد\n"
@@ -3389,6 +3386,70 @@ async def _load_controls_and_design():
     _menu_colors.update({k: v for k, v in raw_mc.items() if k in valid_keys and v in MENU_COLORS and v})
 
 
+# ═══════════ آیتم‌ها و قیمت‌های بازی (قابل ویرایش از پنل) ═══════════
+GAME_ITEM_CATS = ("property", "worker", "item")
+
+
+def _item_store(cat: str) -> dict:
+    return {"property": config.PROPERTIES, "worker": config.WORKERS, "item": config.BLACKMARKET_ITEMS}[cat]
+
+
+def _apply_item_to_config(cat: str, key: str, data: dict, active: bool):
+    """اعمال فوری تغییر آیتم روی config (بدون نیاز به ری‌استارت)"""
+    store = _item_store(cat)
+    if active:
+        store[key] = data
+    else:
+        store.pop(key, None)
+
+
+async def _load_game_items():
+    """بارگذاری آیتم‌های بازی از دیتابیس و جایگزینی در config (ثبت اولیه از config.py در اولین اجرا)"""
+    await _ensure_tables()
+    rows = await _fetch("SELECT category, item_key FROM game_items")
+    existing = {(r["category"], r["item_key"]) for r in rows}
+    # افزودن آیتم‌های جدید config.py که هنوز در دیتابیس نیستند (آیتم حذف‌شده با active=0 دوباره اضافه نمی‌شود)
+    for cat in GAME_ITEM_CATS:
+        for k, v in _item_store(cat).items():
+            if (cat, k) not in existing:
+                await _exec("INSERT INTO game_items (category, item_key, data, active, sort) VALUES (%s,%s,%s,1,0)",
+                            (cat, k, json.dumps(v, ensure_ascii=False)))
+    rows = await _fetch("SELECT category, item_key, data, active FROM game_items")
+    stores = {"property": {}, "worker": {}, "item": {}}
+    for r in rows:
+        if not r["active"]:
+            continue
+        try:
+            d = json.loads(r["data"])
+        except Exception:
+            continue
+        if r["category"] in stores and isinstance(d, dict):
+            stores[r["category"]][r["item_key"]] = d
+    for cat in GAME_ITEM_CATS:
+        store = _item_store(cat)
+        store.clear()
+        store.update(stores[cat])
+    logger.info(f"🎮 آیتم‌های بازی بارگذاری شد: ملک {len(stores['property'])} | کارگر {len(stores['worker'])} | بازار سیاه {len(stores['item'])}")
+
+
+async def _load_game_settings():
+    """بارگذاری تنظیمات عمومی قیمت‌ها (حداقل/حداکثر شرط، سود بانک، پایه ارتقای انبار)"""
+    global MIN_BET, MAX_BET, WAREHOUSE_UPGRADE_BASE
+    raw = _loads(await _get_setting("game_settings", "{}"))
+    if not raw:
+        return
+    MIN_BET = _to_int(raw.get("min_bet"), MIN_BET)
+    MAX_BET = _to_int(raw.get("max_bet"), MAX_BET)
+    try:
+        config.BANK_RATE = float(raw.get("bank_rate", getattr(config, "BANK_RATE", 0.02)))
+    except (TypeError, ValueError):
+        pass
+    WAREHOUSE_UPGRADE_BASE = _to_int(raw.get("warehouse_base"), WAREHOUSE_UPGRADE_BASE)
+    for g in GAMES.values():
+        g["min_bet"] = MIN_BET
+        g["max_bet"] = max(MAX_BET, MIN_BET)
+
+
 @_admin
 async def admin_vip_list(request, body):
     await _ensure_tables()
@@ -3507,6 +3568,148 @@ async def admin_design_save(request, body):
     if _utils and hasattr(_utils, "build_main_menu_kb"):
         _utils.MAIN_MENU_KB = _utils.build_main_menu_kb()
     return _json({"ok": True, "design": dict(_design), "menu_colors": dict(_menu_colors)})
+
+
+@_admin
+async def admin_gameitems_list(request, body):
+    await _load_game_items()
+    rows = await _fetch("SELECT category, item_key, data, active, sort FROM game_items ORDER BY sort, item_key")
+    out = {"property": [], "worker": [], "item": []}
+    for r in rows:
+        try:
+            d = json.loads(r["data"])
+        except Exception:
+            continue
+        if not isinstance(d, dict):
+            continue
+        d["_key"] = r["item_key"]
+        d["_active"] = bool(r["active"])
+        d["_sort"] = int(r["sort"] or 0)
+        out[r["category"]].append(d)
+    return _json({"ok": True, "items": out})
+
+
+@_admin
+async def admin_gameitems_save(request, body):
+    cat = str(body.get("category") or "")
+    key = str(body.get("key") or "").strip()
+    data = body.get("data") if isinstance(body.get("data"), dict) else {}
+    if cat not in GAME_ITEM_CATS:
+        return _err("دسته نامعتبر است")
+    if not re.fullmatch(r"[a-zA-Z0-9_]{2,64}", key):
+        return _err("کلید آیتم باید حروف/عدد/آندرلاین انگلیسی باشد (۲ تا ۶۴ کاراکتر)")
+    await _ensure_tables()
+    existing = await _fetch("SELECT data FROM game_items WHERE category=%s AND item_key=%s", (cat, key), one=True)
+    base = json.loads(existing["data"]) if existing else {}
+    name = str(data.get("name") or base.get("name") or "").strip()[:100]
+    if not name:
+        return _err("نام آیتم را وارد کن")
+    emoji = str(data.get("emoji") or base.get("emoji") or "•").strip()[:16]
+    price = _to_int(data.get("price", base.get("price", 0)), 0) or 0
+    if price < 0 or price > 10 ** 15:
+        return _err("قیمت نامعتبر است")
+    merged = dict(base)
+    merged.update({"name": name, "emoji": emoji, "price": price})
+    if cat in ("property", "worker"):
+        income = _to_int(data.get("income", base.get("income", 0)), 0) or 0
+        if income < 0 or income > 10 ** 15:
+            return _err("درآمد نامعتبر است")
+        merged["income"] = income
+    else:
+        itype = str(data.get("type") or base.get("type") or "projectile")
+        if itype not in ("launcher", "projectile", "defense"):
+            return _err("نوع آیتم نامعتبر است")
+        merged["type"] = itype
+        if itype == "projectile":
+            try:
+                dmg = float(data.get("damage", base.get("damage", 0)))
+            except (TypeError, ValueError):
+                return _err("درصد تخریب نامعتبر است")
+            if dmg < 0 or dmg > 1:
+                return _err("درصد تخریب باید بین ۰ تا ۱ باشد (مثلاً 0.2 = ۲۰٪)")
+            merged["damage"] = dmg
+            if data.get("command"):
+                merged["command"] = str(data["command"])[:100]
+            merged["defense_type"] = str(data.get("defense_type") or base.get("defense_type") or "") or None
+        elif itype == "defense":
+            try:
+                dc = float(data.get("defense_chance", base.get("defense_chance", 0)))
+            except (TypeError, ValueError):
+                return _err("احتمال دفاع نامعتبر است")
+            if dc < 0 or dc > 1:
+                return _err("احتمال دفاع باید بین ۰ تا ۱ باشد")
+            merged["defense_chance"] = dc
+            merged["defends_against"] = str(data.get("defends_against") or base.get("defends_against") or "") or None
+        elif itype == "launcher":
+            launches = data.get("launches", base.get("launches", []))
+            if isinstance(launches, str):
+                launches = [x.strip() for x in launches.split(",") if x.strip()]
+            if not isinstance(launches, list):
+                return _err("لیست مهمات نامعتبر است")
+            valid_proj = {k for k, v in _bm_items().items() if v.get("type") == "projectile"}
+            merged["launches"] = [str(x) for x in launches if str(x) in valid_proj]
+    sort = _to_int(body.get("sort", 0), 0) or 0
+    await _exec("INSERT INTO game_items (category, item_key, data, active, sort) VALUES (%s,%s,%s,1,%s) "
+                "ON DUPLICATE KEY UPDATE data=VALUES(data), active=1, sort=VALUES(sort)",
+                (cat, key, json.dumps(merged, ensure_ascii=False), sort))
+    _apply_item_to_config(cat, key, merged, True)
+    logger.warning(f"🛠 آیتم بازی ذخیره شد: {cat}:{key} price={price}")
+    return _json({"ok": True})
+
+
+@_admin
+async def admin_gameitems_toggle(request, body):
+    cat = str(body.get("category") or "")
+    key = str(body.get("key") or "")
+    if cat not in GAME_ITEM_CATS or not key:
+        return _err("آیتم نامعتبر است")
+    await _ensure_tables()
+    n = await _exec("UPDATE game_items SET active = 1 - active WHERE category=%s AND item_key=%s", (cat, key))
+    if not n:
+        return _err("آیتم پیدا نشد", 404)
+    r = await _fetch("SELECT data, active FROM game_items WHERE category=%s AND item_key=%s", (cat, key), one=True)
+    if r:
+        _apply_item_to_config(cat, key, json.loads(r["data"]), bool(r["active"]))
+    return _json({"ok": True})
+
+
+@_admin
+async def admin_gamesettings_get(request, body):
+    return _json({"ok": True, "settings": {
+        "min_bet": MIN_BET, "max_bet": MAX_BET,
+        "bank_rate": float(getattr(config, "BANK_RATE", 0.02)),
+        "warehouse_base": WAREHOUSE_UPGRADE_BASE,
+    }})
+
+
+@_admin
+async def admin_gamesettings_save(request, body):
+    global MIN_BET, MAX_BET, WAREHOUSE_UPGRADE_BASE
+    s = body.get("settings") if isinstance(body.get("settings"), dict) else body
+    min_bet = _to_int(s.get("min_bet"), MIN_BET)
+    max_bet = _to_int(s.get("max_bet"), MAX_BET)
+    wh_base = _to_int(s.get("warehouse_base"), WAREHOUSE_UPGRADE_BASE)
+    try:
+        bank_rate = float(s.get("bank_rate", getattr(config, "BANK_RATE", 0.02)))
+    except (TypeError, ValueError):
+        return _err("سود بانک نامعتبر است")
+    if min_bet is None or min_bet < 0 or max_bet is None or max_bet < min_bet:
+        return _err("حداقل/حداکثر شرط نامعتبر است")
+    if bank_rate < 0 or bank_rate > 1:
+        return _err("سود بانک باید بین ۰ تا ۱ باشد (مثلاً 0.02 = ۲٪)")
+    if wh_base is None or wh_base <= 0:
+        return _err("مبلغ پایه ارتقای انبار نامعتبر است")
+    MIN_BET, MAX_BET = min_bet, max_bet
+    config.BANK_RATE = bank_rate
+    WAREHOUSE_UPGRADE_BASE = wh_base
+    for g in GAMES.values():
+        g["min_bet"] = MIN_BET
+        g["max_bet"] = max(MAX_BET, MIN_BET)
+    await _set_setting("game_settings", json.dumps({
+        "min_bet": MIN_BET, "max_bet": MAX_BET, "bank_rate": bank_rate, "warehouse_base": wh_base
+    }, ensure_ascii=False))
+    logger.warning(f"🛠 تنظیمات بازی ذخیره شد: min={MIN_BET} max={MAX_BET} bank={bank_rate} wh={wh_base}")
+    return _json({"ok": True})
 
 
 @_admin
@@ -3735,6 +3938,9 @@ def create_app() -> web.Application:
         "vip/list": admin_vip_list, "vip/set": admin_vip_set, "vip/remove": admin_vip_remove,
         "controls/get": admin_controls_get, "controls/save": admin_controls_save,
         "design/get": admin_design_get, "design/save": admin_design_save,
+        "gameitems/list": admin_gameitems_list, "gameitems/save": admin_gameitems_save,
+        "gameitems/toggle": admin_gameitems_toggle,
+        "gamesettings/get": admin_gamesettings_get, "gamesettings/save": admin_gamesettings_save,
     }
     for p, h in admin_routes.items():
         app.router.add_post(f"/admin/api/{p}", h)
@@ -3787,6 +3993,8 @@ async def start_webapp(*args, **kwargs):
             await _load_bank_locks()
             await _load_controls_and_design()
             await _seed_vip_products()
+            await _load_game_items()
+            await _load_game_settings()
     except Exception:
         logger.exception("setup_bot خودکار ناموفق")
     try:
