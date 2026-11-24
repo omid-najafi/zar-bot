@@ -59,32 +59,51 @@ SOLO_SESSION_TTL = 3600
 SWEEP_INTERVAL = 3
 LAUNCH_COOLDOWN = int(getattr(config, "LAUNCH_COOLDOWN_SECONDS", 3600))  # خنک شدن هر وسیله شلیک
 MAX_LEVEL = 50
-XP_MIN = int(getattr(config, "MINIAPP_XP_MIN", 15))              # حداقل XP برد
-XP_MAX = int(getattr(config, "MINIAPP_XP_MAX", 2500))            # حداکثر XP برد
-XP_DIVISOR = int(getattr(config, "MINIAPP_XP_DIVISOR", 10000))  # XP برد = مبلغ شرط ÷ این عدد
 MIN_BET = int(os.getenv("MINIAPP_MIN_BET") or getattr(config, "MINIAPP_MIN_BET", 10_000))  # حداقل شرط کازینو
 LAUNCHER_MAX = int(os.getenv("LAUNCHER_MAX_PER_ITEM") or 3)  # از هر وسیله شلیک حداکثر ۳ عدد
-LAUNCHER_MAX_VIP = 6                                          # سقف وسیله شلیک برای VIP
+VIP_LAUNCHER_MAX = 6                                          # برای کاربران VIP: حداکثر ۶ عدد از هر وسیله شلیک
 DEFENSE_MAX = 1                                               # از هر سیستم دفاعی فقط ۱ عدد
-BANK_LOCK_SECONDS = int(getattr(config, "BANK_LOCK_SECONDS", 5 * 3600))  # قفل برداشت بعد از واریز (۵ ساعت)
-WH_MAX_LEVEL = 10                                             # حداکثر لول انبار
+WAREHOUSE_MAX_LEVEL = 10                                      # حداکثر لول انبار (لول ۱ = ۲ تا → لول ۱۰ = ۲۰ تا)
+VIP_AMMO_BONUS = 5                                            # +۵ ظرفیت برای هر مهمات در هر لول انبار برای VIP
+VIP_INCOME_BONUS = 0.10                                       # +۱۰٪ سود بیشتر از ملک و کارگر برای VIP
+VIP_BANK_RATE = 0.05                                          # سود روزانه ۵٪ بانک برای VIP
+BANK_LOCK_SECS = 5 * 3600                                     # قفل ۵ ساعته برداشت بانک پس از واریز
+
 _banned: set = set()                                          # کاربران بن‌شده (کش حافظه)
 _bot_off = False                                              # حالت خاموشی بات (از پنل مدیریت)
 _admins: set = set()                                          # ادمین‌های افزوده‌شده از پنل (کش حافظه)
+_vip_expires: dict[int, float] = {}                           # user_id -> زمان انقضای VIP
+_warehouse_lvl: dict[int, int] = {}                           # user_id -> لول انبار (۱..۱۰)
+_bank_unlock: dict[int, float] = {}                           # user_id -> زمان باز شدن برداشت بانک
 
-# بخش‌های قابل خاموش/روشن کردن از پنل مدیریت
-SECTIONS = [
-    ("bank", "🏦 بانک"), ("property", "🏠 ملک‌ها"), ("worker", "👷 کارگرها"), ("casino", "🎰 کازینو"),
-    ("missions", "🎯 ماموریت‌ها"), ("transfer", "💸 انتقال"), ("kabareh", "🎭 کاباره زر"),
-    ("leaderboard", "🏆 لیدربورد"), ("blackmarket", "💀 بازار سیاه"), ("shop", "💎 خرید کوین و لول"),
-    ("gift", "🎁 کد هدیه"), ("help", "📚 راهنما"),
-]
-_settings_cache: dict = {}
-_settings_at = 0.0
-_settings_loaded = False
+BOT_SECTIONS = {
+    "casino": "🎰 کازینو (مینی‌اپ)",
+    "bank": "🏦 بانک",
+    "properties": "🏠 ملک‌ها",
+    "workers": "👷 کارگرها",
+    "missions": "🎯 ماموریت‌ها",
+    "transfer": "💸 انتقال زرکوین",
+    "kabareh": "🎭 کاباره زر",
+    "leaderboard": "🏆 لیدربورد",
+    "blackmarket": "💀 بازار سیاه و شلیک",
+    "shop": "💎 فروشگاه (کوین، لول و VIP)",
+    "zar": "💰 دستور «زر»",
+    "gifts": "🎁 کد هدیه",
+}
+_DEFAULT_DESIGN = {
+    "btn_primary": "#e11d48",
+    "btn_gold": "#f5c451",
+    "btn_green": "#10b981",
+    "btn_blue": "#38bdf8",
+    "btn_gold_text": "#1b1200",
+    "bg_color": "#07070c",
+}
+_controls: dict = {"disabled_games": [], "disabled_sections": [], "texts": {}}
+_design: dict = dict(_DEFAULT_DESIGN)
 
 ADMIN_USERNAME = (os.getenv("ADMIN_USERNAME") or getattr(config, "ADMIN_USERNAME", "") or "admin").strip()
 ADMIN_PASSWORD = (os.getenv("ADMIN_PASSWORD") or getattr(config, "ADMIN_PASSWORD", "") or "admin").strip()
+ADMIN_COOKIE = "zar_admin"
 
 # ═══════════ لیست بازی‌ها ═══════════
 _DEFAULT_GAMES = {
@@ -244,11 +263,15 @@ def _err(msg: str, status: int = 400, code: str = "error", **extra) -> web.Respo
 
 
 async def _body(request: web.Request) -> dict:
+    if "_json_body" in request:
+        return request["_json_body"]
     try:
         data = await request.json()
-        return data if isinstance(data, dict) else {}
+        res = data if isinstance(data, dict) else {}
     except Exception:
-        return {}
+        res = {}
+    request["_json_body"] = res
+    return res
 
 
 async def _balance(uid: int) -> int:
@@ -302,23 +325,31 @@ def _xp_for_level(level: int) -> int:
     return sum((2 ** lv) * 1000 for lv in range(1, max(1, level)))
 
 
-def _win_xp(bet: int) -> int:
-    """XP برد بر اساس مبلغ شرط — فقط با برد داده می‌شود (حداقل XP_MIN، حداکثر XP_MAX)"""
-    try:
-        return max(XP_MIN, min(XP_MAX, int(bet) // XP_DIVISOR))
-    except Exception:
-        return XP_MIN
+MIN_WIN_XP = 15
+MAX_WIN_XP = 2500
+
+
+def _calc_win_xp(bet: int) -> int:
+    """XP فقط در صورت برد؛ متناسب با مبلغ بازی از ۱۵ تا حداکثر ۲۵۰۰"""
+    b = max(0, int(bet or 0))
+    if b <= 0:
+        return 0
+    if MAX_BET <= MIN_BET:
+        return MAX_WIN_XP
+    ratio = max(0.0, min(1.0, (b - MIN_BET) / (MAX_BET - MIN_BET)))
+    return min(MAX_WIN_XP, max(MIN_WIN_XP, round(MIN_WIN_XP + ratio * (MAX_WIN_XP - MIN_WIN_XP))))
 
 
 async def _track_async(uid: int, game_key: str, solo: bool, won: bool, bet: int = 0):
     try:
         mk = _MISSION_KEYS.get(game_key) or ("casino" if solo else None)
-        xp = _win_xp(bet) if won else 0  # XP فقط با برد و بر اساس مبلغ شرط
-        await db.progress_mission(uid, "play_any_game", 1, base_xp=xp)
+        # بازی بدون برد دیگر XP پایه نمی‌دهد؛ فقط ماموریت‌ها ثبت می‌شوند
+        await db.progress_mission(uid, "play_any_game", 1, base_xp=0)
         if mk:
             await db.progress_mission(uid, f"play_{mk}", 1, base_xp=0)
         if won:
-            await db.progress_mission(uid, "win_any_game", 1, base_xp=0)
+            win_xp = _calc_win_xp(bet)
+            await db.progress_mission(uid, "win_any_game", 1, base_xp=win_xp)
             if mk:
                 await db.progress_mission(uid, f"win_{mk}", 1, base_xp=0)
     except Exception as e:
@@ -330,12 +361,13 @@ def _track(uid: int, game_key: str, solo: bool, won: bool, bet: int = 0):
 
 
 async def _take_bet(uid: int, game_key: str, bet) -> str | None:
+    if (_bot_off or _section_disabled("casino")) and uid not in _owner_ids():
+        return _ctrl_text("section_off", "⛔ کازینو موقتاً توسط مدیریت غیرفعال شده است.")
+    if _game_disabled(game_key) and uid not in _owner_ids():
+        return _ctrl_text("section_off", "⛔ این بازی موقتاً توسط مدیریت غیرفعال شده است.")
     g = GAMES.get(game_key)
     if not g:
         return "بازی نامعتبر است"
-    s = await _get_settings()
-    if s.get(f"game_off:{game_key}") == "1":
-        return "این بازی فعلاً غیرفعال است"
     if not isinstance(bet, int) or bet <= 0:
         return "مبلغ شرط نامعتبر است"
     if bet < g["min_bet"]:
@@ -392,32 +424,22 @@ async def _ensure_tables():
                 await cur.execute(
                     "CREATE TABLE IF NOT EXISTS bot_admins (user_id BIGINT PRIMARY KEY, note VARCHAR(255) NULL, "
                     "added_at DOUBLE NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
+                await cur.execute(
+                    "CREATE TABLE IF NOT EXISTS vip_users (user_id BIGINT PRIMARY KEY, expires_at DOUBLE NOT NULL, "
+                    "note VARCHAR(255) NULL, updated_at DOUBLE NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
+                await cur.execute(
+                    "CREATE TABLE IF NOT EXISTS user_warehouse (user_id BIGINT PRIMARY KEY, level INT NOT NULL DEFAULT 1, "
+                    "updated_at DOUBLE NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
+                await cur.execute(
+                    "CREATE TABLE IF NOT EXISTS bank_locks (user_id BIGINT PRIMARY KEY, unlock_at DOUBLE NOT NULL) "
+                    "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
                 try:
                     await cur.execute("ALTER TABLE inventory ADD COLUMN last_used DOUBLE NULL DEFAULT NULL")
                 except Exception:
                     pass  # ستون از قبل وجود دارد
-                for _col, _ddl in (("warehouse_level", "INT NOT NULL DEFAULT 1"),
-                                   ("vip_until", "DOUBLE NULL DEFAULT NULL"),
-                                   ("last_bank_deposit", "DOUBLE NULL DEFAULT NULL")):
-                    try:
-                        await cur.execute(f"ALTER TABLE users ADD COLUMN {_col} {_ddl}")
-                    except Exception:
-                        pass  # ستون از قبل وجود دارد
-                # محصولات پیش‌فرض VIP (اگر نبودند ساخته می‌شوند)
-                for _title, _days, _price, _desc in (
-                    ("👑 VIP یک‌ماهه", 30, 80_000, "اشتراک VIP یک ماهه — تا ۶ وسیله شلیک، +۵ ظرفیت انبار، +۱۰٪ سود ملک و کارگر، سود بانک ۵٪"),
-                    ("👑 VIP سه‌ماهه", 90, 220_000, "اشتراک VIP سه ماهه — تا ۶ وسیله شلیک، +۵ ظرفیت انبار، +۱۰٪ سود ملک و کارگر، سود بانک ۵٪"),
-                    ("👑 VIP شش‌ماهه", 180, 450_000, "اشتراک VIP شش ماهه — تا ۶ وسیله شلیک، +۵ ظرفیت انبار، +۱۰٪ سود ملک و کارگر، سود بانک ۵٪"),
-                ):
-                    await cur.execute("SELECT id FROM shop_products WHERE title=%s", (_title,))
-                    if not await cur.fetchone():
-                        await cur.execute(
-                            "INSERT INTO shop_products (title, description, rewards, price_toman, price_stars, active, sort, created_at) "
-                            "VALUES (%s,%s,%s,%s,0,1,0,%s)",
-                            (_title, _desc, json.dumps({"vip_days": _days}, ensure_ascii=False), _price, time.time()))
             await conn.commit()
         _tables_ready = True
-        logger.info("✅ جداول کد هدیه / خنک‌شدن لانچر آماده است")
+        logger.info("✅ جداول سیستم (فروشگاه، انبار، VIP، قفل بانک، کد هدیه) آماده است")
 
 
 async def _fetch(sql: str, args=(), one: bool = False):
@@ -465,47 +487,85 @@ def _defense_keys() -> set:
     return {k for k, v in _bm_items().items() if v.get("type") == "defense"}
 
 
-def _item_cap(key: str, vip: bool = False) -> int:
-    """سقف تعداد مجاز یک آیتم بازار سیاه (۰ = نامحدود) — مهمات با ظرفیت انبار محدود می‌شود"""
+def is_vip(uid: int) -> bool:
+    try:
+        return float(_vip_expires.get(int(uid), 0)) > time.time()
+    except (TypeError, ValueError):
+        return False
+
+
+def vip_days_left(uid: int) -> int:
+    rem = float(_vip_expires.get(int(uid), 0)) - time.time()
+    return max(0, math.ceil(rem / 86400)) if rem > 0 else 0
+
+
+def warehouse_upgrade_cost(cur_level: int) -> int:
+    """قیمت ارتقا از لول فعلی به لول بعدی: (2 ** level) * 1,000,000"""
+    return (2 ** max(1, int(cur_level))) * 1_000_000
+
+
+async def get_warehouse_level(uid: int) -> int:
+    uid = int(uid)
+    if uid in _warehouse_lvl:
+        return _warehouse_lvl[uid]
+    try:
+        await _ensure_tables()
+        r = await _fetch("SELECT level FROM user_warehouse WHERE user_id=%s", (uid,), one=True)
+        lvl = max(1, min(WAREHOUSE_MAX_LEVEL, int(r["level"]))) if r else 1
+    except Exception:
+        lvl = 1
+    _warehouse_lvl[uid] = lvl
+    return lvl
+
+
+def ammo_cap(wh_level: int, vip: bool) -> int:
+    """ظرفیت هر مهمات در انبار: لول × ۲ (برای VIP +۵ اضافه می‌شود)"""
+    return max(1, min(WAREHOUSE_MAX_LEVEL, int(wh_level))) * 2 + (VIP_AMMO_BONUS if vip else 0)
+
+
+def launcher_cap(vip: bool) -> int:
+    return VIP_LAUNCHER_MAX if vip else LAUNCHER_MAX
+
+
+def _item_cap(key: str) -> int:
+    """سقف پایه یک آیتم بازار سیاه (بدون در نظر گرفتن کاربر)"""
     t = _bm_items().get(key, {}).get("type")
     if t == "defense":
         return DEFENSE_MAX
     if t == "launcher":
-        return LAUNCHER_MAX_VIP if vip else LAUNCHER_MAX
+        return LAUNCHER_MAX
+    if t == "projectile":
+        return 2
     return 0
 
 
-def _wh_capacity(level: int, vip: bool = False) -> int:
-    """ظرفیت هر مهمات در انبار: ۲ × لول (+۵ برای VIP)"""
-    return 2 * max(1, min(WH_MAX_LEVEL, int(level))) + (5 if vip else 0)
+async def _item_cap_for(uid: int, key: str) -> int:
+    """سقف دقیق یک آیتم برای کاربر مشخص (با لحاظ کردن لول انبار و اشتراک VIP)"""
+    t = _bm_items().get(key, {}).get("type")
+    vip = is_vip(uid)
+    if t == "defense":
+        return DEFENSE_MAX
+    if t == "launcher":
+        return launcher_cap(vip)
+    if t == "projectile":
+        return ammo_cap(await get_warehouse_level(uid), vip)
+    return 0
 
 
-def _wh_upgrade_cost(level: int) -> int:
-    """هزینه ارتقای انبار از لول فعلی: ۲^لول × ۱٬۰۰۰٬۰۰۰"""
-    return (2 ** max(1, int(level))) * 1_000_000
+def _ctrl_text(key: str, default: str = "") -> str:
+    v = (_controls.get("texts") or {}).get(key)
+    return str(v).strip() if isinstance(v, str) and v.strip() else default
 
 
-async def _wh_level(uid: int) -> int:
-    try:
-        r = await _fetch("SELECT warehouse_level FROM users WHERE user_id=%s", (uid,), one=True)
-        return max(1, min(WH_MAX_LEVEL, int(r["warehouse_level"] or 1))) if r else 1
-    except Exception:
-        return 1
+def _game_disabled(game_key: str) -> bool:
+    return game_key in (_controls.get("disabled_games") or [])
 
 
-async def _vip_until(uid: int) -> float:
-    try:
-        r = await _fetch("SELECT vip_until FROM users WHERE user_id=%s", (uid,), one=True)
-        return float(r["vip_until"]) if r and r["vip_until"] else 0.0
-    except Exception:
-        return 0.0
+def _section_disabled(sec: str) -> bool:
+    return sec in (_controls.get("disabled_sections") or [])
 
 
-async def _is_vip(uid: int) -> bool:
-    return await _vip_until(uid) > time.time()
-
-
-GRANT_KINDS = ("coins", "bank", "xp", "levels", "property", "worker", "item", "warehouse", "vip_days")
+GRANT_KINDS = ("coins", "bank", "xp", "levels", "vip_days", "property", "worker", "item")
 
 
 async def _grant(cur, uid: int, kind: str, key: str, n: int) -> int:
@@ -544,18 +604,36 @@ async def _grant(cur, uid: int, kind: str, key: str, n: int) -> int:
                 "INSERT INTO assets (user_id, asset_type, asset_key, purchase_price, daily_income, purchased_at) "
                 "VALUES (%s,%s,%s,%s,%s,%s)", (uid, kind, key, int(info["price"]), int(info["income"]), _now_iso()))
         return add
+    if kind == "vip_days":
+        days = min(n, 3650)
+        now_t = time.time()
+        await cur.execute("SELECT expires_at FROM vip_users WHERE user_id=%s FOR UPDATE", (uid,))
+        row = await cur.fetchone()
+        base = max(now_t, float(row["expires_at"])) if row else now_t
+        new_exp = base + days * 86400
+        await cur.execute(
+            "INSERT INTO vip_users (user_id, expires_at, note, updated_at) VALUES (%s,%s,%s,%s) "
+            "ON DUPLICATE KEY UPDATE expires_at=VALUES(expires_at), updated_at=VALUES(updated_at)",
+            (uid, new_exp, "فعال‌شده خودکار", now_t))
+        _vip_expires[int(uid)] = new_exp
+        return days
     if kind == "item":
         info = _bm_items().get(key)
         if not info:
             return 0
         add = min(n, 100)
-        await cur.execute("SELECT vip_until, warehouse_level FROM users WHERE user_id=%s", (uid,))
-        ur = await cur.fetchone()
-        vip = bool(ur and ur["vip_until"] and float(ur["vip_until"]) > time.time())
-        if info.get("type") == "projectile":
-            cap = _wh_capacity(int(ur["warehouse_level"] or 1) if ur else 1, vip)
+        t = info.get("type")
+        vip = is_vip(uid)
+        if t == "defense":
+            cap = DEFENSE_MAX
+        elif t == "launcher":
+            cap = launcher_cap(vip)
+        elif t == "projectile":
+            await cur.execute("SELECT level FROM user_warehouse WHERE user_id=%s", (uid,))
+            wr = await cur.fetchone()
+            cap = ammo_cap(int(wr["level"]) if wr else 1, vip)
         else:
-            cap = _item_cap(key, vip)
+            cap = 0
         if cap:
             await cur.execute("SELECT COUNT(*) AS c FROM inventory WHERE user_id=%s AND item_key=%s", (uid, key))
             add = max(0, min(n, cap - int((await cur.fetchone())["c"])))
@@ -563,23 +641,6 @@ async def _grant(cur, uid: int, kind: str, key: str, n: int) -> int:
             await cur.execute("INSERT INTO inventory (user_id, item_key, purchased_at) VALUES (%s,%s,%s)",
                               (uid, key, _now_iso()))
         return add
-    if kind == "warehouse":
-        await cur.execute("SELECT warehouse_level FROM users WHERE user_id=%s FOR UPDATE", (uid,))
-        row = await cur.fetchone()
-        if not row:
-            return 0
-        cur_lvl = int(row["warehouse_level"] or 1)
-        new_lvl = min(WH_MAX_LEVEL, cur_lvl + n)
-        await cur.execute("UPDATE users SET warehouse_level=%s WHERE user_id=%s", (new_lvl, uid))
-        return new_lvl - cur_lvl
-    if kind == "vip_days":
-        await cur.execute("SELECT vip_until FROM users WHERE user_id=%s FOR UPDATE", (uid,))
-        row = await cur.fetchone()
-        if not row:
-            return 0
-        new_until = max(time.time(), float(row["vip_until"] or 0)) + n * 86400
-        await cur.execute("UPDATE users SET vip_until=%s WHERE user_id=%s", (new_until, uid))
-        return n
     return 0
 
 
@@ -613,23 +674,6 @@ async def _revoke(cur, uid: int, kind: str, key: str, n: int) -> int:
     if kind == "item":
         await cur.execute("DELETE FROM inventory WHERE user_id=%s AND item_key=%s ORDER BY id DESC LIMIT %s", (uid, key, n))
         return cur.rowcount
-    if kind == "warehouse":
-        await cur.execute("SELECT warehouse_level FROM users WHERE user_id=%s FOR UPDATE", (uid,))
-        row = await cur.fetchone()
-        if not row:
-            return 0
-        cur_lvl = int(row["warehouse_level"] or 1)
-        new_lvl = max(1, cur_lvl - n)
-        await cur.execute("UPDATE users SET warehouse_level=%s WHERE user_id=%s", (new_lvl, uid))
-        return cur_lvl - new_lvl
-    if kind == "vip_days":
-        await cur.execute("SELECT vip_until FROM users WHERE user_id=%s FOR UPDATE", (uid,))
-        row = await cur.fetchone()
-        if not row:
-            return 0
-        new_until = max(0.0, float(row["vip_until"] or 0) - n * 86400)
-        await cur.execute("UPDATE users SET vip_until=%s WHERE user_id=%s", (new_until, uid))
-        return n
     return 0
 
 
@@ -642,10 +686,8 @@ def _kind_label(kind: str, key: str) -> str:
         return "✨ XP"
     if kind == "levels":
         return "⭐ لول"
-    if kind == "warehouse":
-        return "🏭 لول انبار"
     if kind == "vip_days":
-        return "👑 روز اشتراک VIP"
+        return "👑 اشتراک VIP (روز)"
     store = {"property": config.PROPERTIES, "worker": config.WORKERS, "item": _bm_items()}.get(kind, {})
     info = store.get(key, {})
     return f"{info.get('emoji', '•')} {info.get('name', key)}"
@@ -660,13 +702,10 @@ def _norm_code(s) -> str:
 def _rewards_list(rewards: dict) -> list:
     """تبدیل rewards ذخیره‌شده به لیست (kind, key, n)"""
     out = []
-    for kind in ("coins", "bank", "xp", "levels"):
+    for kind in ("coins", "bank", "xp", "levels", "vip_days"):
         n = _to_int(rewards.get(kind), 0) or 0
         if n > 0:
             out.append((kind, "", n))
-    n = _to_int(rewards.get("vip_days"), 0) or 0
-    if n > 0:
-        out.append(("vip_days", "", n))
     for kind, field in (("property", "properties"), ("worker", "workers"), ("item", "items")):
         for key, n in (rewards.get(field) or {}).items():
             n = _to_int(n, 0) or 0
@@ -733,12 +772,14 @@ async def redeem_gift(user_id: int, code_raw: str) -> tuple[bool, str]:
     return ok, text
 
 
-# ═══════════ احراز هویت مینی‌اپ ═══════════
-def validate_init_data(init_data_raw: str) -> dict | None:
-    if not init_data_raw or not config.BOT_TOKEN:
-        return None
+# ═══════════ احراز هویت مینی‌اپ (سازگار با پروکسی و وب‌ویو) ═══════════
+USER_COOKIE = "zar_u"
+INIT_DATA_MAX_AGE = 7 * 86400  # ۷ روز (جلوگیری از خطا روی کش تلگرام با پروکسی)
+
+
+def _check_init_data_once(raw: str) -> dict | None:
     try:
-        parsed = urllib.parse.parse_qsl(init_data_raw, keep_blank_values=True)
+        parsed = urllib.parse.parse_qsl(raw, keep_blank_values=True)
     except Exception:
         return None
     pairs, received_hash = {}, None
@@ -753,10 +794,9 @@ def validate_init_data(init_data_raw: str) -> dict | None:
     secret_key = hmac.new(b"WebAppData", config.BOT_TOKEN.encode(), hashlib.sha256).digest()
     computed = hmac.new(secret_key, data_check.encode(), hashlib.sha256).hexdigest()
     if not hmac.compare_digest(computed, received_hash):
-        logger.warning("⚠️ initData نامعتبر — هش مطابقت ندارد")
         return None
     try:
-        if pairs.get("auth_date") and time.time() - int(pairs["auth_date"]) > 86400:
+        if pairs.get("auth_date") and time.time() - int(pairs["auth_date"]) > INIT_DATA_MAX_AGE:
             return None
         user = json.loads(pairs.get("user") or "null")
     except Exception:
@@ -764,8 +804,33 @@ def validate_init_data(init_data_raw: str) -> dict | None:
     return user if isinstance(user, dict) else None
 
 
+def validate_init_data(init_data_raw: str) -> dict | None:
+    if not init_data_raw or not config.BOT_TOKEN:
+        return None
+    u = _check_init_data_once(init_data_raw)
+    if u:
+        return u
+    # بعضی کلاینت‌ها/پروکسی‌ها tgWebAppData را یک بار اضافه URL-encode می‌کنند
+    decoded = urllib.parse.unquote(init_data_raw)
+    if decoded != init_data_raw:
+        u = _check_init_data_once(decoded)
+        if u:
+            return u
+    logger.warning("⚠️ initData نامعتبر — هش مطابقت ندارد")
+    return None
+
+
+def make_browser_token(uid: int, ttl: int = 30 * 86400) -> str:
+    if not config.BOT_TOKEN:
+        return ""
+    payload = {"uid": int(uid), "exp": int(time.time()) + ttl}
+    raw = json.dumps(payload, separators=(",", ":")).encode()
+    sig = hmac.new(config.BOT_TOKEN.encode(), raw, hashlib.sha256).hexdigest()
+    return base64.urlsafe_b64encode(raw).decode() + "." + sig
+
+
 def validate_browser_token(token: str) -> int | None:
-    if not token or "." not in token:
+    if not token or "." not in token or not config.BOT_TOKEN:
         return None
     try:
         raw_b64, sig = token.rsplit(".", 1)
@@ -781,15 +846,37 @@ def validate_browser_token(token: str) -> int | None:
         return None
 
 
+def _set_user_cookie(request: web.Request, resp: web.StreamResponse, uid: int):
+    tok = make_browser_token(uid)
+    if not tok:
+        return
+    https = request.secure or request.headers.get("X-Forwarded-Proto", "").split(",")[0].strip().lower() == "https"
+    resp.set_cookie(USER_COOKIE, tok, max_age=30 * 86400, httponly=True,
+                    samesite="None" if https else "Lax", secure=https, path="/")
+
+
 async def _get_user_for_request(request: web.Request) -> dict | None:
-    init_data = request.headers.get("X-Telegram-Init-Data") or request.query.get("init_data") or ""
+    body = await _body(request) if request.method == "POST" else {}
+    init_data = (
+        request.headers.get("X-Telegram-Init-Data")
+        or request.query.get("init_data")
+        or (body.get("_init_data") if isinstance(body.get("_init_data"), str) else "")
+        or ""
+    )
     user_id, tg = None, None
     if init_data:
         tg = validate_init_data(init_data)
         if tg:
             user_id = tg.get("id")
     if not user_id:
-        user_id = validate_browser_token(request.headers.get("X-Browser-Token") or request.query.get("token") or "")
+        tok = (
+            request.headers.get("X-Browser-Token")
+            or request.query.get("token")
+            or (body.get("_token") if isinstance(body.get("_token"), str) else "")
+            or request.cookies.get(USER_COOKIE)
+            or ""
+        )
+        user_id = validate_browser_token(tok)
     if not user_id:
         return None
     try:
@@ -820,13 +907,11 @@ def _auth(handler):
         if user.get("_banned"):
             return _err("🚫 شما از ربات محروم شده‌اید", 403, "banned")
         try:
-            s = await _get_settings()
-            if s.get("section_off:casino") == "1":
-                return _err("🎰 کازینو فعلاً غیرفعال است", 403, "casino_off")
-        except Exception:
-            pass
-        try:
-            return await handler(request, user)
+            resp = await handler(request, user)
+            # ست کردن کوکی نشست امضاشده برای پایداری ورود روی پروکسی‌ها
+            if not request.cookies.get(USER_COOKIE):
+                _set_user_cookie(request, resp, user["user_id"])
+            return resp
         except Exception as e:
             logger.exception(f"❌ خطای مینی‌اپ در {request.path}: {e}")
             return _err("خطای داخلی سرور — دوباره تلاش کن", 500, "server")
@@ -1027,7 +1112,7 @@ async def _settle(g: GameState, winner, reason: str):
     for uid in g.uids():
         if _user_games.get(uid) == g.game_id:
             _user_games.pop(uid, None)
-        _track(uid, g.game_key, False, uid == winner, g.contrib.get(uid, g.bet))
+        _track(uid, g.game_key, False, uid == winner, max(g.bet, g.pot // 2))
 
 
 async def _apply_outcome(g: GameState):
@@ -1185,15 +1270,25 @@ async def api_me(request, user):
     async with _matchmaking_lock:
         refunded = await _reclaim_orphan(uid)
     g = _active_game_of(uid)
+    is_adm = uid in _owner_ids()
+    casino_off = (_bot_off or _section_disabled("casino")) and not is_adm
+    enabled_games = [dict(key=k, **v) for k, v in GAMES.items() if is_adm or not _game_disabled(k)]
     return _json({
         "ok": True,
         "user": {"id": uid, "name": _uname(user), "balance": await _balance(uid),
-                 "level": _calc_level(int(user.get("total_xp", 0) or 0))},
-        "games": _games_for_client(await _get_settings()), "commission": COMMISSION_RATE,
+                 "level": _calc_level(int(user.get("total_xp", 0) or 0)),
+                 "vip": is_vip(uid), "vip_days": vip_days_left(uid)},
+        "games": enabled_games, "commission": COMMISSION_RATE,
         "match_timeout": MATCH_TIMEOUT, "turn_timeout": TURN_TIMEOUT, "max_bet": MAX_BET,
-        "xp": {"min": XP_MIN, "max": XP_MAX, "divisor": XP_DIVISOR},
         "wheel_segments": casino.WHEEL_SEGMENTS, "queue": _queue_info(uid), "game_id": g.game_id if g else None,
         "solo": _solo_view(_solo_sessions.get(uid)), "refunded": refunded,
+        "design": dict(_design),
+        "casino_off": casino_off,
+        "off_msg": _ctrl_text("section_off", "⛔ کازینو موقتاً توسط مدیریت غیرفعال شده است."),
+        "texts": {
+            "hero_title": _ctrl_text("miniapp_hero_title", ""),
+            "hero_sub": _ctrl_text("miniapp_hero_sub", ""),
+        },
     })
 
 
@@ -1361,12 +1456,6 @@ async def _sweeper():
             for k, t in list(_ban_notified.items()):
                 if now - t > 600:
                     _ban_notified.pop(k, None)
-            try:
-                await _get_settings()
-                if _utils and hasattr(_utils, "build_main_menu_kb"):
-                    _utils.MAIN_MENU_KB = _utils.build_main_menu_kb()
-            except Exception:
-                pass
             if len(_user_locks) > 5000:
                 for uid, lk in list(_user_locks.items()):
                     if not lk.locked():
@@ -1388,7 +1477,34 @@ def _client_ip(request) -> str:
     return (xff.split(",")[0].strip() if xff else request.remote) or "?"
 
 
+def _admin_secret() -> bytes:
+    return hashlib.sha256(f"zar-admin:{config.BOT_TOKEN}:{ADMIN_USERNAME}:{ADMIN_PASSWORD}".encode()).digest()
+
+
+def _make_admin_cookie(ttl: int = 24 * 3600) -> str:
+    payload = json.dumps({"u": ADMIN_USERNAME, "exp": int(time.time()) + ttl}, separators=(",", ":")).encode()
+    sig = hmac.new(_admin_secret(), payload, hashlib.sha256).hexdigest()
+    return base64.urlsafe_b64encode(payload).decode() + "." + sig
+
+
+def _valid_admin_cookie(tok: str) -> bool:
+    if not tok or "." not in tok:
+        return False
+    try:
+        raw_b64, sig = tok.rsplit(".", 1)
+        raw = base64.urlsafe_b64decode((raw_b64 + "=" * (-len(raw_b64) % 4)).encode())
+        expected = hmac.new(_admin_secret(), raw, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(sig, expected):
+            return False
+        p = json.loads(raw)
+        return p.get("exp", 0) > time.time() and hmac.compare_digest(str(p.get("u", "")).encode(), ADMIN_USERNAME.encode())
+    except Exception:
+        return False
+
+
 def _admin_ok(request) -> bool:
+    if _valid_admin_cookie(request.cookies.get(ADMIN_COOKIE, "")):
+        return True
     h = request.headers.get("Authorization", "")
     if not h.startswith("Basic "):
         return False
@@ -1397,9 +1513,7 @@ def _admin_ok(request) -> bool:
     except Exception:
         return False
     u, _, p = raw.partition(":")
-    ok_u = hmac.compare_digest(u.encode(), ADMIN_USERNAME.encode())
-    ok_p = hmac.compare_digest(p.encode(), ADMIN_PASSWORD.encode())
-    return ok_u and ok_p
+    return hmac.compare_digest(u.encode(), ADMIN_USERNAME.encode()) and hmac.compare_digest(p.encode(), ADMIN_PASSWORD.encode())
 
 
 def _admin(handler):
@@ -1409,12 +1523,11 @@ def _admin(handler):
         fails = [t for t in _admin_fails.get(ip, []) if now - t < 600]
         _admin_fails[ip] = fails
         if len(fails) >= 20:
-            return web.Response(status=429, text="تلاش‌های ناموفق زیاد — ۱۰ دقیقه بعد امتحان کن")
+            return _err("تلاش‌های ناموفق زیاد — ۱۰ دقیقه بعد امتحان کن", 429)
         if not _admin_ok(request):
             if request.headers.get("Authorization"):
                 fails.append(now)
-            return web.Response(status=401, text="🔒 نیاز به ورود",
-                                headers={"WWW-Authenticate": 'Basic realm="Zar Admin Panel", charset="UTF-8"'})
+            return _err("نیاز به ورود", 401, "auth")
         try:
             if request.method == "POST":
                 return await handler(request, await _body(request))
@@ -1423,6 +1536,35 @@ def _admin(handler):
             logger.exception(f"admin error {request.path}: {e}")
             return _err(f"خطای سرور: {e}", 500)
     return wrapper
+
+
+async def admin_login(request: web.Request):
+    ip = _client_ip(request)
+    now = time.time()
+    fails = [t for t in _admin_fails.get(ip, []) if now - t < 600]
+    _admin_fails[ip] = fails
+    if len(fails) >= 15:
+        return _err("تلاش‌های ناموفق زیاد — ۱۰ دقیقه بعد امتحان کن", 429)
+    body = await _body(request)
+    u = str(body.get("username") or "").strip()
+    p = str(body.get("password") or "")
+    ok = hmac.compare_digest(u.encode(), ADMIN_USERNAME.encode()) and hmac.compare_digest(p.encode(), ADMIN_PASSWORD.encode())
+    if not ok:
+        fails.append(now)
+        await asyncio.sleep(0.5)
+        return _err("نام کاربری یا رمز اشتباه است", 401)
+    _admin_fails.pop(ip, None)
+    resp = _json({"ok": True})
+    https = request.secure or request.headers.get("X-Forwarded-Proto", "").split(",")[0].strip().lower() == "https"
+    resp.set_cookie(ADMIN_COOKIE, _make_admin_cookie(), max_age=24 * 3600, httponly=True,
+                    samesite="Lax", secure=https, path="/")
+    return resp
+
+
+async def admin_logout(request: web.Request):
+    resp = _json({"ok": True})
+    resp.del_cookie(ADMIN_COOKIE, path="/")
+    return resp
 
 
 def _catalog() -> dict:
@@ -1438,9 +1580,8 @@ def _catalog() -> dict:
 
 
 async def _user_detail(uid: int) -> dict | None:
-    await _ensure_tables()
     u = await _fetch("SELECT user_id, username, first_name, balance, bank_balance, total_xp, level, card_number, "
-                     "warehouse_level, vip_until, created_at FROM users WHERE user_id=%s", (uid,), one=True)
+                     "created_at FROM users WHERE user_id=%s", (uid,), one=True)
     if not u:
         return None
     assets = await _fetch("SELECT asset_type, asset_key, COUNT(*) AS c, SUM(daily_income) AS inc FROM assets "
@@ -1462,18 +1603,18 @@ async def _user_detail(uid: int) -> dict | None:
         "items": {r["item_key"]: int(r["c"]) for r in inv},
         "gifts": [{"code": g["code"], "at": float(g["redeemed_at"])} for g in gifts],
         "in_game": uid in _user_games, "in_queue": uid in _waiting, "banned": uid in _banned,
-        "warehouse_level": int(u["warehouse_level"] or 1) if u.get("warehouse_level") is not None else 1,
-        "vip_until": float(u["vip_until"]) if u.get("vip_until") else 0,
+        "vip": is_vip(uid), "vip_days": vip_days_left(uid),
+        "vip_expires": float(_vip_expires.get(uid, 0)) if is_vip(uid) else None,
+        "warehouse_level": await get_warehouse_level(uid),
     }
 
 
-@_admin
-async def admin_page(request, body):
+async def admin_page(request):
     try:
-        html = ADMIN_HTML.read_text(encoding="utf-8")
+        html_txt = ADMIN_HTML.read_text(encoding="utf-8")
     except FileNotFoundError:
         return web.Response(text="templates/admin.html پیدا نشد", status=500)
-    return web.Response(text=html, content_type="text/html", charset="utf-8")
+    return web.Response(text=html_txt, content_type="text/html", charset="utf-8")
 
 
 @_admin
@@ -1485,10 +1626,12 @@ async def admin_stats(request, body):
         gc = await _fetch("SELECT COUNT(*) AS c FROM gift_codes WHERE active=1", one=True)
     except Exception:
         gc = {"c": 0}
+    now_t = time.time()
+    vip_cnt = sum(1 for exp in _vip_expires.values() if exp > now_t)
     return _json({"ok": True, "users": int(s["users"]), "balance": int(s["bal"]), "bank": int(s["bank"]),
                   "gifts": int(gc["c"]), "games": sum(1 for g in _active_games.values() if not g.finished),
                   "queue": len(_waiting), "redis": _redis_on(), "default_password": ADMIN_PASSWORD == "admin",
-                  "bot_off": _bot_off,
+                  "bot_off": _bot_off, "vip_count": vip_cnt, "design": dict(_design),
                   "catalog": _catalog()})
 
 
@@ -1624,79 +1767,224 @@ _pending_launch: dict = {}
 
 
 def casino_text() -> str:
-    if _settings_cache.get("casino_text"):
-        return _settings_cache["casino_text"]
-    n1 = sum(1 for g in GAMES.values() if g["type"] == "1p")
-    n2 = sum(1 for g in GAMES.values() if g["type"] == "2p")
+    custom = _ctrl_text("casino_text", "")
+    if custom:
+        return _esc(custom)
+    n1 = sum(1 for k, g in GAMES.items() if g["type"] == "1p" and not _game_disabled(k))
+    n2 = sum(1 for k, g in GAMES.items() if g["type"] == "2p" and not _game_disabled(k))
     return ("🎰 <b>کازینو زر</b>\n━━━━━━━━━━━━━━━━━━\n"
             f"🎯 {n1} بازی تک‌نفره | ⚔️ {n2} بازی دونفره آنلاین\n"
             f"💰 شرط: از {_fmt(MIN_BET)} تا {_fmt(MAX_BET)}\n\n👇 برای ورود به کازینو بزن:")
 
 
+_orig_bank_deposit = None
+_orig_bank_withdraw = None
+_orig_peek_income = None
+_orig_accrue_income = None
+_orig_hourly_payout = None
+_orig_daily_payout = None
+
+
+def _fmt_rem(secs: float) -> str:
+    s = max(1, int(secs))
+    h, m = divmod(s // 60, 60)
+    if h and m:
+        return f"{h} ساعت و {m} دقیقه"
+    if h:
+        return f"{h} ساعت"
+    return f"{max(1, m)} دقیقه"
+
+
+async def _bank_lock_remaining(uid: int) -> float:
+    uid = int(uid)
+    now_t = time.time()
+    ua = _bank_unlock.get(uid)
+    if ua is None:
+        try:
+            await _ensure_tables()
+            r = await _fetch("SELECT unlock_at FROM bank_locks WHERE user_id=%s", (uid,), one=True)
+            ua = float(r["unlock_at"]) if r else 0.0
+        except Exception:
+            ua = 0.0
+        _bank_unlock[uid] = ua
+    return max(0.0, ua - now_t)
+
+
+async def _bank_deposit_wrapped(user_id: int, amount: int, *args, **kwargs):
+    ok = await _orig_bank_deposit(user_id, amount, *args, **kwargs)
+    if ok:
+        ua = time.time() + BANK_LOCK_SECS
+        _bank_unlock[int(user_id)] = ua
+        try:
+            await _ensure_tables()
+            await _exec("INSERT INTO bank_locks (user_id, unlock_at) VALUES (%s,%s) "
+                        "ON DUPLICATE KEY UPDATE unlock_at=VALUES(unlock_at)", (int(user_id), ua))
+        except Exception:
+            logger.exception("ثبت قفل ۵ ساعته بانک ناموفق")
+    return ok
+
+
+_bank_deposit_wrapped._zar = True
+
+
+async def _bank_withdraw_wrapped(user_id: int, amount: int, *args, **kwargs):
+    if await _bank_lock_remaining(user_id) > 0:
+        return False
+    return await _orig_bank_withdraw(user_id, amount, *args, **kwargs)
+
+
+_bank_withdraw_wrapped._zar = True
+
+
+async def _peek_income_vip(user_id: int, *args, **kwargs):
+    a_inc, b_int, tot = await _orig_peek_income(user_id, *args, **kwargs)
+    if is_vip(user_id):
+        base_rate = max(0.0001, float(getattr(config, "BANK_RATE", 0.02)))
+        a_inc = int(a_inc * (1.0 + VIP_INCOME_BONUS))
+        b_int = int(b_int * (VIP_BANK_RATE / base_rate))
+        tot = a_inc + b_int
+    return a_inc, b_int, tot
+
+
+_peek_income_vip._zar = True
+
+
+async def _accrue_income_vip(user_id: int, *args, **kwargs):
+    a_inc, b_int, tot = await _orig_accrue_income(user_id, *args, **kwargs)
+    if is_vip(user_id) and (a_inc > 0 or b_int > 0):
+        base_rate = max(0.0001, float(getattr(config, "BANK_RATE", 0.02)))
+        extra_a = int(a_inc * VIP_INCOME_BONUS)
+        extra_b = int(b_int * max(0.0, VIP_BANK_RATE / base_rate - 1.0))
+        extra = extra_a + extra_b
+        if extra > 0:
+            await db.add_balance(user_id, extra)
+        return a_inc + extra_a, b_int + extra_b, tot + extra
+    return a_inc, b_int, tot
+
+
+_accrue_income_vip._zar = True
+
+
+async def _credit_vip_bonuses(orig_fn, *args, **kwargs):
+    """قبل از پرداخت خودکار، سهم اضافه VIP را محاسبه و پس از پرداخت اصلی واریز می‌کند"""
+    now_t = time.time()
+    bonuses = {}
+    base_rate = max(0.0001, float(getattr(config, "BANK_RATE", 0.02)))
+    if _orig_peek_income:
+        for uid, exp in list(_vip_expires.items()):
+            if exp <= now_t:
+                continue
+            try:
+                a_inc, b_int, _ = await _orig_peek_income(uid)
+                ex = int(a_inc * VIP_INCOME_BONUS) + int(b_int * max(0.0, VIP_BANK_RATE / base_rate - 1.0))
+                if ex > 0:
+                    bonuses[uid] = ex
+            except Exception:
+                pass
+    res = await orig_fn(*args, **kwargs)
+    for uid, ex in bonuses.items():
+        try:
+            await db.add_balance(uid, ex)
+        except Exception:
+            pass
+    return res
+
+
+async def _hourly_payout_vip(*args, **kwargs):
+    return await _credit_vip_bonuses(_orig_hourly_payout, *args, **kwargs)
+
+
+_hourly_payout_vip._zar = True
+
+
+async def _daily_payout_vip(*args, **kwargs):
+    return await _credit_vip_bonuses(_orig_daily_payout, *args, **kwargs)
+
+
+_daily_payout_vip._zar = True
+
+
+def _patch_blackmarket_kb():
+    """تغییر متن دکمه‌ی «اینونتوری من» در بازار سیاه به «🏭 انبار من»"""
+    try:
+        import blackmarket as _bm_mod
+    except Exception:
+        return
+    orig = getattr(_bm_mod, "_menu_kb", None)
+    if not orig or getattr(orig, "_zar", False):
+        return
+    from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M
+
+    def _menu_kb_wrapped(*args, **kwargs):
+        kb = orig(*args, **kwargs)
+        rows = []
+        for row in kb.inline_keyboard:
+            new_row = []
+            for btn in row:
+                if btn.callback_data == "bm:inventory":
+                    new_row.append(B("🏭 انبار من", callback_data="bm:inventory"))
+                else:
+                    new_row.append(btn)
+            rows.append(new_row)
+        return M(rows)
+
+    _menu_kb_wrapped._zar = True
+    _bm_mod._menu_kb = _menu_kb_wrapped
+
+
 def patch_bot_ui():
-    """منوی اصلی: حذف «🎮 بازی‌ها» و افزودن «🎰 کازینو» (مینی‌اپ) + به‌روزرسانی راهنما"""
+    """منوی اصلی + قفل ۵ ساعته بانک + مزایای VIP + انبار ۱۰ لولی + تخریب حمله"""
     if _utils:
         from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M
 
         def build_main_menu_kb():
-            s = _settings_cache
-
-            def on(key):
-                return s.get(f"section_off:{key}") != "1"
-
-            items = []
-            if on("bank"): items.append(B("🏦 بانک", callback_data="bank:menu"))
-            if on("property"): items.append(B("🏠 ملک‌ها", callback_data="prop:menu"))
-            if on("worker"): items.append(B("👷 کارگرها", callback_data="worker:menu"))
-            if on("casino"): items.append(casino.miniapp_button("🎰 کازینو"))
-            if on("missions"): items.append(B("🎯 ماموریت‌ها", callback_data="mission:menu"))
-            if on("transfer"): items.append(B("💸 انتقال", callback_data="transfer:start"))
-            if on("kabareh"): items.append(B("🎭 کاباره زر", callback_data="kabareh:menu"))
-            if on("leaderboard"): items.append(B("🏆 لیدربورد", callback_data="lb:menu"))
-            if on("blackmarket"): items.append(B("💀 بازار سیاه", callback_data="bm:menu:0"))
-            if on("shop"): items.append(B("💎 خرید کوین و لول", callback_data="shop:menu"))
-            if on("help"): items.append(B("📚 راهنما", callback_data="help:menu"))
-            return M([items[i:i + 2] for i in range(0, len(items), 2)])
+            return M([
+                [B(_ctrl_text("btn_bank", "🏦 بانک"), callback_data="bank:menu"),
+                 B(_ctrl_text("btn_prop", "🏠 ملک‌ها"), callback_data="prop:menu")],
+                [B(_ctrl_text("btn_worker", "👷 کارگرها"), callback_data="worker:menu"),
+                 casino.miniapp_button(_ctrl_text("btn_casino", "🎰 کازینو"))],
+                [B(_ctrl_text("btn_mission", "🎯 ماموریت‌ها"), callback_data="mission:menu"),
+                 B(_ctrl_text("btn_transfer", "💸 انتقال"), callback_data="transfer:start")],
+                [B(_ctrl_text("btn_kabareh", "🎭 کاباره زر"), callback_data="kabareh:menu"),
+                 B(_ctrl_text("btn_lb", "🏆 لیدربورد"), callback_data="lb:menu")],
+                [B(_ctrl_text("btn_bm", "💀 بازار سیاه"), callback_data="bm:menu:0"),
+                 B(_ctrl_text("btn_shop", "💎 خرید کوین و لول"), callback_data="shop:menu")],
+                [B(_ctrl_text("btn_help", "📚 راهنما"), callback_data="help:menu")],
+            ])
 
         _utils.build_main_menu_kb = build_main_menu_kb
         _utils.MAIN_MENU_KB = build_main_menu_kb()
         _utils.GAMES_MENU_KB = casino.miniapp_keyboard()
         _utils.BACK_GAMES_KB = M([[B("🔙 بازگشت", callback_data="menu:main")]])
-    # تخریب حمله: پول + ملک/کارگر تصادفی (bot.py همین db.apply_damage را صدا می‌زند)
-    global _orig_apply_damage, _orig_transfer
+    _patch_blackmarket_kb()
+    global _orig_apply_damage, _orig_transfer, _orig_bank_deposit, _orig_bank_withdraw
+    global _orig_peek_income, _orig_accrue_income, _orig_hourly_payout, _orig_daily_payout
     if not getattr(getattr(db, "apply_damage", None), "_zar", False):
         _orig_apply_damage = getattr(db, "apply_damage", None)
         db.apply_damage = apply_damage_split
-    # انتقال به/از کاربر بن‌شده ممنوع
     if hasattr(db, "transfer_coins") and not getattr(db.transfer_coins, "_zar", False):
         _orig_transfer = db.transfer_coins
         db.transfer_coins = _transfer_guarded
-    # جوین اجباری: پیام عضویت به نام همان کاربر ثبت می‌شود + کش نتیجه مثبت (سریع‌تر)
-    if _utils and not getattr(getattr(_utils, "verify_membership", None), "_zar", False):
-        _utils.verify_membership = verify_membership_owned
-    # انبار بازار سیاه (جایگزین اینونتوری)
-    try:
-        import blackmarket as _bm
-        if not getattr(_bm, "_zar_patched", False):
-            _bm._zar_patched = True
-            _bm._build_inventory_text = _build_warehouse_text
-            _bm._inventory_kb = _warehouse_kb
-    except Exception:
-        logger.exception("patch blackmarket failed")
-    # قفل برداشت بانک + بونوس VIP روی درآمد
-    global _orig_bank_deposit, _orig_bank_withdraw, _orig_accrue, _orig_peek
     if hasattr(db, "bank_deposit") and not getattr(db.bank_deposit, "_zar", False):
         _orig_bank_deposit = db.bank_deposit
-        db.bank_deposit = _bank_deposit_locked
+        db.bank_deposit = _bank_deposit_wrapped
     if hasattr(db, "bank_withdraw") and not getattr(db.bank_withdraw, "_zar", False):
         _orig_bank_withdraw = db.bank_withdraw
-        db.bank_withdraw = _bank_withdraw_locked
-    if hasattr(db, "accrue_income") and not getattr(db.accrue_income, "_zar", False):
-        _orig_accrue = db.accrue_income
-        db.accrue_income = _accrue_vip
+        db.bank_withdraw = _bank_withdraw_wrapped
     if hasattr(db, "peek_income") and not getattr(db.peek_income, "_zar", False):
-        _orig_peek = db.peek_income
-        db.peek_income = _peek_vip
+        _orig_peek_income = db.peek_income
+        db.peek_income = _peek_income_vip
+    if hasattr(db, "accrue_income") and not getattr(db.accrue_income, "_zar", False):
+        _orig_accrue_income = db.accrue_income
+        db.accrue_income = _accrue_income_vip
+    if hasattr(db, "hourly_payout") and not getattr(db.hourly_payout, "_zar", False):
+        _orig_hourly_payout = db.hourly_payout
+        db.hourly_payout = _hourly_payout_vip
+    if hasattr(db, "daily_payout") and not getattr(db.daily_payout, "_zar", False):
+        _orig_daily_payout = db.daily_payout
+        db.daily_payout = _daily_payout_vip
+    if _utils and not getattr(getattr(_utils, "verify_membership", None), "_zar", False):
+        _utils.verify_membership = verify_membership_owned
     t = getattr(config, "HELP_TEXT", "") or ""
     if t and "کازینو (مینی‌اپ)" not in t:
         block = ("🎰 کازینو (مینی‌اپ) : از منوی اصلی روی «🎰 کازینو» بزن\n"
@@ -1724,10 +2012,6 @@ async def _h_gift(update, context):
         return
     if _utils:
         _utils.log_group_chat_id(update)
-    s = await _get_settings()
-    if s.get("section_off:gift") == "1":
-        await msg.reply_text("🎁 کد هدیه فعلاً غیرفعال است.")
-        raise _stop()
     m = re.match(r"^\s*هدیه\s*زر\s+(\S+)\s*$", msg.text)
     if not m:
         await msg.reply_text("🎁 برای استفاده از کد هدیه بنویس:\n<code>هدیه زر کد</code>", parse_mode="HTML")
@@ -1746,11 +2030,9 @@ async def _h_casino_text(update, context):
         _utils.log_group_chat_id(update)
         if not await _utils.verify_membership(update, context):
             raise _stop()
-    s = await _get_settings()
-    if s.get("section_off:casino") == "1":
-        await msg.reply_text("🎰 کازینو فعلاً غیرفعال است.")
-        raise _stop()
-    await msg.reply_text(casino_text(), parse_mode="HTML", reply_markup=casino.miniapp_keyboard(back=False))
+    # فقط در چت خصوصی دکمه‌ی ورود مستقیم با توکن شخصی (برای پروکسی‌ها) نمایش داده می‌شود
+    uid = update.effective_user.id if (msg and msg.chat.type == "private" and update.effective_user) else None
+    await msg.reply_text(casino_text(), parse_mode="HTML", reply_markup=casino.miniapp_keyboard(back=False, user_id=uid))
     raise _stop()
 
 
@@ -1760,7 +2042,8 @@ async def _h_legacy_cb(update, context):
     owner = (not q.message) or (not _utils) or _utils.is_menu_owner(q.message.chat_id, q.message.message_id, uid)
     if owner and q.data in ("game:menu", "game:casino") and _utils:
         await _utils.safe_answer(q)
-        m = await _utils.safe_edit(q, casino_text(), casino.miniapp_keyboard())
+        pv_uid = uid if (q.message and q.message.chat.type == "private") else None
+        m = await _utils.safe_edit(q, casino_text(), casino.miniapp_keyboard(user_id=pv_uid))
         if m:
             _utils.remember_owner(m, uid)
     else:
@@ -1776,37 +2059,40 @@ async def _count_items(uid: int, key: str) -> int:
     return int(r["c"]) if r else 0
 
 
-def _cap_text(key: str, vip: bool = False) -> str:
-    if _bm_items().get(key, {}).get("type") == "defense":
-        return "🛡️ از هر سیستم دفاعی فقط ۱ عدد می‌تونی داشته باشی!"
-    return f"🚀 از هر وسیله شلیک حداکثر {LAUNCHER_MAX_VIP if vip else LAUNCHER_MAX} عدد می‌تونی داشته باشی!"
+def _cap_text(key: str, cap: int = 0, vip: bool = False, wh_lvl: int = 1) -> str:
+    t = _bm_items().get(key, {}).get("type")
+    if t == "defense":
+        return f"🛡️ از هر سیستم دفاعی فقط {DEFENSE_MAX} عدد می‌تونی داشته باشی!"
+    if t == "launcher":
+        c = cap or launcher_cap(vip)
+        tip = "" if vip else f"\n👑 با اشتراک VIP می‌تونی تا {VIP_LAUNCHER_MAX} عدد داشته باشی!"
+        return f"🚀 از هر وسیله شلیک حداکثر {c} عدد می‌تونی داشته باشی!{tip}"
+    if t == "projectile":
+        c = cap or ammo_cap(wh_lvl, vip)
+        tip = "\n⬆️ برای ظرفیت بیشتر، «🏭 انبار من» را ارتقا بده" + ("" if vip else " یا اشتراک 👑 VIP بگیر (+۵ ظرفیت)!")
+        return f"🏭 ظرفیت انبارت برای این مهمات پر شده ({c} عدد)!{tip}"
+    return "❌ به سقف مجاز رسیدی!"
 
 
 async def _h_bm_guard(update, context):
-    """سقف خرید: پدافند ۱، وسیله شلیک ۳ (VIP: ۶)، مهمات طبق ظرفیت انبار"""
+    """سقف خرید بازار سیاه: پدافند ۱ | وسیله شلیک ۳ (VIP: ۶) | مهمات طبق لول انبار (VIP: +۵)"""
     q = update.callback_query
     parts = (q.data or "").split(":")
     key = parts[2] if len(parts) > 2 else ""
-    item = _bm_items().get(key)
-    if not item or _not_owner(q):
+    if _not_owner(q):
         return
     uid = q.from_user.id
-    vip = await _is_vip(uid)
-    if item.get("type") == "projectile":
-        cap = _wh_capacity(await _wh_level(uid), vip)
-        msg = f"📦 انبار پر است! از این مهمات حداکثر {cap} عدد می‌تونی نگه داری — انبار را ارتقا بده."
-    else:
-        cap = _item_cap(key, vip)
-        if not cap:
-            return
-        msg = _cap_text(key, vip)
+    cap = await _item_cap_for(uid, key)
+    if not cap:
+        return
     try:
         have = await _count_items(uid, key)
     except Exception:
         return
     if have >= cap:
+        wh = await get_warehouse_level(uid)
         try:
-            await q.answer(msg + f"\n(الان {have} عدد داری)", show_alert=True)
+            await q.answer(_cap_text(key, cap, is_vip(uid), wh) + f"\n(الان {have}/{cap} داری)", show_alert=True)
         except Exception:
             pass
         raise _stop()
@@ -1817,12 +2103,8 @@ async def _h_bm_post(update, context):
     q = update.callback_query
     parts = (q.data or "").split(":")
     key = parts[2] if len(parts) > 2 else ""
-    item = _bm_items().get(key)
-    if not item:
-        return
     uid = q.from_user.id
-    vip = await _is_vip(uid)
-    cap = _wh_capacity(await _wh_level(uid), vip) if item.get("type") == "projectile" else _item_cap(key, vip)
+    cap = await _item_cap_for(uid, key)
     if not cap:
         return
     try:
@@ -1830,13 +2112,132 @@ async def _h_bm_post(update, context):
         if have > cap:
             removed = await _exec("DELETE FROM inventory WHERE user_id=%s AND item_key=%s ORDER BY id DESC LIMIT %s",
                                   (uid, key, have - cap))
-            refund = removed * int(item["price"])
+            refund = removed * int(_bm_items()[key]["price"])
             if refund:
                 await db.add_balance(uid, refund)
+                wh = await get_warehouse_level(uid)
                 await context.bot.send_message(q.message.chat_id if q.message else uid,
-                                               f"{_cap_text(key, vip)} — {_fmt(refund)} برگشت داده شد.")
+                                               f"{_cap_text(key, cap, is_vip(uid), wh)}\n↩️ {_fmt(refund)} برگشت داده شد.")
     except Exception:
         logger.exception("bm post-check error")
+
+
+async def _build_warehouse_view(uid: int):
+    """متن و کیبورد «🏭 انبار من» (۱۰ لول؛ جایگزین اینونتوری در بازار سیاه)"""
+    from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M
+    lvl = await get_warehouse_level(uid)
+    vip = is_vip(uid)
+    a_cap = ammo_cap(lvl, vip)
+    l_cap = launcher_cap(vip)
+    rows = await _fetch("SELECT item_key, COUNT(*) AS c FROM inventory WHERE user_id=%s GROUP BY item_key", (uid,))
+    counts = {r["item_key"]: int(r["c"]) for r in rows}
+    vip_note = f" (شامل +{VIP_AMMO_BONUS} 👑 VIP)" if vip else ""
+    lines = [
+        "🏭 <b>انبار من</b>",
+        "━━━━━━━━━━━━━━━━━━",
+        f"📊 لول انبار: <b>{lvl} / {WAREHOUSE_MAX_LEVEL}</b>" + ("  ·  👑 VIP فعال" if vip else ""),
+        f"💥 ظرفیت هر مهمات: <b>{a_cap} عدد</b>{vip_note}",
+        f"🚀 ظرفیت هر وسیله شلیک: <b>{l_cap} عدد</b>",
+        f"🛡️ ظرفیت هر پدافند: <b>{DEFENSE_MAX} عدد</b>",
+        "",
+    ]
+    cats = [("launcher", "🚀 وسایل شلیک", l_cap), ("projectile", "💥 مهمات", a_cap), ("defense", "🛡️ سیستم‌های دفاعی", DEFENSE_MAX)]
+    any_item = False
+    for ctype, ctitle, ccap in cats:
+        found = [(k, v) for k, v in _bm_items().items() if v.get("type") == ctype and counts.get(k, 0) > 0]
+        if found:
+            any_item = True
+            lines.append(f"<b>{ctitle}:</b>")
+            for k, v in found:
+                lines.append(f"  {v['emoji']} {v['name']}: <b>{counts[k]} / {ccap}</b>")
+            lines.append("")
+    if not any_item:
+        lines.append("📭 انبارت فعلاً خالی است.")
+        lines.append("")
+    btns = []
+    if lvl < WAREHOUSE_MAX_LEVEL:
+        cost = warehouse_upgrade_cost(lvl)
+        nxt_cap = ammo_cap(lvl + 1, vip)
+        lines.append(f"⬆️ <b>ارتقا به لول {lvl + 1}:</b> ظرفیت هر مهمات به <b>{nxt_cap}</b> می‌رسد")
+        lines.append(f"💰 هزینه ارتقا: <b>{_fmt(cost)}</b> زرکوین")
+        btns.append([B(f"⬆️ ارتقا انبار به لول {lvl + 1} (💰 {_fmt(cost)})", callback_data="bm:wh_upgrade")])
+    else:
+        lines.append("🏆 انبارت در حداکثر لول (۱۰) است!")
+    btns.append([B("🔙 بازگشت به بازار سیاه", callback_data="bm:menu:0")])
+    return "\n".join(lines), M(btns)
+
+
+async def _h_warehouse_cb(update, context):
+    q = update.callback_query
+    uid = q.from_user.id
+    if _not_owner(q):
+        await _utils.safe_answer(q, "❌ این منو برای شما نیست!\nبرای منوی خودت /menu را بفرست.", show_alert=True)
+        raise _stop()
+    if _utils and not await _utils.verify_membership(update, context):
+        raise _stop()
+    await db.ensure_user(q.from_user)
+    if q.data == "bm:wh_upgrade":
+        async with _ulock(uid):
+            lvl = await get_warehouse_level(uid)
+            if lvl >= WAREHOUSE_MAX_LEVEL:
+                await _utils.safe_answer(q, "🏆 انبارت همین الان در حداکثر لول (۱۰) است!", show_alert=True)
+            else:
+                cost = warehouse_upgrade_cost(lvl)
+                if not await db.deduct_balance(uid, cost):
+                    await _utils.safe_answer(q, f"❌ موجودی کافی نیست!\nنیاز به {_fmt(cost)} زرکوین داری.", show_alert=True)
+                else:
+                    new_lvl = lvl + 1
+                    await _ensure_tables()
+                    await _exec("INSERT INTO user_warehouse (user_id, level, updated_at) VALUES (%s,%s,%s) "
+                                "ON DUPLICATE KEY UPDATE level=VALUES(level), updated_at=VALUES(updated_at)",
+                                (uid, new_lvl, time.time()))
+                    _warehouse_lvl[uid] = new_lvl
+                    await _utils.safe_answer(q, f"✅ انبار به لول {new_lvl} ارتقا یافت! ظرفیت هر مهمات: {ammo_cap(new_lvl, is_vip(uid))}", show_alert=True)
+    else:
+        await _utils.safe_answer(q)
+    text, kb = await _build_warehouse_view(uid)
+    m = await _utils.safe_edit(q, text, kb)
+    if m:
+        _utils.remember_owner(m, uid)
+    raise _stop()
+
+
+async def _h_bank_cb(update, context):
+    """نمایش سود واقعی (۲٪ عادی / ۵٪ VIP) و اعمال قفل ۵ ساعته برداشت بانک"""
+    q = update.callback_query
+    uid = q.from_user.id
+    if _not_owner(q):
+        await _utils.safe_answer(q, "❌ این منو برای شما نیست!\nبرای منوی خودت /menu را بفرست.", show_alert=True)
+        raise _stop()
+    if _utils and not await _utils.verify_membership(update, context):
+        raise _stop()
+    if q.data == "bank:withdraw":
+        rem = await _bank_lock_remaining(uid)
+        if rem > 0:
+            await _utils.safe_answer(q, f"🔒 برداشت از بانک قفل است!\nتا {_fmt_rem(rem)} دیگر نمی‌تونی برداشت کنی (قفل ۵ ساعته پس از واریز).", show_alert=True)
+            raise _stop()
+        return  # آزاد است → هندلر اصلی bot.py اجرا شود
+    await _utils.safe_answer(q)
+    await db.ensure_user(q.from_user)
+    u = await db.get_user(uid)
+    bal = int(u["balance"]) if u else 0
+    bank = int(u["bank_balance"]) if u else 0
+    card = _utils.format_card(u["card_number"]) if (u and _utils) else "-"
+    vip = is_vip(uid)
+    rate = VIP_BANK_RATE if vip else float(getattr(config, "BANK_RATE", 0.02))
+    interest = int(bank * rate)
+    rem = await _bank_lock_remaining(uid)
+    lock_line = f"\n🔒 قفل برداشت: <b>تا {_fmt_rem(rem)} دیگر</b>" if rem > 0 else "\n🔓 برداشت: <b>آزاد</b> (پس از هر واریز ۵ ساعت قفل می‌شود)"
+    rate_lbl = f"{int(rate * 100)}٪ 👑 VIP" if vip else f"{int(rate * 100)}٪"
+    text = (f"🏦 <b>بانک زرکوین</b>\n━━━━━━━━━━━━━━━━━━\n"
+            f"💳 <code>{card}</code>\n\n"
+            f"💰 کیف پول: <b>{_fmt(bal)}</b>\n"
+            f"🏦 بانک: <b>{_fmt(bank)}</b>\n"
+            f"📈 سود روزانه ({rate_lbl}): <b>{_fmt(interest)}</b>{lock_line}")
+    m = await _utils.safe_edit(q, text, _utils.BANK_MENU_KB if _utils else None)
+    if m and _utils:
+        _utils.remember_owner(m, uid)
+    raise _stop()
 
 
 def _cmd_map() -> dict:
@@ -1900,13 +2301,13 @@ async def _h_attack_post(update, context):
         rep = msg.reply_to_message if msg else None
         tgt = rep.from_user.id if rep and rep.from_user else None
         d = _last_damage.pop(tgt, None) if tgt else None
-        if d and time.time() - d["t"] < 60 and d["total"] > 0:
+        if d and time.time() - d["t"] < 60 and (d["total"] > 0 or d.get("xp_lost", 0) > 0):
             report = _damage_report(d)
-            await msg.reply_text(f"🏚 <b>جزئیات خسارت</b>\n━━━━━━━━━━━━━━━━━━\n{report}\n\n💥 مجموع خسارت: <b>{_fmt(d['total'])}</b>",
+            await msg.reply_text(f"🏚 <b>جزئیات خسارت</b>\n━━━━━━━━━━━━━━━━━━\n{report}\n\n💥 مجموع خسارت مالی: <b>{_fmt(d['total'])}</b>",
                                  parse_mode="HTML")
-            if d["assets"]:
+            if d["assets"] or d.get("xp_lost"):
                 try:
-                    await context.bot.send_message(tgt, f"🏚 <b>در حمله این دارایی‌ها از دست رفت:</b>\n{report}",
+                    await context.bot.send_message(tgt, f"🏚 <b>در حمله این موارد از دست رفت:</b>\n{report}",
                                                    parse_mode="HTML")
                 except Exception:
                     pass
@@ -1926,7 +2327,6 @@ def setup_bot(app):
                               TypeHandler, filters)
     patch_bot_ui()
     app.add_handler(TypeHandler(Update, _h_bot_gate), group=-100)  # حالت خاموشی/بن → ربات جواب نمی‌دهد
-    app.add_handler(CallbackQueryHandler(_h_section_gate), group=-2)  # بخش خاموش → دکمه کار نمی‌کند
     app.add_handler(CallbackQueryHandler(_h_check_membership, pattern=r"^check_membership$"), group=-2)
     app.add_handler(CallbackQueryHandler(_h_lb_cb, pattern=r"^lb:"), group=-2)
     app.add_handler(CommandHandler("start", _h_start_shop, filters=filters.ChatType.PRIVATE), group=-2)
@@ -1934,8 +2334,6 @@ def setup_bot(app):
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^\s*(کازینو\s*زربات|زر\s*بازی)\s*$"),
                                    _h_casino_text), group=-2)
     app.add_handler(CallbackQueryHandler(_h_help_cb, pattern=r"^help:(menu|p:\d+)$"), group=-2)
-    app.add_handler(CallbackQueryHandler(_h_wh_upgrade, pattern=r"^wh:upgrade$"), group=-2)
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _h_bank_lock), group=-2)
     app.add_handler(CallbackQueryHandler(_h_shop_cb, pattern=r"^shop:"), group=-2)
     app.add_handler(PreCheckoutQueryHandler(_h_precheckout), group=-2)
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, _h_paid), group=-2)
@@ -1943,6 +2341,8 @@ def setup_bot(app):
     app.add_handler(CallbackQueryHandler(
         _h_legacy_cb, pattern=r"^(game:(menu|casino|rps|ttt|quiz|penalty)$|casino:|rps:|ttt:|quiz:|penalty:|pen:)"),
         group=-2)
+    app.add_handler(CallbackQueryHandler(_h_warehouse_cb, pattern=r"^bm:(inventory|warehouse|wh_upgrade)$"), group=-2)
+    app.add_handler(CallbackQueryHandler(_h_bank_cb, pattern=r"^bank:(menu|withdraw)$"), group=-2)
     app.add_handler(CallbackQueryHandler(_h_bm_guard, pattern=r"^bm:buy:"), group=-2)
     app.add_handler(CallbackQueryHandler(_h_bm_post, pattern=r"^bm:buy:"), group=1)
     cmds = _cmd_map()
@@ -1968,8 +2368,12 @@ def setup_bot(app):
             logger.exception("ساخت جداول جدید / بارگذاری بن‌ها ناموفق")
         try:
             await _load_admins()
+            await _load_vips()
+            await _load_bank_locks()
+            await _load_controls_and_design()
+            await _seed_vip_products()
         except Exception:
-            logger.exception("بارگذاری ادمین‌ها ناموفق")
+            logger.exception("بارگذاری ادمین/VIP/تنظیمات ناموفق")
 
     async def _post_shutdown(application):
         try:
@@ -1999,7 +2403,7 @@ def _esc(s) -> str:
 
 async def apply_damage_split(target_id, damage_percent, *args, **kwargs) -> int:
     """
-    همان درصد تخریب وسیله از پول هدف (کیف پول + بانک) و همان درصد از «تعداد» ملک‌ها و کارگرهایش کم می‌شود.
+    همان درصد تخریب وسیله از پول هدف (کیف پول + بانک)، از XP/لول او و از «تعداد» ملک‌ها و کارگرهایش کم می‌شود.
     ملک/کارگرهای نابودشده تصادفی انتخاب می‌شوند. گرد کردن احتمالی است (مثلاً ۲۰٪ از ۳ ملک = ۰٫۶ → با احتمال ۶۰٪ یکی)
     و با درصد کمتر از ۱۰۰ هیچ‌وقت همه‌ی دارایی‌ها یک‌جا صفر نمی‌شود.
     خروجی: ارزش کل خسارت (برای پیام bot.py)
@@ -2013,12 +2417,17 @@ async def apply_damage_split(target_id, damage_percent, *args, **kwargs) -> int:
         return 0
 
     async def run(cur):
-        await cur.execute("SELECT balance, bank_balance, total_xp, level FROM users WHERE user_id=%s FOR UPDATE", (target_id,))
+        await cur.execute("SELECT balance, bank_balance, total_xp, level FROM users WHERE user_id=%s FOR UPDATE",
+                          (target_id,))
         u = await cur.fetchone()
         if not u:
             return None
         bal, bank = max(0, int(u["balance"] or 0)), max(0, int(u["bank_balance"] or 0))
-        xp0, lvl0 = int(u["total_xp"] or 0), int(u["level"] or 1)  # حمله هرگز لول/XP را کم نمی‌کند
+        cur_xp = max(0, int(u.get("total_xp") or 0))
+        old_lvl = _calc_level(cur_xp)
+        xp_lost = int(cur_xp * pct)
+        new_xp = max(0, cur_xp - xp_lost)
+        new_lvl = _calc_level(new_xp)
         await cur.execute("SELECT id, asset_type, asset_key, purchase_price FROM assets WHERE user_id=%s FOR UPDATE",
                           (target_id,))
         assets = list(await cur.fetchall())
@@ -2033,40 +2442,29 @@ async def apply_damage_split(target_id, damage_percent, *args, **kwargs) -> int:
             if pct < 1 and n > 1:
                 k = min(k, n - 1)
         removed = _rng.sample(assets, k) if k else []
-        if money_part <= 0 and not removed:
+        if money_part <= 0 and not removed and xp_lost <= 0:
             return None
         from_bal = min(bal, money_part)
         from_bank = min(bank, money_part - from_bal)
         money_part = from_bal + from_bank
-        await cur.execute("UPDATE users SET balance = balance - %s, bank_balance = bank_balance - %s WHERE user_id=%s",
-                          (from_bal, from_bank, target_id))
+        await cur.execute(
+            "UPDATE users SET balance = balance - %s, bank_balance = bank_balance - %s, "
+            "total_xp = %s, level = %s WHERE user_id=%s",
+            (from_bal, from_bank, new_xp, new_lvl, target_id))
         if removed:
             ids = [int(a["id"]) for a in removed]
             await cur.execute(f"DELETE FROM assets WHERE id IN ({','.join(['%s'] * len(ids))})", ids)
         asset_value = sum(int(a["purchase_price"] or 0) for a in removed)
-        # اطمینان نهایی: لول و XP دقیقاً به مقدار قبل از حمله برگردد
-        await cur.execute("UPDATE users SET total_xp=%s, level=%s WHERE user_id=%s", (xp0, lvl0, target_id))
         return {"money": money_part, "assets": [(a["asset_type"], a["asset_key"]) for a in removed],
-                "asset_value": asset_value, "total": money_part + asset_value}
+                "asset_value": asset_value, "total": money_part + asset_value,
+                "xp_lost": xp_lost, "old_lvl": old_lvl, "new_lvl": new_lvl}
 
     try:
         res = await _tx(run)
     except Exception:
         logger.exception("apply_damage_split error — استفاده از نسخه قدیمی")
         if _orig_apply_damage:
-            try:
-                before = await _fetch("SELECT total_xp, level FROM users WHERE user_id=%s", (target_id,), one=True)
-            except Exception:
-                before = None
-            res = await _orig_apply_damage(target_id, damage_percent, *args, **kwargs)
-            if before:  # حتی نسخه قدیمی هم حق ندارد لول/XP را کم کند
-                try:
-                    await _exec("UPDATE users SET total_xp=%s, level=%s WHERE user_id=%s",
-                               (int(before["total_xp"] or 0), int(before["level"] or 1), target_id))
-                    _invalidate(target_id)
-                except Exception:
-                    pass
-            return res
+            return await _orig_apply_damage(target_id, damage_percent, *args, **kwargs)
         return 0
     _invalidate(target_id)
     if not res:
@@ -2081,6 +2479,10 @@ apply_damage_split._zar = True
 
 def _damage_report(d: dict) -> str:
     lines = [f"💰 پول: {_fmt(d['money'])}"]
+    if d.get("xp_lost"):
+        ol, nl = d.get("old_lvl", 1), d.get("new_lvl", 1)
+        lvl_txt = f" (لول {ol} ← {nl})" if nl != ol else f" (لول {nl})"
+        lines.append(f"⭐ XP: -{_fmt(d['xp_lost'])}{lvl_txt}")
     counts = {}
     for t, k in d["assets"]:
         counts[(t, k)] = counts.get((t, k), 0) + 1
@@ -2095,7 +2497,6 @@ def _damage_report(d: dict) -> str:
 # ═══════════ راهنمای صفحه‌بندی‌شده ═══════════
 # ═══════════════════════════════════════════════
 def _help_pages() -> list:
-    s = _settings_cache
     c = config
     bm = _bm_items()
     one = [g for g in GAMES.values() if g["type"] == "1p"]
@@ -2116,56 +2517,59 @@ def _help_pages() -> list:
 
     cmds = "\n".join(f" • <code>{v['command']}</code> ← {v['emoji']} {v['name']}"
                      for v in bm.values() if v.get("type") == "projectile" and v.get("command"))
+    extra_h = _ctrl_text("help_extra", "")
+    extra_block = f"\n\n📢 {_esc(extra_h)}" if extra_h else ""
     p1 = ("📚 <b>راهنما — اقتصاد و پیشرفت</b>\n━━━━━━━━━━━━━━━━━━\n"
-          "⭐ <b>لول:</b> هر لول نیاز به 2^level × 1000 XP دارد\n"
+          "⭐ <b>لول:</b> هر لول نیاز به 2^level × 1000 XP دارد (برد در بازی‌های کازینو بر اساس مبلغ شرط تا ۲٬۵۰۰ XP می‌دهد)\n"
           f"🎯 <b>ماموریت‌ها:</b> هر روز {getattr(c, 'DAILY_MISSION_COUNT', 6)} ماموریت جدید با جایزه XP\n"
           "💰 <b>زر:</b> هر ۵ دقیقه بنویس «زر» و زرکوین رایگان بگیر\n"
-          f"🏦 <b>بانک:</b> سود روزانه {int(getattr(c, 'BANK_RATE', 0.02) * 100)}٪ (هر ساعت واریز می‌شود)\n"
-          f"🔒 <b>برداشت از بانک:</b> بعد از واریز، تا {BANK_LOCK_SECONDS // 3600} ساعت قفل است\n"
-          f"🏠 <b>ملک‌ها</b> و 👷 <b>کارگرها:</b> حداکثر {getattr(c, 'MAX_PER_KEY', 5)} از هر نوع — سود روزانه ۳۵٪\n"
+          f"🏦 <b>بانک:</b> سود روزانه {int(getattr(c, 'BANK_RATE', 0.02) * 100)}٪ (👑 VIP: {int(VIP_BANK_RATE * 100)}٪) — پس از هر واریز تا ۵ ساعت قفل برداشت دارد\n"
+          f"🏠 <b>ملک‌ها</b> و 👷 <b>کارگرها:</b> حداکثر {getattr(c, 'MAX_PER_KEY', 5)} از هر نوع — سود روزانه ۳۵٪ (👑 VIP: +۱۰٪ بیشتر)\n"
           "💸 <b>برداشت درآمد:</b> از بخش ملک یا کارگر، درآمد انباشته را برداشت کن\n"
           "💸 <b>انتقال:</b> بالای ۱ میلیون کارمزد ۱٪\n"
-          "🔒 هر کاربر فقط می‌تواند از منوی خودش استفاده کند")
+          "🔒 هر کاربر فقط می‌تواند از منوی خودش استفاده کند" + extra_block)
     p2 = ("🎰 <b>راهنما — کازینو (مینی‌اپ)</b>\n━━━━━━━━━━━━━━━━━━\n"
           "از منوی اصلی روی «🎰 کازینو» بزن یا بنویس <b>کازینو زربات</b>\n\n"
           f"🎯 <b>تک‌نفره ({len(one)}):</b>\n" + "، ".join(f"{g['emoji']} {g['name']}" for g in one) + "\n\n"
           f"⚔️ <b>دونفره آنلاین ({len(two)}):</b>\n" + "، ".join(f"{g['emoji']} {g['name']}" for g in two) + "\n\n"
           f"💰 حداقل شرط: {_fmt(MIN_BET)} | حداکثر: {_fmt(MAX_BET)} زرکوین\n"
-          f"⭐ XP فقط با برد داده می‌شود و بر اساس مبلغ شرط است (حداکثر {XP_MAX})\n"
           f"⏳ یافتن حریف: حداکثر {MATCH_TIMEOUT} ثانیه (وگرنه پول برمی‌گردد)\n"
           f"⏰ زمان هر نوبت: {TURN_TIMEOUT} ثانیه\n"
           f"💵 کارمزد برنده‌ی دونفره: {int(COMMISSION_RATE * 100)}٪ — مساوی = برگشت کامل پول")
     p3 = ("💎 <b>راهنما — فروشگاه، هدیه و سرگرمی</b>\n━━━━━━━━━━━━━━━━━━\n"
           "💎 <b>خرید کوین و لول:</b> از منوی اصلی محصول را انتخاب کن و با ⭐ استارز تلگرام یا 💳 کارت به کارت بپرداز. "
           "خرید کارت به کارت بعد از تأیید رسید توسط مدیر تحویل می‌شود.\n\n"
-          "👑 <b>اشتراک VIP</b> (از فروشگاه — یک‌ماهه/سه‌ماهه/شش‌ماهه):\n"
-          " • تا ۶ عدد از هر وسیله شلیک (به‌جای ۳)\n"
-          " • +۵ ظرفیت هر مهمات در انبار\n"
-          " • +۱۰٪ سود ملک و کارگر\n"
-          " • سود بانک ۵٪ (به‌جای ۲٪)\n\n"
           "🎁 <b>کد هدیه:</b> بنویس <code>هدیه زر کد</code> — از هر کد فقط یک بار\n\n"
           f"🎭 <b>کاباره زر:</b> نیاز به لول {getattr(c, 'KABAREH_MIN_LEVEL', 4)}+ | "
           f"باز کردن با {_fmt(getattr(c, 'KABAREH_UNLOCK_COST', 0))} | روزی یک بار\n\n"
           "🏆 <b>لیدربورد:</b> رتبه‌بندی بر اساس ثروت (موجودی + بانک)")
-    p4 = ("💀 <b>راهنما — بازار سیاه</b>\n━━━━━━━━━━━━━━━━━━\n"
-          f"🚀 <b>وسایل شلیک</b> (الزامی برای شلیک — از هر کدام حداکثر {LAUNCHER_MAX} عدد):\n{items('launcher')}\n\n"
+    p4 = ("💀 <b>راهنما — بازار سیاه و انبار</b>\n━━━━━━━━━━━━━━━━━━\n"
+          f"🏭 <b>انبار (۱۰ لول):</b> در لول ۱ از هر مهمات فقط ۲ عدد جا می‌گیرد تا لول ۱۰ که ۲۰ عدد می‌شود (👑 VIP: +۵ عدد در هر لول).\n"
+          "💰 هزینه ارتقای انبار: <code>2^لول فعلی × 1,000,000</code>\n\n"
+          f"🚀 <b>وسایل شلیک</b> (از هر کدام حداکثر {LAUNCHER_MAX} عدد — 👑 VIP: {VIP_LAUNCHER_MAX} عدد):\n{items('launcher')}\n\n"
           f"💥 <b>مهمات</b> (مصرفی):\n{items('projectile')}\n\n"
-          f"🛡️ <b>دفاعی</b> (از هر کدام فقط ۱ عدد):\n{items('defense')}\n\n"
-          "🏭 <b>انبار:</b> ۱۰ لول دارد؛ ظرفیت هر مهمات = ۲ × لول انبار (لول ۱۰ = ۲۰ عدد) — هزینه ارتقا = ۲^لول × ۱٬۰۰۰٬۰۰۰ زرکوین")
+          f"🛡️ <b>دفاعی</b> (از هر کدام فقط ۱ عدد):\n{items('defense')}")
+    p_vip = ("👑 <b>راهنما — اشتراک VIP</b>\n━━━━━━━━━━━━━━━━━━\n"
+             "با فعال کردن اشتراک VIP از این امکانات ویژه برخوردار می‌شوی:\n\n"
+             f"🚀 <b>وسایل شلیک:</b> خرید تا <b>{VIP_LAUNCHER_MAX} عدد</b> از هر وسیله (به‌جای {LAUNCHER_MAX} عدد)\n"
+             f"🏭 <b>انبار مهمات:</b> <b>+{VIP_AMMO_BONUS} ظرفیت اضافه</b> برای هر نوع مهمات در هر لول انبار\n"
+             f"🏠 <b>ملک‌ها و کارگرها:</b> <b>+{int(VIP_INCOME_BONUS * 100)}٪ سود بیشتر</b> از درآمد روزانه\n"
+             f"🏦 <b>بانک:</b> سود روزانه به <b>{int(VIP_BANK_RATE * 100)}٪</b> افزایش می‌یابد (به‌جای ۲٪)\n\n"
+             "💳 <b>پلن‌های ماهانه (از منوی «💎 خرید کوین و لول»):</b>\n"
+             " • یک‌ماهه: ۸۰٬۰۰۰ تومان\n"
+             " • سه‌ماهه: ۲۲۰٬۰۰۰ تومان\n"
+             " • شش‌ماهه: ۴۵۰٬۰۰۰ تومان\n\n"
+             "✅ بلافاصله پس از تأیید رسید توسط مدیر، اشتراک VIP برایت فعال می‌شود.")
     p5 = ("🎯 <b>راهنما — حمله و دفاع</b>\n━━━━━━━━━━━━━━━━━━\n"
           "۱. وسیله شلیک و مهمات را از بازار سیاه بخر\n۲. روی پیام هدف ریپلای کن\n۳. دستور شلیک را بفرست:\n"
           + cmds + "\n\n⚠️ <b>قوانین:</b>\n"
           f" • هر وسیله شلیک بعد از شلیک {LAUNCH_COOLDOWN // 60} دقیقه خنک می‌شود؛ با چند وسیله می‌توانی پشت‌سرهم شلیک کنی\n"
-          " • همان درصد تخریب وسیله از پول هدف (کیف + بانک) و همان درصد از تعداد ملک‌ها و کارگرهایش کم می‌شود؛ "
+          " • همان درصد تخریب وسیله از پول (کیف + بانک)، XP/لول و تعداد ملک‌ها و کارگرهای هدف کم می‌شود؛ "
           "ملک و کارگرهای نابودشده تصادفی انتخاب می‌شوند\n"
           " • به کاربران بن‌شده نمی‌توان حمله کرد یا پول انتقال داد\n"
           " • بمب‌ها قابل دفاع نیستند، فقط موشک و پهپاد\n"
           " • هر شلیک یک مهمات مصرف می‌کند")
-    pages = [p1, p2, p3, p4, p5]
-    for i in range(5):
-        if s.get(f"help_page:{i + 1}"):
-            pages[i] = s[f"help_page:{i + 1}"]
-    return pages
+    return [p1, p2, p3, p_vip, p4, p5]
 
 
 def _not_owner(q) -> bool:
@@ -2211,63 +2615,26 @@ def _owner_ids() -> set:
     return _env_admin_ids() | _admins
 
 
-async def _get_settings(force: bool = False) -> dict:
-    """کش تنظیمات (۳۰ ثانیه) — برای منو، بازی‌ها، متن‌ها و رنگ‌ها"""
-    global _settings_cache, _settings_at, _settings_loaded
-    now = time.time()
-    if force or not _settings_loaded or now - _settings_at > 30:
-        try:
-            await _ensure_tables()
-            rows = await _fetch("SELECT k, v FROM zar_settings")
-            _settings_cache = {r["k"]: r["v"] for r in rows}
-            _settings_at = now
-            _settings_loaded = True
-        except Exception:
-            pass
-    return _settings_cache
-
-
 async def _get_setting(k: str, default: str = "") -> str:
-    s = await _get_settings()
-    return s.get(k) or default
+    await _ensure_tables()
+    r = await _fetch("SELECT v FROM zar_settings WHERE k=%s", (k,), one=True)
+    return (r["v"] if r else "") or default
 
 
 async def _set_setting(k: str, v: str):
     await _ensure_tables()
     await _exec("INSERT INTO zar_settings (k, v) VALUES (%s,%s) ON DUPLICATE KEY UPDATE v=VALUES(v)", (k, v))
-    _settings_cache[k] = v
-    _settings_at = time.time()
-
-
-def _games_for_client(s: dict) -> list:
-    """لیست بازی‌ها برای مینی‌اپ — با اعمال خاموشی و نام/توضیح سفارشی"""
-    out = []
-    for k, v in GAMES.items():
-        if s.get(f"game_off:{k}") == "1":
-            continue
-        g = dict(key=k, **v)
-        if s.get(f"game_name:{k}"):
-            g["name"] = s[f"game_name:{k}"]
-        if s.get(f"game_desc:{k}"):
-            g["desc"] = s[f"game_desc:{k}"]
-        out.append(g)
-    return out
 
 
 def _clean_rewards(raw) -> tuple:
     raw = raw if isinstance(raw, dict) else {}
     rewards = {}
-    for k in ("coins", "bank", "xp", "levels"):
+    for k in ("coins", "bank", "xp", "levels", "vip_days"):
         n = _to_int(raw.get(k), 0) or 0
         if n < 0 or n > 10 ** 15:
             return None, "مقدار جایزه نامعتبر است"
         if n:
-            rewards[k] = min(n, MAX_LEVEL) if k == "levels" else n
-    n = _to_int(raw.get("vip_days"), 0) or 0
-    if n < 0 or n > 3650:
-        return None, "مدت اشتراک VIP نامعتبر است"
-    if n:
-        rewards["vip_days"] = n
+            rewards[k] = min(n, MAX_LEVEL) if k == "levels" else (min(n, 3650) if k == "vip_days" else n)
     for field, store in (("properties", config.PROPERTIES), ("workers", config.WORKERS), ("items", _bm_items())):
         sub = {}
         for key, n in (raw.get(field) or {}).items():
@@ -2684,50 +3051,6 @@ async def admin_receipt(request, body):
 
 
 # ═══════════════════════════════════════════════
-# ═══════════ گیت بخش‌های ربات (خاموش/روشن از پنل) ═══════════
-# ═══════════════════════════════════════════════
-def _section_for_callback(data: str) -> str | None:
-    if data.startswith("bank:"):
-        return "bank"
-    if data.startswith("prop:"):
-        return "property"
-    if data.startswith("worker:"):
-        return "worker"
-    if data.startswith("mission:"):
-        return "missions"
-    if data.startswith("transfer:") or data.startswith("tr:"):
-        return "transfer"
-    if data.startswith("kabareh:"):
-        return "kabareh"
-    if data.startswith("lb:"):
-        return "leaderboard"
-    if data.startswith("bm:"):
-        return "blackmarket"
-    if data.startswith("shop:"):
-        return "shop"
-    if data.startswith("help:"):
-        return "help"
-    if data in ("game:menu", "game:casino") or data.startswith("casino:"):
-        return "casino"
-    return None
-
-
-async def _h_section_gate(update, context):
-    """اگر بخش مربوط به این دکمه خاموش باشد، جلوی ادامه را می‌گیرد"""
-    q = update.callback_query
-    sec = _section_for_callback(q.data or "")
-    if not sec:
-        return
-    s = await _get_settings()
-    if s.get(f"section_off:{sec}") == "1":
-        try:
-            await q.answer("🚫 این بخش فعلاً غیرفعال است", show_alert=True)
-        except Exception:
-            pass
-        raise _stop()
-
-
-# ═══════════════════════════════════════════════
 # ═══════════ بن کاربر ═══════════
 # ═══════════════════════════════════════════════
 _ban_notified: dict = {}
@@ -2742,14 +3065,84 @@ async def _load_bans():
     logger.info(f"🚫 {len(_banned)} کاربر بن‌شده بارگذاری شد")
 
 
+def _detect_section(update) -> str | None:
+    """تشخیص بخش مربوط به هر کلیک یا پیام برای اعمال خاموش/روشن کردن بخش‌ها"""
+    q = update.callback_query
+    if q and q.data:
+        d = q.data
+        if d.startswith("bank:"):
+            return "bank"
+        if d.startswith("prop:"):
+            return "properties"
+        if d.startswith("worker:"):
+            return "workers"
+        if d.startswith("mission:"):
+            return "missions"
+        if d.startswith(("transfer:", "tr:")):
+            return "transfer"
+        if d.startswith("kabareh:"):
+            return "kabareh"
+        if d.startswith("lb:"):
+            return "leaderboard"
+        if d.startswith("bm:"):
+            return "blackmarket"
+        if d.startswith("shop:") and not d.startswith(("shop:ok:", "shop:no:")):
+            return "shop"
+        if d.startswith(("game:", "casino:")):
+            return "casino"
+        return None
+    msg = update.effective_message
+    if msg and msg.text:
+        t = msg.text.strip()
+        if re.match(r"^زر$", t):
+            return "zar"
+        if re.match(r"^\s*هدیه\s*زر(\s+\S+)?\s*$", t):
+            return "gifts"
+        if re.match(r"^\s*(کازینو\s*زربات|زر\s*بازی)\s*$", t):
+            return "casino"
+        if t in _cmd_map():
+            return "blackmarket"
+        if _utils and update.effective_user:
+            st = (_utils.user_states.get(update.effective_user.id) or {}).get("action", "")
+            if st.startswith("bank_"):
+                return "bank"
+            if st.startswith("transfer_"):
+                return "transfer"
+    return None
+
+
 async def _h_bot_gate(update, context):
-    """اولین هندلر: در حالت خاموشی بات یا کاربر بن‌شده، هیچ پاسخی داده نمی‌شود"""
+    """اولین هندلر: حالت خاموشی کل بات، خاموشی بخش‌ها و کاربران بن‌شده"""
     u = update.effective_user
     if not u:
         return
-    if _bot_off and u.id not in _owner_ids():
+    is_adm = u.id in _owner_ids()
+    if _bot_off and not is_adm:
+        off_msg = _ctrl_text("bot_off_msg", "")
+        if off_msg:
+            try:
+                if update.callback_query:
+                    await update.callback_query.answer(off_msg[:190], show_alert=True)
+                elif update.effective_chat and update.effective_chat.type == "private" and update.effective_message:
+                    await update.effective_message.reply_text(off_msg)
+            except Exception:
+                pass
         raise _stop()
-    if u.id not in _banned:
+    if u.id in _banned:
+        pass
+    else:
+        if not is_adm and _controls.get("disabled_sections"):
+            sec = _detect_section(update)
+            if sec and _section_disabled(sec):
+                msg_txt = _ctrl_text("section_off", "⛔ این بخش موقتاً توسط مدیریت غیرفعال شده است.")
+                try:
+                    if update.callback_query:
+                        await update.callback_query.answer(msg_txt[:190], show_alert=True)
+                    elif update.effective_message:
+                        await update.effective_message.reply_text(msg_txt)
+                except Exception:
+                    pass
+                raise _stop()
         return
     try:
         if update.pre_checkout_query:
@@ -2863,61 +3256,176 @@ async def admin_admins_remove(request, body):
     return _json({"ok": True})
 
 
-@_admin
-async def admin_settings_get(request, body):
-    """همه‌ی تنظیمات قابل ویرایش: بازی‌ها، بخش‌ها، متن‌ها و رنگ‌ها"""
-    await _ensure_tables()
-    s = await _get_settings(force=True)
-    games = [{"key": k, "name": s.get(f"game_name:{k}", v["name"]), "desc": s.get(f"game_desc:{k}", v["desc"]),
-              "emoji": v["emoji"], "type": v["type"], "off": s.get(f"game_off:{k}") == "1"}
-             for k, v in GAMES.items()]
-    sections = [{"key": k, "name": n, "off": s.get(f"section_off:{k}") == "1"} for k, n in SECTIONS]
-    texts = {"casino_text": s.get("casino_text", "")}
-    texts.update({f"help_page:{i}": s.get(f"help_page:{i}", "") for i in range(1, 6)})
-    theme = {k[6:]: v for k, v in s.items() if k.startswith("theme:") and v}
-    return _json({"ok": True, "games": games, "sections": sections, "texts": texts, "theme": theme,
-                  "defaults": {"casino_text": casino_text(), "help_pages": _help_pages()}})
+# ═══════════ VIP + قفل بانک + کنترل بخش‌ها + دیزاین ═══════════
+_DEFAULT_VIP_PLANS = [
+    ("👑 اشتراک VIP یک‌ماهه", 80_000, 30, -30,
+     "مزایا: ۶ عدد از هر وسیله شلیک | +۵ ظرفیت مهمات در هر لول انبار | +۱۰٪ سود ملک و کارگر | سود روزانه ۵٪ بانک"),
+    ("👑 اشتراک VIP سه‌ماهه", 220_000, 90, -20,
+     "مزایا: ۶ عدد از هر وسیله شلیک | +۵ ظرفیت مهمات در هر لول انبار | +۱۰٪ سود ملک و کارگر | سود روزانه ۵٪ بانک"),
+    ("👑 اشتراک VIP شش‌ماهه", 450_000, 180, -10,
+     "مزایا: ۶ عدد از هر وسیله شلیک | +۵ ظرفیت مهمات در هر لول انبار | +۱۰٪ سود ملک و کارگر | سود روزانه ۵٪ بانک"),
+]
 
 
-@_admin
-async def admin_settings_save(request, body):
-    """ذخیره‌ی تنظیمات — مقدار خالی یعنی بازگشت به پیش‌فرض"""
+async def _load_vips():
     await _ensure_tables()
-    data = body.get("settings") or {}
-    if not isinstance(data, dict):
-        return _err("داده نامعتبر است")
-    prefixes = ("game_off:", "game_name:", "game_desc:", "section_off:", "help_page:", "casino_text", "theme:")
-    for k, v in data.items():
-        if not any(k.startswith(p) for p in prefixes):
+    rows = await _fetch("SELECT user_id, expires_at FROM vip_users WHERE expires_at > %s", (time.time(),))
+    _vip_expires.clear()
+    for r in rows:
+        _vip_expires[int(r["user_id"])] = float(r["expires_at"])
+    logger.info(f"👑 {len(_vip_expires)} کاربر VIP فعال بارگذاری شد")
+
+
+async def _load_bank_locks():
+    await _ensure_tables()
+    rows = await _fetch("SELECT user_id, unlock_at FROM bank_locks WHERE unlock_at > %s", (time.time(),))
+    _bank_unlock.clear()
+    for r in rows:
+        _bank_unlock[int(r["user_id"])] = float(r["unlock_at"])
+
+
+async def _seed_vip_products():
+    """افزودن خودکار ۳ محصول VIP (یک‌ماهه ۸۰ ت، سه‌ماهه ۲۲۰ ت، شش‌ماهه ۴۵۰ ت) اگر هنوز ثبت نشده باشند"""
+    await _ensure_tables()
+    if await _get_setting("vip_seeded") == "1":
+        return
+    prods = await _fetch("SELECT rewards FROM shop_products")
+    existing_days = set()
+    for p in prods:
+        d = _to_int(_loads(p["rewards"]).get("vip_days"), 0) or 0
+        if d:
+            existing_days.add(d)
+    now_t = time.time()
+    for title, price, days, sort, desc in _DEFAULT_VIP_PLANS:
+        if days in existing_days:
             continue
-        v = str(v or "")[:4000]
-        if k.startswith("theme:") and v and not re.fullmatch(r"#[0-9a-fA-F]{6}", v):
-            return _err(f"رنگ نامعتبر برای {k}")
-        if k.startswith("game_name:") and GAMES.get(k.split(":", 1)[1], {}).get("name") == v:
-            v = ""
-        if k.startswith("game_desc:") and GAMES.get(k.split(":", 1)[1], {}).get("desc") == v:
-            v = ""
-        if v == "":
-            await _exec("DELETE FROM zar_settings WHERE k=%s", (k,))
-            _settings_cache.pop(k, None)
-        else:
-            await _exec("INSERT INTO zar_settings (k, v) VALUES (%s,%s) ON DUPLICATE KEY UPDATE v=VALUES(v)", (k, v))
-            _settings_cache[k] = v
-    _settings_at = time.time()
-    return _json({"ok": True})
+        await _exec(
+            "INSERT INTO shop_products (title, description, rewards, price_toman, price_stars, active, sort, created_at) "
+            "VALUES (%s,%s,%s,%s,0,1,%s,%s)",
+            (title, desc, json.dumps({"vip_days": days}, ensure_ascii=False), price, sort, now_t))
+    await _set_setting("vip_seeded", "1")
+    logger.info("👑 محصولات اشتراک VIP در فروشگاه ثبت شد")
+
+
+def _clean_hex(v, default: str) -> str:
+    s = str(v or "").strip()
+    return s if re.fullmatch(r"#[0-9a-fA-F]{6}", s) else default
+
+
+async def _load_controls_and_design():
+    await _ensure_tables()
+    raw_c = _loads(await _get_setting("bot_controls", "{}"))
+    _controls["disabled_games"] = [k for k in (raw_c.get("disabled_games") or []) if k in GAMES]
+    _controls["disabled_sections"] = [k for k in (raw_c.get("disabled_sections") or []) if k in BOT_SECTIONS]
+    texts = raw_c.get("texts") if isinstance(raw_c.get("texts"), dict) else {}
+    _controls["texts"] = {str(k)[:40]: str(v)[:1000] for k, v in texts.items() if isinstance(v, str)}
+    raw_d = _loads(await _get_setting("design", "{}"))
+    for k, dv in _DEFAULT_DESIGN.items():
+        _design[k] = _clean_hex(raw_d.get(k), dv)
 
 
 @_admin
 async def admin_vip_list(request, body):
-    """لیست کاربران VIP فعال"""
     await _ensure_tables()
-    now = time.time()
-    rows = await _fetch("SELECT user_id, first_name, username, vip_until FROM users WHERE vip_until > %s "
-                        "ORDER BY vip_until DESC LIMIT 200", (now,))
-    return _json({"ok": True, "vips": [{
-        "user_id": int(r["user_id"]), "name": r["first_name"] or "", "username": r["username"] or "",
-        "until": float(r["vip_until"]), "days_left": max(0, round((float(r["vip_until"]) - now) / 86400, 1)),
-    } for r in rows]})
+    rows = await _fetch("SELECT v.user_id, v.expires_at, v.note, v.updated_at, u.first_name, u.username "
+                        "FROM vip_users v LEFT JOIN users u ON u.user_id=v.user_id ORDER BY v.expires_at DESC LIMIT 300")
+    now_t = time.time()
+    out = []
+    for r in rows:
+        exp = float(r["expires_at"])
+        rem = max(0, math.ceil((exp - now_t) / 86400)) if exp > now_t else 0
+        out.append({"user_id": int(r["user_id"]), "name": r["first_name"] or "", "username": r["username"] or "",
+                    "expires_at": exp, "days_left": rem, "active": exp > now_t, "note": r["note"] or ""})
+    return _json({"ok": True, "vips": out})
+
+
+@_admin
+async def admin_vip_set(request, body):
+    uid = _to_int(body.get("user_id"), 0) or 0
+    days = _to_int(body.get("days"), 0) or 0
+    if uid <= 0:
+        return _err("آیدی عددی نامعتبر است")
+    if days <= 0 or days > 3650:
+        return _err("تعداد روز نامعتبر است")
+    u = await _fetch("SELECT first_name FROM users WHERE user_id=%s", (uid,), one=True)
+    if not u:
+        return _err("کاربری با این آیدی در ربات پیدا نشد", 404)
+    note = str(body.get("note") or "")[:255]
+    now_t = time.time()
+    await _ensure_tables()
+    cur_exp = float(_vip_expires.get(uid, 0))
+    base = max(now_t, cur_exp) if not body.get("reset") else now_t
+    new_exp = base + days * 86400
+    await _exec("INSERT INTO vip_users (user_id, expires_at, note, updated_at) VALUES (%s,%s,%s,%s) "
+                "ON DUPLICATE KEY UPDATE expires_at=VALUES(expires_at), note=VALUES(note), updated_at=VALUES(updated_at)",
+                (uid, new_exp, note, now_t))
+    _vip_expires[uid] = new_exp
+    await _notify(uid, f"👑 <b>اشتراک VIP شما فعال شد!</b>\n━━━━━━━━━━━━━━━━━━\n"
+                       f"⏳ مدت: <b>{days} روز</b> (باقی‌مانده: {vip_days_left(uid)} روز)\n"
+                       f"🚀 تا {VIP_LAUNCHER_MAX} عدد از هر وسیله شلیک\n"
+                       f"🏭 +{VIP_AMMO_BONUS} ظرفیت مهمات در هر لول انبار\n"
+                       f"🏠 +{int(VIP_INCOME_BONUS * 100)}٪ سود ملک و کارگر\n"
+                       f"🏦 سود روزانه {int(VIP_BANK_RATE * 100)}٪ بانک")
+    logger.warning(f"👑 VIP فعال شد: uid={uid} days={days}")
+    return _json({"ok": True, "days_left": vip_days_left(uid)})
+
+
+@_admin
+async def admin_vip_remove(request, body):
+    uid = _to_int(body.get("user_id"), 0) or 0
+    if uid <= 0:
+        return _err("آیدی نامعتبر است")
+    await _ensure_tables()
+    await _exec("DELETE FROM vip_users WHERE user_id=%s", (uid,))
+    _vip_expires.pop(uid, None)
+    await _notify(uid, "ℹ️ اشتراک VIP شما توسط مدیریت غیرفعال شد.")
+    return _json({"ok": True})
+
+
+@_admin
+async def admin_controls_get(request, body):
+    await _load_controls_and_design()
+    return _json({
+        "ok": True,
+        "games": [{"key": k, "name": v["name"], "emoji": v["emoji"], "type": v["type"],
+                   "disabled": k in _controls["disabled_games"]} for k, v in GAMES.items()],
+        "sections": [{"key": k, "name": v, "disabled": k in _controls["disabled_sections"]}
+                     for k, v in BOT_SECTIONS.items()],
+        "texts": dict(_controls["texts"]),
+    })
+
+
+@_admin
+async def admin_controls_save(request, body):
+    dg = [k for k in (body.get("disabled_games") or []) if k in GAMES]
+    ds = [k for k in (body.get("disabled_sections") or []) if k in BOT_SECTIONS]
+    raw_t = body.get("texts") if isinstance(body.get("texts"), dict) else {}
+    texts = {str(k)[:40]: str(v).strip()[:1000] for k, v in raw_t.items() if isinstance(v, str) and str(v).strip()}
+    _controls["disabled_games"] = dg
+    _controls["disabled_sections"] = ds
+    _controls["texts"] = texts
+    await _set_setting("bot_controls", json.dumps(_controls, ensure_ascii=False))
+    if _utils and hasattr(_utils, "build_main_menu_kb"):
+        _utils.MAIN_MENU_KB = _utils.build_main_menu_kb()
+    return _json({"ok": True})
+
+
+@_admin
+async def admin_design_get(request, body):
+    await _load_controls_and_design()
+    return _json({"ok": True, "design": dict(_design), "defaults": dict(_DEFAULT_DESIGN)})
+
+
+@_admin
+async def admin_design_save(request, body):
+    raw = body.get("design") if isinstance(body.get("design"), dict) else body
+    if body.get("reset"):
+        new_d = dict(_DEFAULT_DESIGN)
+    else:
+        new_d = {k: _clean_hex(raw.get(k), dv) for k, dv in _DEFAULT_DESIGN.items()}
+    _design.update(new_d)
+    await _set_setting("design", json.dumps(_design, ensure_ascii=False))
+    return _json({"ok": True, "design": dict(_design)})
 
 
 @_admin
@@ -3056,8 +3564,10 @@ async def _h_lb_cb(update, context):
 async def _shop_menu_content():
     from telegram import InlineKeyboardButton as B
     prods = await _shop_products()
+    intro = _ctrl_text("shop_text", "")
+    intro_line = f"{_esc(intro)}\n\n" if intro else ""
     if prods:
-        text = ("💎 <b>خرید کوین و لول</b>\n━━━━━━━━━━━━━━━━━━\n"
+        text = ("💎 <b>خرید کوین، لول و VIP</b>\n━━━━━━━━━━━━━━━━━━\n" + intro_line
                 + "\n".join(f"• <b>{_esc(p['title'])}</b> — {_price_line(p)}" for p in prods)
                 + "\n\n👇 محصول مورد نظر را انتخاب کن:")
         rows = [[B(f"💎 {p['title'][:40]}", callback_data=f"shop:p:{p['id']}")] for p in prods]
@@ -3069,28 +3579,8 @@ async def _shop_menu_content():
 
 
 async def _h_start_shop(update, context):
-    """/start shop → فروشگاه | /start webapp → لینک ورود کازینو (برای پروکسی/مرورگر)"""
-    if not context.args:
-        return
-    arg = context.args[0].lower()
-    if arg == "webapp":
-        if _utils and not await _utils.verify_membership(update, context):
-            raise _stop()
-        await db.ensure_user(update.effective_user)
-        base = (getattr(config, "WEBAPP_PUBLIC_URL", "") or "").rstrip("/")
-        token = _utils.generate_browser_token(update.effective_user.id) \
-            if _utils and hasattr(_utils, "generate_browser_token") else ""
-        if not base or not token:
-            await update.effective_message.reply_text(
-                "⚠️ لینک ورود هنوز تنظیم نشده — از دکمه‌ی «🎰 کازینو» در منوی ربات وارد شو.")
-            raise _stop()
-        await update.effective_message.reply_text(
-            "🎲 <b>لینک ورود به کازینو</b>\n━━━━━━━━━━━━━━━━━━\n👇 روی دکمه بزن تا کازینو باز شود:\n"
-            f"<a href=\"{base}/?token={token}\">🎰 ورود به کازینو زر</a>\n\n"
-            "🔗 این لینک مخصوص توست و ۳۰ روز اعتبار دارد.",
-            parse_mode="HTML")
-        raise _stop()
-    if arg != "shop":
+    """/start shop در پیوی → مستقیم فروشگاه"""
+    if not context.args or context.args[0].lower() != "shop":
         return
     from telegram import InlineKeyboardMarkup as M
     if _utils and not await _utils.verify_membership(update, context):
@@ -3101,178 +3591,6 @@ async def _h_start_shop(update, context):
     if _utils:
         _utils.remember_owner(m, update.effective_user.id)
     raise _stop()
-
-
-# ═══════════════════════════════════════════════
-# ═══════════ انبار بازار سیاه (جایگزین اینونتوری) ═══════════
-# ═══════════════════════════════════════════════
-async def _build_warehouse_text(uid: int) -> str:
-    lvl = await _wh_level(uid)
-    vip = await _is_vip(uid)
-    cap = _wh_capacity(lvl, vip)
-    rows = await _fetch("SELECT item_key, COUNT(*) AS c FROM inventory WHERE user_id=%s GROUP BY item_key", (uid,))
-    counts = {r["item_key"]: int(r["c"]) for r in rows}
-    lines = [f"🏭 <b>انبار من</b> — لول {lvl}/۱۰", "━━━━━━━━━━━━━━━━━━",
-             f"📦 ظرفیت هر مهمات: <b>{cap} عدد</b>" + (" (👑 VIP: +۵)" if vip else ""),
-             f"🚀 سقف هر وسیله شلیک: <b>{LAUNCHER_MAX_VIP if vip else LAUNCHER_MAX} عدد</b>"]
-    if lvl < WH_MAX_LEVEL:
-        lines.append(f"⬆️ هزینه ارتقا به لول {lvl + 1}: <b>{_fmt(_wh_upgrade_cost(lvl))}</b> زرکوین")
-    else:
-        lines.append("🏭 انبار در حداکثر لول است!")
-    lines.append("")
-    projs = [(k, v) for k, v in _bm_items().items() if v.get("type") == "projectile" and counts.get(k, 0) > 0]
-    if projs:
-        lines.append("📦 مهمات داخل انبار:")
-        for k, v in projs:
-            lines.append(f" {v['emoji']} {v['name']}: {counts[k]}/{cap}")
-    else:
-        lines.append("📭 هنوز مهماتی در انبار نیست.")
-    return "\n".join(lines)
-
-
-def _warehouse_kb():
-    from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M
-    return M([[B("⬆️ ارتقای انبار", callback_data="wh:upgrade")],
-              [B("🔙 بازگشت به بازار سیاه", callback_data="bm:menu:0")]])
-
-
-async def _h_wh_upgrade(update, context):
-    """ارتقای انبار — هزینه: ۲^لول فعلی × ۱٬۰۰۰٬۰۰۰ زرکوین"""
-    q = update.callback_query
-    if _not_owner(q):
-        await _utils.safe_answer(q, "❌ این منو برای شما نیست!\nبرای منوی خودت /menu را بفرست.", show_alert=True)
-        raise _stop()
-    if not await _utils.verify_membership(update, context):
-        raise _stop()
-    uid = q.from_user.id
-    lvl = await _wh_level(uid)
-    if lvl >= WH_MAX_LEVEL:
-        await _utils.safe_answer(q, "🏭 انبار در حداکثر لول (۱۰) است!", show_alert=True)
-        raise _stop()
-    cost = _wh_upgrade_cost(lvl)
-    if not await db.deduct_balance(uid, cost):
-        await _utils.safe_answer(q, f"❌ موجودی کافی نیست!\nهزینه ارتقا: {_fmt(cost)} زرکوین", show_alert=True)
-        raise _stop()
-    await _exec("UPDATE users SET warehouse_level=%s WHERE user_id=%s", (lvl + 1, uid))
-    _invalidate(uid)
-    m = await _utils.safe_edit(q, await _build_warehouse_text(uid), _warehouse_kb())
-    if m:
-        _utils.remember_owner(m, uid)
-    await _utils.safe_answer(q, f"✅ انبار به لول {lvl + 1} ارتقا یافت!", show_alert=True)
-    raise _stop()
-
-
-# ═══════════════════════════════════════════════
-# ═══════════ قفل برداشت بانک (۵ ساعت بعد از واریز) ═══════════
-# ═══════════════════════════════════════════════
-_orig_bank_deposit = None
-_orig_bank_withdraw = None
-_orig_accrue = None
-_orig_peek = None
-
-
-async def _bank_deposit_locked(uid, amount, *a, **k):
-    ok = await _orig_bank_deposit(uid, amount, *a, **k)
-    if ok:
-        try:
-            await _ensure_tables()
-            await _exec("UPDATE users SET last_bank_deposit=%s WHERE user_id=%s", (time.time(), uid))
-        except Exception:
-            pass
-    return ok
-
-
-async def _bank_withdraw_locked(uid, amount, *a, **k):
-    try:
-        await _ensure_tables()
-        r = await _fetch("SELECT last_bank_deposit FROM users WHERE user_id=%s", (uid,), one=True)
-        last = float(r["last_bank_deposit"]) if r and r["last_bank_deposit"] else 0
-        if last and time.time() - last < BANK_LOCK_SECONDS:
-            return False
-    except Exception:
-        pass
-    return await _orig_bank_withdraw(uid, amount, *a, **k)
-
-
-_bank_deposit_locked._zar = True
-_bank_withdraw_locked._zar = True
-
-
-async def _h_bank_lock(update, context):
-    """پیام قشنگ برای برداشت قفل‌شده (قبل از هندلر متنی bot.py)"""
-    msg = update.effective_message
-    if not msg or not msg.text or not _utils:
-        return
-    state = _utils.user_states.get(update.effective_user.id)
-    if not state or state.get("action") != "bank_withdraw":
-        return
-    uid = update.effective_user.id
-    try:
-        await _ensure_tables()
-        r = await _fetch("SELECT last_bank_deposit FROM users WHERE user_id=%s", (uid,), one=True)
-        last = float(r["last_bank_deposit"]) if r and r["last_bank_deposit"] else 0
-    except Exception:
-        return
-    remain = BANK_LOCK_SECONDS - (time.time() - last)
-    if remain <= 0:
-        return
-    _utils.user_states.pop(uid, None)
-    mins = max(1, math.ceil(remain / 60))
-    await msg.reply_text(
-        "🔒 <b>برداشت از بانک قفل است</b>\n━━━━━━━━━━━━━━━━━━\n"
-        f"بعد از واریز به بانک، تا <b>{BANK_LOCK_SECONDS // 3600} ساعت</b> نمی‌توانی برداشت کنی.\n"
-        f"⏳ زمان باقی‌مانده: <b>{mins} دقیقه</b>")
-    raise _stop()
-
-
-# ═══════════════════════════════════════════════
-# ═══════════ بونوس VIP روی درآمد ═══════════
-# ═══════════════════════════════════════════════
-async def _vip_bonus(uid, asset_income: int, bank_balance: int):
-    """+۱۰٪ درآمد ملک/کارگر و +۳٪ سود بانک (مجموع ۵٪ به‌جای ۲٪)"""
-    try:
-        if not await _is_vip(uid):
-            return 0, 0
-        return int(asset_income * 0.10), int(bank_balance * 0.03)
-    except Exception:
-        return 0, 0
-
-
-async def _accrue_vip(uid, *a, **k):
-    res = await _orig_accrue(uid, *a, **k)
-    try:
-        if not res or len(res) < 3:
-            return res
-        asset_income, bank_interest, total = int(res[0] or 0), int(res[1] or 0), int(res[2] or 0)
-        u = await db.get_user(uid)
-        bank = int(u["bank_balance"] or 0) if u else 0
-        b_asset, b_bank = await _vip_bonus(uid, asset_income, bank)
-        bonus = b_asset + b_bank
-        if bonus > 0:
-            await db.add_balance(uid, bonus)
-            res = (asset_income + b_asset, bank_interest + b_bank, total + bonus)
-    except Exception:
-        logger.exception("vip accrue bonus error")
-    return res
-
-
-async def _peek_vip(uid, *a, **k):
-    res = await _orig_peek(uid, *a, **k)
-    try:
-        if not res or len(res) < 3:
-            return res
-        asset_income, bank_interest, total = int(res[0] or 0), int(res[1] or 0), int(res[2] or 0)
-        u = await db.get_user(uid)
-        bank = int(u["bank_balance"] or 0) if u else 0
-        b_asset, b_bank = await _vip_bonus(uid, asset_income, bank)
-        res = (asset_income + b_asset, bank_interest + b_bank, total + b_asset + b_bank)
-    except Exception:
-        logger.exception("vip peek bonus error")
-    return res
-
-
-_accrue_vip._zar = True
-_peek_vip._zar = True
 
 
 # ═══════════ سرور ═══════════
@@ -3297,37 +3615,22 @@ async def _security_mw(request: web.Request, handler):
 
 async def handle_index(request):
     try:
-        html = MINIAPP_HTML.read_text(encoding="utf-8")
+        html_txt = MINIAPP_HTML.read_text(encoding="utf-8")
     except FileNotFoundError:
         return web.Response(text="miniapp.html not found", status=500)
-    try:
-        s = await _get_settings()
-        theme = {k[6:]: v for k, v in s.items() if k.startswith("theme:") and re.fullmatch(r"#[0-9a-fA-F]{6}", v or "")}
-        if theme:
-            css = ":root{" + "".join(f"--{k}:{v};" for k, v in theme.items()) + "}"
-            html = html.replace("</head>", f"<style>{css}</style></head>", 1)
-    except Exception:
-        pass
-    return web.Response(text=html, content_type="text/html", charset="utf-8", headers={"Cache-Control": "no-cache"})
+    resp = web.Response(text=html_txt, content_type="text/html", charset="utf-8", headers={"Cache-Control": "no-cache"})
+    # اگر کاربر با توکن مستقیم یا init_data در query وارد شده، همان ابتدا کوکی نشست ست کن
+    uid = validate_browser_token(request.query.get("token") or "")
+    if not uid and request.query.get("init_data"):
+        tg = validate_init_data(request.query.get("init_data") or "")
+        uid = int(tg["id"]) if tg and tg.get("id") else None
+    if uid:
+        _set_user_cookie(request, resp, uid)
+    return resp
 
 
 async def handle_health(request):
     return _json({"ok": True, "redis": _redis_on(), "games": len(_active_games), "queue": len(_waiting)})
-
-
-async def handle_config(request):
-    """اطلاعات عمومی برای صفحه‌ی ورود مینی‌اپ (بدون احراز هویت) — نام کاربری ربات برای ساخت لینک ورود"""
-    un = ""
-    if _bot_app:
-        try:
-            un = _bot_app.bot.username or ""
-        except Exception:
-            un = ""
-    if not un:
-        m = re.search(r"t\.me/([A-Za-z0-9_]+)", getattr(config, "WEBAPP_DEEP_LINK", "") or "")
-        un = m.group(1) if m else ""
-    return _json({"ok": True, "bot_username": un,
-                  "webapp_url": (getattr(config, "WEBAPP_PUBLIC_URL", "") or "").rstrip("/")})
 
 
 def create_app() -> web.Application:
@@ -3335,9 +3638,10 @@ def create_app() -> web.Application:
     for path in ("/", "/miniapp", "/webapp", "/casino", "/app"):
         app.router.add_get(path, handle_index)
     app.router.add_get("/health", handle_health)
-    app.router.add_get("/api/config", handle_config)
     app.router.add_get("/admin", admin_page)
     app.router.add_get("/admin/", admin_page)
+    app.router.add_post("/admin/api/login", admin_login)
+    app.router.add_post("/admin/api/logout", admin_logout)
     admin_routes = {
         "stats": admin_stats, "search": admin_search, "user": admin_user, "adjust": admin_adjust,
         "gifts/list": admin_gifts_list, "gifts/create": admin_gifts_create,
@@ -3347,7 +3651,9 @@ def create_app() -> web.Application:
         "shop/reject": admin_shop_reject, "shop/settings": admin_shop_settings,
         "ban": admin_ban, "unban": admin_unban, "bot/toggle": admin_bot_toggle,
         "admins/list": admin_admins_list, "admins/add": admin_admins_add, "admins/remove": admin_admins_remove,
-        "vip/list": admin_vip_list, "settings/get": admin_settings_get, "settings/save": admin_settings_save,
+        "vip/list": admin_vip_list, "vip/set": admin_vip_set, "vip/remove": admin_vip_remove,
+        "controls/get": admin_controls_get, "controls/save": admin_controls_save,
+        "design/get": admin_design_get, "design/save": admin_design_save,
     }
     for p, h in admin_routes.items():
         app.router.add_post(f"/admin/api/{p}", h)
@@ -3380,7 +3686,7 @@ async def start_webapp(*args, **kwargs):
             await redis_client.init_redis()
     except Exception as e:
         logger.warning(f"⚠️ init_redis ناموفق: {e}")
-    port = int(kwargs.get("port") or getattr(config, "WEBAPP_PORT", 8080))
+    port = int(kwargs.get("port") or os.environ.get("PORT") or getattr(config, "WEBAPP_PORT", 8080))
     runner = web.AppRunner(create_app(), access_log=None)
     await runner.setup()
     try:
