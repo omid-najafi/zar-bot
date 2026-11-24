@@ -5,13 +5,13 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="color-scheme" content="dark">
 <title>🎲 قمارخانه زر</title>
-<script src="https://telegram.org/js/telegram-web-app.js"></script>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css">
+<script src="https://telegram.org/js/telegram-web-app.js" async></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css" media="print" onload="this.media='all'">
 <style>
 :root{
   --bg:#07070c;--bg2:#0e0e17;--panel:rgba(255,255,255,.045);--panel2:rgba(255,255,255,.08);
   --line:rgba(255,255,255,.08);--text:#f4f4f7;--muted:#9a9ab0;--gold:#f5c451;--gold2:#d99a1e;
-  --red:#e11d48;--red2:#9f1239;--green:#10b981;--green2:#047857;--blue:#38bdf8;--radius:18px;
+  --red:#e11d48;--red2:#9f1239;--green:#10b981;--blue:#38bdf8;--gold-text:#1d1200;--radius:18px;
   --safe-b:env(safe-area-inset-bottom,0px);
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -86,9 +86,9 @@ input{font-family:inherit}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px;margin-bottom:12px}
 .btn{width:100%;padding:15px;border-radius:16px;font-weight:800;font-size:16px;transition:transform .15s,filter .2s}
 .btn:active{transform:scale(.98)}
-.btn-gold{background:linear-gradient(135deg,#ffd978,var(--gold2));color:#1d1200;box-shadow:0 10px 26px -8px rgba(245,196,81,.7)}
-.btn-red{background:linear-gradient(135deg,#fb3b65,var(--red2));color:#fff;box-shadow:0 10px 26px -8px rgba(225,29,72,.7)}
-.btn-green{background:linear-gradient(135deg,var(--green),var(--green2));color:#02140d;box-shadow:0 10px 26px -8px rgba(16,185,129,.7)}
+.btn-gold{background:linear-gradient(135deg,var(--gold),var(--gold2));color:var(--gold-text);box-shadow:0 10px 26px -8px color-mix(in srgb,var(--gold) 65%,transparent)}
+.btn-red{background:linear-gradient(135deg,var(--red),var(--red2));color:#fff;box-shadow:0 10px 26px -8px color-mix(in srgb,var(--red) 65%,transparent)}
+.btn-green{background:linear-gradient(135deg,var(--green),color-mix(in srgb,var(--green) 60%,#000));color:#02140d;box-shadow:0 10px 26px -8px color-mix(in srgb,var(--green) 65%,transparent)}
 .btn-ghost{background:var(--panel2);border:1px solid var(--line);color:var(--text)}
 .row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .row3{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
@@ -324,8 +324,8 @@ input{font-family:inherit}
   <section class="screen active" id="screen-home">
     <div class="hero">
       <div class="suits">♠♥♣♦</div>
-      <h1>به قمارخانه زر خوش اومدی</h1>
-      <p>بازی‌های سریع تک‌نفره یا رقابت زنده با حریف واقعی. همه‌چیز سمت سرور و منصفانه حساب می‌شه.</p>
+      <h1 id="hero-title">به قمارخانه زر خوش اومدی</h1>
+      <p id="hero-sub">بازی‌های سریع تک‌نفره یا رقابت زنده با حریف واقعی. همه‌چیز سمت سرور و منصفانه حساب می‌شه.</p>
       <div class="big"><b id="hero-bal">0</b><span>زرکوین</span></div>
     </div>
     <div id="resume-box"></div>
@@ -374,19 +374,46 @@ input{font-family:inherit}
 <script>
 'use strict';
 /* ════════════ پایه ════════════ */
-const tg = (window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp : null;
+function getTg() { return (window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp : null; }
+let tg = getTg();
 const $ = s => document.querySelector(s);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const qsp = new URLSearchParams(location.search);
 const hsp = new URLSearchParams(location.hash.replace(/^#/, ''));
-const AUTH = { initData: (tg && tg.initData) || '', token: qsp.get('token') || hsp.get('token') || '' };
-try { if (AUTH.token) sessionStorage.setItem('zar_token', AUTH.token); else AUTH.token = sessionStorage.getItem('zar_token') || ''; } catch (e) {}
+const URL_TOK = qsp.get('token') || hsp.get('token') || '';
+const URL_APP = qsp.get('app') === '1' || !!URL_TOK;
+const RAW_TG_DATA = (tg && tg.initData) || hsp.get('tgWebAppData') || qsp.get('tgWebAppData') || qsp.get('init_data') || '';
+const IN_TG = !!(RAW_TG_DATA || hsp.get('tgWebAppVersion') || hsp.get('tgWebAppPlatform') || window.TelegramWebviewProxy || (window.external && window.external.notify) || /Telegram/i.test(navigator.userAgent));
+// هرکس با لینک مستقیم دامنه (بیرون از تلگرام و بدون دکمه مینی‌اپ/پروکسی) وارد شد → مستقیم به صفحه ورود پنل مدیریت
+if (!IN_TG && !URL_APP) { location.replace('/admin'); }
+// پاک کردن توکن از آدرس مرورگر و نگه داشتن ?app=1 برای رفرش روی لینک پروکسی
+if (URL_TOK) { try { history.replaceState(null, '', '/?app=1'); } catch (e) {} }
+
+const AUTH = { initData: '', token: '' };
+function readAuth() {
+  tg = getTg() || tg;
+  // خواندن مستقیم tgWebAppData از hash/query (حتی اگر telegram-web-app.js روی پروکسی بلاک شود)
+  let idata = (tg && tg.initData) || hsp.get('tgWebAppData') || qsp.get('tgWebAppData') || qsp.get('init_data') || '';
+  if (!idata && location.hash) {
+    const m = location.hash.match(/tgWebAppData=([^&]+)/);
+    if (m) { try { idata = decodeURIComponent(m[1]); } catch (e) { idata = m[1]; } }
+  }
+  if (idata) { AUTH.initData = idata; try { sessionStorage.setItem('zar_init', idata); } catch (e) {} }
+  else if (!AUTH.initData) { try { AUTH.initData = sessionStorage.getItem('zar_init') || ''; } catch (e) {} }
+  let tok = URL_TOK || '';
+  if (tok) {
+    AUTH.token = tok;
+    try { sessionStorage.setItem('zar_token', tok); localStorage.setItem('zar_token', tok); } catch (e) {}
+  } else if (!AUTH.token) {
+    try { AUTH.token = sessionStorage.getItem('zar_token') || localStorage.getItem('zar_token') || ''; } catch (e) {}
+  }
+}
+readAuth();
 
 const S = {
   me: null, games: {}, list: [], wheel: [], tab: '1p', screen: 'home', bet: {},
   solo: null, soloKey: null, busy: false,
   queue: null, queueEnd: 0, gameId: null, game: null, lastGameKey: '', deadlineAt: 0, turnTimeout: 45,
-  xp: { min: 15, max: 2500, divisor: 10000 },
   resultShown: null, acting: false, authFailed: false, timers: {}
 };
 const GRAD = {
@@ -407,25 +434,32 @@ const fmtPlain = n => Number(n || 0).toLocaleString('en-US');
 const toEn = s => String(s || '').replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d)).replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d));
 const parseNum = s => { const v = parseInt(toEn(s).replace(/[^\d]/g, ''), 10); return isNaN(v) ? 0 : v; };
 const short = n => n >= 1e6 ? (n / 1e6).toLocaleString('fa-IR', { maximumFractionDigits: 1 }) + 'M' : n >= 1e3 ? (n / 1e3).toLocaleString('fa-IR', { maximumFractionDigits: 1 }) + 'K' : fmt(n);
-const xpFor = bet => Math.max(S.xp.min, Math.min(S.xp.max, Math.floor((Number(bet) || 0) / S.xp.divisor)));
 const initial = name => (String(name || '?').trim()[0] || '?').toUpperCase();
 function haptic(type) { try { if (!tg || !tg.HapticFeedback) return; if (type === 'ok' || type === 'err' || type === 'warn') tg.HapticFeedback.notificationOccurred(type === 'ok' ? 'success' : type === 'err' ? 'error' : 'warning'); else tg.HapticFeedback.impactOccurred(type || 'light'); } catch (e) {} }
 
 /* ════════════ API ════════════ */
 async function api(path, body, opts) {
   opts = opts || {};
-  if (S.authFailed) { const e = new Error('auth'); e.auth = true; throw e; }
+  if (S.authFailed && !opts.silentAuth) { const e = new Error('auth'); e.auth = true; throw e; }
+  readAuth();
+  const payload = Object.assign({}, body || {});
+  // ارسال در بدنه علاوه بر هدر تا پروکسی‌هایی که هدر X-* را حذف می‌کنند باعث خطای ورود نشوند
+  if (AUTH.initData) payload._init_data = AUTH.initData;
+  if (AUTH.token) payload._token = AUTH.token;
   let res;
   try {
     res = await fetch('/api/' + path, {
-      method: 'POST', cache: 'no-store',
+      method: 'POST', cache: 'no-store', credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json', 'X-Telegram-Init-Data': AUTH.initData, 'X-Browser-Token': AUTH.token },
-      body: JSON.stringify(body || {})
+      body: JSON.stringify(payload)
     });
   } catch (e) { const er = new Error('اتصال به سرور برقرار نشد'); er.network = true; throw er; }
   let data = null;
   try { data = await res.json(); } catch (e) {}
-  if (res.status === 401) { S.authFailed = true; stopAllTimers(); showAuthError(); const er = new Error('auth'); er.auth = true; throw er; }
+  if (res.status === 401) {
+    if (!opts.silentAuth) { S.authFailed = true; stopAllTimers(); showAuthError(); }
+    const er = new Error('auth'); er.auth = true; throw er;
+  }
   if (!data) throw new Error('پاسخ نامعتبر از سرور');
   if (data.balance !== undefined && !opts.deferBalance) setBalance(data.balance);
   if (!data.ok) { const er = new Error(data.error || 'خطا'); er.data = data; throw er; }
@@ -478,24 +512,14 @@ function confirmBox(title, text, okLabel) {
     $('#cf-yes').onclick = () => { closeModal(); resolve(true); };
   });
 }
-async function botLinkBtn() {
-  try {
-    const r = await fetch('/api/config'); const d = await r.json();
-    if (d.bot_username) return `<a class="btn btn-gold" style="display:block;text-align:center;text-decoration:none;margin-top:16px" href="https://t.me/${d.bot_username}?start=webapp" target="_blank">🔗 دریافت لینک ورود به کازینو</a>`;
-  } catch (e) {}
-  return '';
-}
-async function showAuthError() {
+function showAuthError() {
   hideSplash();
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   $('#screen-home').classList.add('active');
-  const btn = await botLinkBtn();
-  $('#screen-home').innerHTML = `<div class="fatal"><div class="e">🔒</div><h3>احراز هویت ناموفق</h3>
-    <p style="color:var(--muted);line-height:2">به نظر می‌رسد مینی‌اپ خارج از تلگرام یا با یک پروکسی باز شده است.<br>
-    برای ورود، یک <b>لینک شخصی</b> از ربات بگیر و روی آن بزن:</p>${btn}
-    <p class="hint" style="margin-top:12px">یا مینی‌اپ را از دکمه‌ی «🎰 کازینو» داخل ربات باز کن.</p></div>`;
+  $('#screen-home').innerHTML = `<div class="fatal"><div class="e">🔒</div><h3>نیاز به ورود دوباره</h3>
+    <p style="color:var(--muted);line-height:2">مینی‌اپ را از دکمه «🎰 کازینو» داخل ربات باز کن.<br>اگر با پروکسی مشکل داری، در پیوی ربات بنویس <b>کازینو زربات</b> و دکمه «🌐 ورود مستقیم (مخصوص پروکسی)» را بزن.</p>
+    <button class="btn btn-gold" onclick="location.reload()">🔄 تلاش دوباره</button></div>`;
 }
-
 function hideSplash() { const s = $('#splash'); if (s) { s.classList.add('out'); setTimeout(() => s.remove(), 450); } }
 function cardHtml(c, cls, attrs) {
   cls = cls || ''; attrs = attrs || '';
@@ -525,13 +549,27 @@ async function handleBack() {
 }
 
 /* ════════════ خانه ════════════ */
+function applyDesign(ds) {
+  if (!ds) return;
+  const r = document.documentElement.style;
+  if (ds.btn_primary) { r.setProperty('--red', ds.btn_primary); r.setProperty('--red2', `color-mix(in srgb, ${ds.btn_primary} 68%, #000)`); }
+  if (ds.btn_gold) { r.setProperty('--gold', ds.btn_gold); r.setProperty('--gold2', `color-mix(in srgb, ${ds.btn_gold} 78%, #000)`); }
+  if (ds.btn_green) r.setProperty('--green', ds.btn_green);
+  if (ds.btn_blue) r.setProperty('--blue', ds.btn_blue);
+  if (ds.btn_gold_text) r.setProperty('--gold-text', ds.btn_gold_text);
+  if (ds.bg_color) { r.setProperty('--bg', ds.bg_color); try { tg && tg.setBackgroundColor && tg.setBackgroundColor(ds.bg_color); } catch (e) {} }
+}
 function applyMe(d) {
+  applyDesign(d.design);
+  if (d.texts) {
+    if (d.texts.hero_title && $('#hero-title')) $('#hero-title').textContent = d.texts.hero_title;
+    if (d.texts.hero_sub && $('#hero-sub')) $('#hero-sub').textContent = d.texts.hero_sub;
+  }
   S.me = d.user; S.list = d.games || []; S.games = {}; S.list.forEach(g => S.games[g.key] = g);
   S.wheel = d.wheel_segments || []; S.solo = d.solo || null; S.turnTimeout = d.turn_timeout || 45;
   S.me.commission = (typeof d.commission === 'number') ? d.commission : 0.05;
-  if (d.xp) S.xp = d.xp;
-  $('#me-name').textContent = S.me.name; $('#me-avatar').textContent = initial(S.me.name);
-  $('#me-lvl').textContent = 'لول ' + fmt(S.me.level || 1);
+  $('#me-name').textContent = S.me.name + (S.me.vip ? ' 👑' : ''); $('#me-avatar').textContent = initial(S.me.name);
+  $('#me-lvl').textContent = 'لول ' + fmt(S.me.level || 1) + (S.me.vip ? ' · VIP' : '');
   setBalance(S.me.balance);
 }
 async function refreshMe() {
@@ -577,17 +615,14 @@ function betControl(key, id) {
     <div class="betrow"><button data-bk="${id}" data-op="half">½</button><input id="${id}" inputmode="numeric" autocomplete="off" value="${fmtPlain(v)}"><button data-bk="${id}" data-op="double">2×</button></div>
     <div class="chips">${chipsFor(g).map(c => `<button class="chip" data-bk="${id}" data-op="set" data-v="${c}">${short(c)}</button>`).join('')}
     <button class="chip" data-bk="${id}" data-op="max">حداکثر</button></div>
-    <div class="hint">حداقل ${fmt(g.min_bet)} — حداکثر ${fmt(g.max_bet)}</div>
-    <div class="hint" id="${id}-xp" style="color:var(--gold)"></div></div>`;
+    <div class="hint">حداقل ${fmt(g.min_bet)} — حداکثر ${fmt(g.max_bet)}</div></div>`;
 }
 function bindBet(key, id) {
   const input = document.getElementById(id); if (!input) return;
   const g = S.games[key];
   const clamp = v => Math.max(g.min_bet, Math.min(g.max_bet, v));
-  const xpEl = document.getElementById(id + '-xp');
-  const updXp = () => { if (xpEl) xpEl.textContent = '⭐ برد = ' + fmt(xpFor(parseNum(input.value) || g.min_bet)) + ' XP'; };
-  input.addEventListener('blur', () => { const v = clamp(parseNum(input.value) || g.min_bet); input.value = fmtPlain(v); S.bet[key] = v; updXp(); });
-  input.addEventListener('input', () => { S.bet[key] = parseNum(input.value); updXp(); });
+  input.addEventListener('blur', () => { const v = clamp(parseNum(input.value) || g.min_bet); input.value = fmtPlain(v); S.bet[key] = v; });
+  input.addEventListener('input', () => { S.bet[key] = parseNum(input.value); });
   input.parentElement.parentElement.addEventListener('click', e => {
     const b = e.target.closest('[data-bk]'); if (!b || b.dataset.bk !== id) return;
     let v = parseNum(input.value) || g.min_bet;
@@ -595,9 +630,8 @@ function bindBet(key, id) {
     else if (b.dataset.op === 'double') v = v * 2;
     else if (b.dataset.op === 'set') v = Number(b.dataset.v);
     else if (b.dataset.op === 'max') v = Math.min(g.max_bet, (S.me && S.me.balance) || g.min_bet);
-    v = clamp(v); input.value = fmtPlain(v); S.bet[key] = v; haptic(); updXp();
+    v = clamp(v); input.value = fmtPlain(v); S.bet[key] = v; haptic();
   });
-  updXp();
 }
 function readBet(key, id) {
   const g = S.games[key], el = document.getElementById(id);
@@ -1230,24 +1264,38 @@ const RENDER = {
 };
 
 /* ════════════ شروع ════════════ */
+function initTgUi() {
+  tg = getTg() || tg;
+  if (!tg) return;
+  try { tg.ready(); tg.expand(); } catch (e) {}
+  try { tg.setHeaderColor('#07070c'); tg.setBackgroundColor('#07070c'); } catch (e) {}
+  try { tg.disableVerticalSwipes && tg.disableVerticalSwipes(); } catch (e) {}
+  try { tg.BackButton.onClick(handleBack); } catch (e) {}
+}
 async function boot() {
-  if (tg) {
-    try { tg.ready(); tg.expand(); } catch (e) {}
-    try { tg.setHeaderColor('#07070c'); tg.setBackgroundColor('#07070c'); } catch (e) {}
-    try { tg.disableVerticalSwipes && tg.disableVerticalSwipes(); } catch (e) {}
-    try { tg.BackButton.onClick(handleBack); } catch (e) {}
+  initTgUi();
+  readAuth();
+  // اگر داخل تلگرامیم ولی اسکریپت async هنوز نرسیده، کوتاه صبر کن تا شاید initData پر شود
+  if (!AUTH.initData && !AUTH.token && IN_TG) {
+    await sleep(450);
+    initTgUi(); readAuth();
   }
-  // بدون احراز هویت: داخل تلگرام (پروکسی/کلاینت دیگر) → صفحه‌ی لینک ورود | با لینک (مرورگر) → رمز پنل مدیریت
-  if (!AUTH.initData && !AUTH.token) { tg ? showAuthError() : location.replace('/admin'); return; }
+  if (!IN_TG && !URL_APP) { location.replace('/admin'); return; }
   try {
     const d = await api('me');
+    initTgUi();
     applyMe(d); S.me.commission = d.commission;
+    if (d.casino_off) {
+      hideSplash();
+      $('#screen-home').innerHTML = `<div class="fatal"><div class="e">⛔</div><h3>کازینو موقتاً غیرفعال است</h3><p style="color:var(--muted);line-height:2">${esc(d.off_msg || 'لطفاً بعداً تلاش کن.')}</p></div>`;
+      return;
+    }
     renderHome(); hideSplash();
     if (d.refunded) toast('↩️ ' + fmt(d.refunded) + ' زرکوین از صف قبلی برگشت داده شد', 'ok');
     if (d.game_id) openGame(d.game_id);
     else if (d.queue) openQueue(d.queue);
   } catch (e) {
-    if (e.auth) return;
+    if (e.auth) { showAuthError(); return; }
     hideSplash();
     $('#screen-home').innerHTML = `<div class="fatal"><div class="e">📡</div><h3>خطا در اتصال</h3><p style="color:var(--muted)">${esc(e.message)}</p><button class="btn btn-gold" onclick="location.reload()">🔄 تلاش دوباره</button></div>`;
   }
