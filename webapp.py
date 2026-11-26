@@ -1988,6 +1988,34 @@ def _patch_blackmarket_kb():
     _bm_mod._menu_kb = _menu_kb_wrapped
 
 
+def _patch_blackmarket_visibility():
+    """بازار سیاه: فرمانده هیتلر از لیست بازار سیاه پنهان است (فقط در «حمله خودکار»)"""
+    try:
+        import blackmarket as _bm_mod
+    except Exception:
+        return
+    if getattr(getattr(_bm_mod, "_page_items", None), "_zar", False):
+        return
+
+    def _hidden(v):
+        return v.get("type") == "timed" and v.get("timed_kind") == "hitler"
+
+    def _visible():
+        return [(k, v) for k, v in config.BLACKMARKET_ITEMS.items() if not _hidden(v)]
+
+    def _page_items(page):
+        per = config.BLACKMARKET_PER_PAGE
+        return _visible()[page * per:(page + 1) * per]
+
+    def _total_pages():
+        per = config.BLACKMARKET_PER_PAGE
+        return max(1, (len(_visible()) + per - 1) // per)
+
+    _page_items._zar = True
+    _bm_mod._page_items = _page_items
+    _bm_mod._total_pages = _total_pages
+
+
 def _patch_blackmarket_inventory():
     """نمایش انبار ۱۰ لولی به‌جای اینونتوری قدیمی در بازار سیاه (پشتیبان: حتی اگر هندلر جدا کار نکند)"""
     try:
@@ -2045,6 +2073,7 @@ def patch_bot_ui():
         _utils.BACK_GAMES_KB = M([[B("🔙 بازگشت", callback_data="menu:main")]])
     _patch_blackmarket_kb()
     _patch_blackmarket_inventory()
+    _patch_blackmarket_visibility()
     global _orig_apply_damage, _orig_transfer, _orig_bank_deposit, _orig_bank_withdraw
     global _orig_peek_income, _orig_accrue_income, _orig_hourly_payout, _orig_daily_payout
     if not getattr(getattr(db, "apply_damage", None), "_zar", False):
@@ -2170,13 +2199,22 @@ async def _h_bm_guard(update, context):
     if _not_owner(q):
         return
     uid = q.from_user.id
-    # محصولات ساعتی (هیتلر / ابر سپر) از بخش «حمله خودکار» خریداری می‌شوند
+    # فرمانده هیتلر فقط از «حمله خودکار» قابل خرید است؛ ابر سپر فقط از بازار سیاه (با پرسیدن تعداد ساعت)
     if _bm_items().get(key, {}).get("type") == "timed":
-        await _utils.safe_answer(q, "⏱ این محصول ساعتی است و از بخش «⚔️ حمله خودکار» خریداری می‌شود.", show_alert=True)
-        text, kb = await _build_auto_view(uid)
-        m = await _utils.safe_edit(q, text, kb)
-        if m:
-            _utils.remember_owner(m, uid)
+        if _bm_items()[key].get("timed_kind") == "hitler":
+            await _utils.safe_answer(q, "👑 فرمانده هیتلر فقط از بخش «⚔️ حمله خودکار» قابل خرید است.", show_alert=True)
+            text, kb = await _build_auto_view(uid)
+            m = await _utils.safe_edit(q, text, kb)
+            if m:
+                _utils.remember_owner(m, uid)
+        else:
+            await _utils.safe_answer(q)
+            _utils.user_states[uid] = {"action": f"buy_timed:{key}"}
+            from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M
+            m = await _utils.safe_edit(q, _timed_prompt_text(key),
+                                       M([[B("🔙 بازگشت به بازار سیاه", callback_data="bm:menu:0")]]))
+            if m:
+                _utils.remember_owner(m, uid)
         raise _stop()
     cap = await _item_cap_for(uid, key)
     if not cap:
@@ -2593,15 +2631,9 @@ async def _build_auto_view(uid: int):
         "   اگر آن مهمات یا وسیله‌اش را نداشته باشی، با موجودی‌ات می‌خرد و می‌زند؛",
         "   اگر موجودی نداشته باشی، نزدیک‌ترین سلاح موجودت را می‌زند.",
         "",
-        f"🛡️ <b>ابر سپر</b> — ساعتی {_fmt(shield_price)} زرکوین",
-        f"   وضعیت: {_timed_status(shield_exp)}",
-        f"   <b>{int(SHIELD_DEFLECT_CHANCE * 100)}٪</b> از حملات به تو توسط ابر سپر دفع می‌شود.",
-        "",
-        "🔧 در هر حمله <b>۳٪</b> احتمال دارد انبارت آسیب ببیند؛ تعمیرش در بخش «🏭 انبار من» با ۵۰٪ هزینه ممکن است.",
     ]
     btns = [
         [B("👑 خرید فرمانده هیتلر", callback_data="auto:buy_hitler")],
-        [B("🛡️ خرید ابر سپر", callback_data="auto:buy_shield")],
         [B("🔙 بازگشت", callback_data="menu:main")],
     ]
     return "\n".join(lines), M(btns)
@@ -2622,8 +2654,8 @@ async def _h_auto_cb(update, context):
         m = await _utils.safe_edit(q, text, kb)
         if m:
             _utils.remember_owner(m, uid)
-    elif q.data in ("auto:buy_hitler", "auto:buy_shield"):
-        key = HITLER_KEY if q.data == "auto:buy_hitler" else SHIELD_KEY
+    elif q.data == "auto:buy_hitler":
+        key = HITLER_KEY
         item = _bm_items().get(key, {})
         price = int(item.get("price", 0))
         _utils.user_states[uid] = {"action": f"buy_timed:{key}"}
@@ -2668,6 +2700,70 @@ async def _h_buy_timed_text(update, context):
     raise _stop()
 
 
+def _make_cmd_filter():
+    """فیلتر پویا: متن پیام دقیقاً یکی از دستورهای شلیک تعریف‌شده در بازار سیاه باشد"""
+    from telegram.ext import filters as _f
+
+    class _ShotCmd(_f.MessageFilter):
+        def filter(self, message):
+            t = (message.text or "").strip()
+            return bool(t) and t in _cmd_map()
+
+    return _ShotCmd()
+
+
+_takeover_done: set = set()
+_orig_handle_attack = None
+
+
+async def _h_attack_dispatch(update, context):
+    fn = _orig_handle_attack
+    if fn is not None:
+        await fn(update, context)
+
+
+def _takeover_attack(app):
+    """
+    هندلر ثابت شلیک در bot.py (با regex ثابت) حذف و به هندلر پویا جایگزین می‌شود.
+    از این به بعد هر دستور شلیکی که در پنل مدیریت تعریف یا تغییر کند، خودکار شناخته می‌شود.
+    """
+    global _orig_handle_attack
+    if id(app) in _takeover_done:
+        return
+    import sys
+    from telegram.ext import MessageHandler, filters as _f
+    found = None
+    try:
+        for grp, hs in list(app.handlers.items()):
+            for h in list(hs):
+                cb = getattr(h, "callback", None)
+                if getattr(cb, "__name__", "") == "handle_attack":
+                    found = cb
+                    app.remove_handler(h, grp)
+    except Exception:
+        logger.exception("takeover: حذف هندلر ثابت شلیک ناموفق")
+    if found is None:
+        for mname in ("bot", "__main__"):
+            m = sys.modules.get(mname)
+            if m is not None and callable(getattr(m, "handle_attack", None)):
+                found = m.handle_attack
+                break
+    if found is None:
+        logger.warning("⚠️ handle_attack در bot.py پیدا نشد — شلیک‌ها فعال نیستند")
+        return
+    _orig_handle_attack = found
+    app.add_handler(MessageHandler(_f.TEXT & _make_cmd_filter(), _h_attack_dispatch), group=0)
+    _takeover_done.add(id(app))
+    logger.info("🎯 دستورهای شلیک به‌صورت خودکار از بازار سیاه (پنل مدیریت) خوانده می‌شوند")
+
+
+def _timed_prompt_text(item_key: str) -> str:
+    item = _bm_items().get(item_key, {})
+    return (f"⏰ <b>{item.get('emoji', '')} {item.get('name', item_key)}</b>\n━━━━━━━━━━━━━━━━━━\n"
+            f"💰 قیمت ساعتی: <b>{_fmt(int(item.get('price', 0)))}</b> زرکوین\n\n"
+            "چند ساعت می‌خوای بخری؟ (عدد بفرست)")
+
+
 def setup_bot(app):
     """ثبت امکانات جدید روی اپلیکیشن ربات (یک بار)"""
     if id(app) in _setup_apps:
@@ -2700,11 +2796,9 @@ def setup_bot(app):
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _h_buy_timed_text), group=-2)
     app.add_handler(CallbackQueryHandler(_h_bm_guard, pattern=r"^bm:buy:"), group=-2)
     app.add_handler(CallbackQueryHandler(_h_bm_post, pattern=r"^bm:buy:"), group=1)
-    cmds = _cmd_map()
-    if cmds:
-        rx = r"^(" + "|".join(re.escape(c) for c in cmds) + r")$"
-        app.add_handler(MessageHandler(filters.TEXT & filters.Regex(rx), _h_attack_pre), group=-2)
-        app.add_handler(MessageHandler(filters.TEXT & filters.Regex(rx), _h_attack_post), group=1)
+    # دستورهای شلیک به‌صورت پویا از بازار سیاه (پنل مدیریت) خوانده می‌شوند
+    app.add_handler(MessageHandler(filters.TEXT & _make_cmd_filter(), _h_attack_pre), group=-2)
+    app.add_handler(MessageHandler(filters.TEXT & _make_cmd_filter(), _h_attack_post), group=1)
 
     old_init = getattr(app, "post_init", None)
     old_shutdown = getattr(app, "post_shutdown", None)
@@ -2712,6 +2806,10 @@ def setup_bot(app):
     async def _post_init(application):
         if old_init:
             await old_init(application)
+        try:
+            _takeover_attack(application)
+        except Exception:
+            logger.exception("takeover شلیک ناموفق")
         try:
             await start_webapp()
         except Exception:
@@ -2901,7 +2999,9 @@ def _help_pages() -> list:
     p4 = ("💀 <b>راهنما — بازار سیاه و انبار</b>\n━━━━━━━━━━━━━━━━━━\n"
           f"🏭 <b>انبار (۱۰ لول):</b> در لول ۱ از هر مهمات فقط ۲ عدد جا می‌گیرد تا لول ۱۰ که ۲۰ عدد می‌شود (👑 VIP: +۵ عدد در هر لول).\n"
           "💰 هزینه ارتقای انبار: <code>2^لول فعلی × 1,000,000</code>\n"
-          "🔧 در هر حمله <b>۳٪</b> احتمال دارد انبارت آسیب ببیند؛ تعمیرش در «🏭 انبار من» با <b>۵۰٪ هزینه</b> ممکن است.\n\n"
+          "🔧 در هر حمله <b>۳٪</b> احتمال دارد انبارت آسیب ببیند (به اندازه خسارت همان حمله). تعمیرش در «🏭 انبار من» با <b>۵۰٪ هزینه</b> ممکن است؛ مثلاً آسیب ۱٬۰۰۰٬۰۰۰ با ۵۰۰٬۰۰۰ برطرف می‌شود.\n\n"
+          f"🛡️ <b>ابر سپر</b> (فقط از بازار سیاه، با پرسیدن تعداد ساعت — ساعتی {_fmt(int(_bm_items().get(SHIELD_KEY, {}).get('price', 10_000_000_000)))} زرکوین):\n"
+          f"   {int(SHIELD_DEFLECT_CHANCE * 100)}٪ از حملات به صاحبش دفع می‌شود و مهمات مهاجم مصرف می‌شود.\n\n"
           f"🚀 <b>وسایل شلیک</b> (از هر کدام حداکثر {LAUNCHER_MAX} عدد — 👑 VIP: {VIP_LAUNCHER_MAX} عدد):\n{items('launcher')}\n\n"
           f"💥 <b>مهمات</b> (مصرفی):\n{items('projectile')}\n\n"
           f"🛡️ <b>دفاعی</b> (از هر کدام فقط ۱ عدد):\n{items('defense')}")
@@ -2911,9 +3011,7 @@ def _help_pages() -> list:
               "   وقتی به تو حمله شود، هیتلر خودکار با <b>همان سلاح</b> به مهاجم حمله می‌کند.\n"
               "   اگر آن مهمات یا وسیله‌اش را نداشته باشی، با موجودی‌ات می‌خرد و می‌زند؛\n"
               "   اگر موجودی نداشته باشی، نزدیک‌ترین سلاح موجودت را می‌زند.\n\n"
-              f"🛡️ <b>ابر سپر</b> — ساعتی {_fmt(int(_bm_items().get(SHIELD_KEY, {}).get('price', 10_000_000_000)))} زرکوین\n"
-              f"   <b>{int(SHIELD_DEFLECT_CHANCE * 100)}٪</b> از حملات به تو توسط ابر سپر دفع می‌شود (مهمات مهاجم مصرف و وسیله‌اش خنک می‌شود).\n\n"
-              "🔧 <b>آسیب انبار:</b> در هر حمله ۳٪ احتمال دارد انبارت آسیب ببیند؛ تعمیرش در «🏭 انبار من» با ۵۰٪ هزینه ممکن است.")
+              "⚠️ ابر سپر و آسیب انبار در بخش «💀 راهنما — بازار سیاه و انبار» توضیح داده شده‌اند.")
     p_vip = ("👑 <b>راهنما — اشتراک VIP</b>\n━━━━━━━━━━━━━━━━━━\n"
              "با فعال کردن اشتراک VIP از این امکانات ویژه برخوردار می‌شوی:\n\n"
              f"🚀 <b>وسایل شلیک:</b> خرید تا <b>{VIP_LAUNCHER_MAX} عدد</b> از هر وسیله (به‌جای {LAUNCHER_MAX} عدد)\n"
@@ -4369,6 +4467,7 @@ async def start_webapp(*args, **kwargs):
         if tg_app is not None and id(tg_app) not in _setup_apps:
             logger.info("🤖 setup_bot به‌صورت خودکار روی Application ربات اعمال شد")
             setup_bot(tg_app)
+            _takeover_attack(tg_app)
             await _ensure_tables()
             await _load_bans()
             await _load_admins()
