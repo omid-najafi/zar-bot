@@ -221,6 +221,7 @@ a{color:var(--gold)}
         <label>زیرتیتر صفحه اصلی مینی‌اپ<input id="tx-miniapp_hero_sub" placeholder="بازی‌های سریع تک‌نفره یا رقابت زنده..."></label>
         <label>متن پیام «کازینو زربات»<input id="tx-casino_text" placeholder="خالی = متن پیش‌فرض"></label>
         <label>متن بالای فروشگاه<input id="tx-shop_text" placeholder="خالی = متن پیش‌فرض"></label>
+        <label>متن بالای «حمله خودکار»<input id="tx-auto_text" placeholder="خالی = متن پیش‌فرض"></label>
         <label>اطلاعیه/متن اضافی راهنما<input id="tx-help_extra" placeholder="اختیاری — در صفحه اول راهنما نمایش داده می‌شود"></label>
       </div>
       <h3 style="margin-top:16px">🏷 نام دکمه‌های منوی اصلی (خالی = پیش‌فرض)</h3>
@@ -235,6 +236,7 @@ a{color:var(--gold)}
         <label>دکمه لیدربورد<input id="tx-btn_lb" placeholder="🏆 لیدربورد"></label>
         <label>دکمه بازار سیاه<input id="tx-btn_bm" placeholder="💀 بازار سیاه"></label>
         <label>دکمه فروشگاه<input id="tx-btn_shop" placeholder="💎 خرید کوین و لول"></label>
+        <label>دکمه حمله خودکار<input id="tx-btn_auto" placeholder="⚔️ حمله خودکار"></label>
         <label>دکمه راهنما<input id="tx-btn_help" placeholder="📚 راهنما"></label>
       </div>
       <button class="btn gold" style="margin-top:14px;width:100%" onclick="saveControls()">💾 ذخیره تنظیمات و متن‌ها</button>
@@ -312,8 +314,10 @@ a{color:var(--gold)}
             <option value="launcher">🚀 وسیله شلیک</option>
             <option value="projectile">💥 مهمات</option>
             <option value="defense">🛡️ دفاعی</option>
+            <option value="timed">⏱ ساعتی (هیتلر / ابر سپر)</option>
           </select>
         </label>
+        <label id="gi-timedkind-wrap">نوع اثر ساعتی<input id="gi-timedkind" placeholder="hitler یا shield"></label>
         <label id="gi-damage-wrap">درصد تخریب (۰ تا ۱ — مثلاً 0.2)<input id="gi-damage" placeholder="0.2"></label>
         <label id="gi-defchance-wrap">احتمال دفاع (۰ تا ۱)<input id="gi-defchance" placeholder="0.35"></label>
         <label id="gi-launches-wrap">کلیدهای مهمات قابل شلیک (با کاما)<input id="gi-launches" placeholder="cruise_missile, ballistic_missile"></label>
@@ -653,8 +657,8 @@ async function removeVip(id) {
 }
 
 /* ── کنترل بازی‌ها، بخش‌ها و متن‌ها ── */
-const TEXT_KEYS = ['section_off', 'bot_off_msg', 'miniapp_hero_title', 'miniapp_hero_sub', 'casino_text', 'shop_text', 'help_extra',
-  'btn_bank', 'btn_prop', 'btn_worker', 'btn_casino', 'btn_mission', 'btn_transfer', 'btn_kabareh', 'btn_lb', 'btn_bm', 'btn_shop', 'btn_help'];
+const TEXT_KEYS = ['section_off', 'bot_off_msg', 'miniapp_hero_title', 'miniapp_hero_sub', 'casino_text', 'shop_text', 'help_extra', 'auto_text',
+  'btn_bank', 'btn_prop', 'btn_worker', 'btn_casino', 'btn_mission', 'btn_transfer', 'btn_kabareh', 'btn_lb', 'btn_bm', 'btn_shop', 'btn_auto', 'btn_help'];
 async function loadControls() {
   try {
     const d = await api('controls/get');
@@ -740,11 +744,12 @@ async function saveDesign(reset) {
 /* ── آیتم‌ها و قیمت‌های بازی ── */
 let GAME_ITEMS = { property: [], worker: [], item: [] }, GAME_CAT = 'property';
 const GC_LABEL = { property: '🏠 ملک', worker: '👷 کارگر', item: '💀 آیتم بازار سیاه' };
-const TYPE_LABEL = { launcher: '🚀 وسیله شلیک', projectile: '💥 مهمات', defense: '🛡️ دفاعی' };
+const TYPE_LABEL = { launcher: '🚀 وسیله شلیک', projectile: '💥 مهمات', defense: '🛡️ دفاعی', timed: '⏱ ساعتی' };
 function giExtra(it) {
   if (it.type === 'projectile') return '💥 تخریب ' + fmt(Math.round((it.damage || 0) * 100)) + '٪';
   if (it.type === 'defense') return '🛡️ دفاع ' + fmt(Math.round((it.defense_chance || 0) * 100)) + '٪';
   if (it.type === 'launcher') return '🚀 شلیک: ' + ((it.launches || []).length) + ' نوع مهمات';
+  if (it.type === 'timed') return '⏱ ساعتی — ' + (it.timed_kind === 'shield' ? '🛡️ ابر سپر (دفع ۸۵٪)' : '👑 هیتلر (ضدحمله خودکار)');
   return '📈 درآمد ' + fmt(it.income || 0) + ' /روز';
 }
 async function loadGameItems() {
@@ -779,6 +784,7 @@ function syncGameItemForm() {
   const t = $('#gi-type').value;
   $('#gi-income-wrap').style.display = isItem ? 'none' : '';
   $('#gi-type-wrap').style.display = isItem ? '' : 'none';
+  $('#gi-timedkind-wrap').style.display = isItem && t === 'timed' ? '' : 'none';
   $('#gi-damage-wrap').style.display = isItem && t === 'projectile' ? '' : 'none';
   $('#gi-defchance-wrap').style.display = isItem && t === 'defense' ? '' : 'none';
   $('#gi-launches-wrap').style.display = isItem && t === 'launcher' ? '' : 'none';
@@ -789,7 +795,7 @@ function syncGameItemForm() {
   $('#gi-key-in').disabled = !!$('#gi-key').value;
 }
 function resetGameItemForm() {
-  ['#gi-key', '#gi-key-in', '#gi-name', '#gi-emoji', '#gi-price', '#gi-income', '#gi-damage', '#gi-defchance', '#gi-launches', '#gi-deftype', '#gi-defagainst', '#gi-command'].forEach(s => $(s).value = '');
+  ['#gi-key', '#gi-key-in', '#gi-name', '#gi-emoji', '#gi-price', '#gi-income', '#gi-damage', '#gi-defchance', '#gi-launches', '#gi-deftype', '#gi-defagainst', '#gi-command', '#gi-timedkind'].forEach(s => $(s).value = '');
   $('#gi-type').value = 'launcher';
   $('#gi-form-title').textContent = '➕ افزودن ' + GC_LABEL[GAME_CAT] + ' جدید';
   $('#gi-cancel').classList.add('hidden');
@@ -811,6 +817,7 @@ function editGameItem(key) {
   $('#gi-deftype').value = it.defense_type || '';
   $('#gi-defagainst').value = it.defends_against || '';
   $('#gi-command').value = it.command || '';
+  $('#gi-timedkind').value = it.timed_kind || '';
   $('#gi-form-title').textContent = '✏️ ویرایش ' + GC_LABEL[GAME_CAT] + ' «' + (it.name || key) + '»';
   $('#gi-cancel').classList.remove('hidden');
   syncGameItemForm();
@@ -823,7 +830,9 @@ async function saveGameItem() {
   if (GAME_CAT === 'item') {
     const t = $('#gi-type').value;
     data.type = t;
-    if (t === 'projectile') {
+    if (t === 'timed') {
+      data.timed_kind = $('#gi-timedkind').value;
+    } else if (t === 'projectile') {
       data.damage = parseFloat($('#gi-damage').value);
       data.defense_type = $('#gi-deftype').value;
       data.command = $('#gi-command').value;
