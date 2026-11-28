@@ -136,8 +136,7 @@ a{color:var(--gold)}
         <label>📝 یادداشت<input id="g-note"></label>
       </div>
       <div id="g-builder"></div>
-      <button class="btn gold" id="gift-submit" style="margin-top:14px;width:100%" onclick="createGift()">ساخت کد هدیه</button>
-      <button class="btn ghost hidden" id="gift-cancel" onclick="resetGift()">انصراف از ویرایش</button>
+      <button class="btn gold" style="margin-top:14px;width:100%" onclick="createGift()">🎁 ساخت کد هدیه</button>
       <p class="muted">کاربر با نوشتن <code>هدیه زر کد</code> جایزه را می‌گیرد. هر کاربر از هر کد فقط یک بار. ملک/کارگر تا سقف ۵ و پدافندها تا سقف ۱.</p>
     </div>
     <div class="card"><h3>📋 کدهای ساخته‌شده</h3><div style="overflow-x:auto"><table><thead><tr><th>کد</th><th>جایزه</th><th>استفاده</th><th>شرط</th><th>وضعیت</th><th></th></tr></thead><tbody id="g-list"></tbody></table></div></div>
@@ -292,12 +291,12 @@ a{color:var(--gold)}
     </div>
 
     <div class="card">
-      <div class="row" style="justify-content:space-between;margin-bottom:14px"><h3 style="margin:0">مدیریت آیتم‌های بازی</h3><a class="btn gold" href="/admin/catalog">باز کردن کاتالوگ آیتم‌ها</a></div>
+      <h3>📦 مدیریت آیتم‌های بازی</h3>
       <div class="tabs" style="margin-bottom:12px">
         <button class="tab on" data-gc="property">🏠 ملک‌ها</button>
         <button class="tab" data-gc="worker">👷 کارگرها</button>
         <button class="tab" data-gc="item">💀 بازار سیاه</button>
-        <button class="tab" data-gc="auto">حمله خودکار</button>
+        <button class="tab" data-gc="auto">⚔️ حمله خودکار</button>
       </div>
       <div style="overflow-x:auto"><table><thead><tr><th>آیتم</th><th>قیمت</th><th>درآمد / تخریب / دفاع</th><th>وضعیت</th><th></th></tr></thead><tbody id="gi-list"></tbody></table></div>
     </div>
@@ -316,19 +315,19 @@ a{color:var(--gold)}
             <option value="launcher">🚀 وسیله شلیک</option>
             <option value="projectile">💥 مهمات</option>
             <option value="defense">🛡️ دفاعی</option>
+            <option value="timed">⏱ ساعتی (هیتلر / ابر سپر)</option>
           </select>
         </label>
-        <label id="gi-timedkind-wrap">نوع اثر ساعتی<select id="gi-timedkind"><option value="shield">محافظت خودکار</option><option value="hitler">پاسخ خودکار فرمانده</option></select></label>
-        <label id="gi-visibility-wrap">دسترسی<select id="gi-visibility"><option value="public">عمومی</option><option value="shop">فقط خریداران فروشگاه</option></select></label>
+        <label id="gi-timedkind-wrap">نوع اثر ساعتی<select id="gi-timedkind"><option value="hitler">👑 فرمانده هیتلر (ضدحمله خودکار)</option><option value="shield">🛡️ ابر سپر (دفع حملات)</option></select></label>
         <label id="gi-damage-wrap">درصد تخریب (۰ تا ۱ — مثلاً 0.2)<input id="gi-damage" placeholder="0.2"></label>
         <label id="gi-defchance-wrap">احتمال دفاع (۰ تا ۱)<input id="gi-defchance" placeholder="0.35"></label>
         <label id="gi-launches-wrap">کلیدهای مهمات قابل شلیک (با کاما)<input id="gi-launches" placeholder="cruise_missile, ballistic_missile"></label>
         <label id="gi-deftype-wrap">نوع دفاع قابل مقابله<input id="gi-deftype" placeholder="missile_defense"></label>
         <label id="gi-defagainst-wrap">دفاع در برابر<input id="gi-defagainst" placeholder="missile_defense"></label>
         <label id="gi-command-wrap">دستور شلیک<input id="gi-command" placeholder="شلیک موشک کروز"></label>
+        <label id="gi-market-wrap" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="gi-market" checked style="width:auto"> 🛒 در بازار سیاه قابل خرید باشد (خاموش = فقط از فروشگاه دریافت می‌شود)</label>
       </div>
-      <p class="muted" id="gi-cmd-note" style="margin-top:8px">دستور در زمان ذخیره در فهرست مشترک بازی ثبت می‌شود؛ نیازی به تغییر فایل‌های ربات نیست.</p>
-      <button type="button" class="btn ghost sm" id="check-commands">بررسی اتصال دستورها به ربات</button><p class="muted" id="command-result" role="status"></p>
+      <p class="muted" id="gi-cmd-note" style="margin-top:8px">⚠️ دستور شلیک باید در <code>bot.py</code> هم ثبت شود تا شلیک با آن دستور کار کند.</p>
       <div class="row" style="margin-top:12px">
         <button class="btn gold" style="flex:1" onclick="saveGameItem()">💾 ذخیره آیتم</button>
         <button class="btn ghost hidden" id="gi-cancel" onclick="resetGameItemForm()">انصراف از ویرایش</button>
@@ -404,8 +403,8 @@ async function api(path, body) {
   if (!d.ok) throw new Error(d.error || 'خطا');
   return d;
 }
-document.querySelectorAll('[data-t]').forEach(b => b.onclick = () => {
-  document.querySelectorAll('[data-t]').forEach(x => x.classList.toggle('on', x === b));
+document.querySelectorAll('.tab').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.tab').forEach(x => x.classList.toggle('on', x === b));
   ['users', 'vip', 'gifts', 'shop', 'orders', 'ctrl', 'design', 'game', 'admins'].forEach(t => $('#t-' + t).classList.toggle('hidden', b.dataset.t !== t));
   ({ vip: loadVips, gifts: loadGifts, shop: loadProducts, orders: loadOrders, ctrl: loadControls, design: loadDesign, game: loadGameItems, admins: loadAdmins }[b.dataset.t] || (() => {}))();
 });
@@ -415,16 +414,9 @@ function builderHtml(px) {
   return `<div class="row" style="margin-top:12px">
     <select id="${px}-type" onchange="fillKeys('${px}')"><option value="properties">🏠 ملک</option><option value="workers">👷 کارگر</option><option value="items">💀 بازار سیاه</option></select>
     <select id="${px}-key" style="flex:1"></select><input id="${px}-n" inputmode="numeric" value="1" style="width:80px;text-align:center">
-    <button class="btn ghost" onclick="addReward('${px}')">افزودن</button></div><div class="chips" id="${px}-chips"></div>
-    <h3 style="margin-top:16px">حمله خودکار (ساعت)</h3><div class="form" id="${px}-hours"></div>`;
+    <button class="btn ghost" onclick="addReward('${px}')">افزودن</button></div><div class="chips" id="${px}-chips"></div>`;
 }
-function fillKeys(px) { if (!CAT) return; $('#' + px + '-key').innerHTML = (CAT[$('#' + px + '-type').value] || []).filter(i=>px==='p'||i.visibility!=='shop').map(i => `<option value="${esc(i.key)}">${esc(i.emoji)} ${esc(i.name)}</option>`).join(''); }
-function readHourFields(px) {
-  const out={};document.querySelectorAll('#'+px+'-hours [data-hour]').forEach(el=>{ const s=el.value.trim().replace(/[۰-۹]/g,d=>'۰۱۲۳۴۵۶۷۸۹'.indexOf(d)).replace(/[٠-٩]/g,d=>'٠١٢٣٤٥٦٧٨٩'.indexOf(d)); if(s&&s!=='0'){if(!/^\d+$/.test(s))throw Error('مدت را به‌صورت ساعت صحیح وارد کنید.');out[el.dataset.hour]=s;} });return out;
-}
-function drawHourFields(px, values={}) {
-  $('#'+px+'-hours').innerHTML=(CAT?.auto_hours||[]).filter(i=>px==='p'||i.visibility!=='shop').map(i=>`<label>ساعت ${esc(i.name)}<input inputmode="numeric" data-hour="${esc(i.key)}" placeholder="۰" value="${esc(values[i.key]||'')}"></label>`).join('')||'<p class="muted">قابلیت ساعتی فعالی ثبت نشده است.</p>';
-}
+function fillKeys(px) { if (!CAT) return; $('#' + px + '-key').innerHTML = (CAT[$('#' + px + '-type').value] || []).map(i => `<option value="${i.key}">${i.emoji} ${esc(i.name)}</option>`).join(''); }
 function addReward(px) { const t = $('#' + px + '-type').value, k = $('#' + px + '-key').value, n = num($('#' + px + '-n').value); if (!k || !n) return; RB[px][t][k] = n; renderChips(px); }
 function delReward(px, t, k) { delete RB[px][t][k]; renderChips(px); }
 function renderChips(px) {
@@ -438,7 +430,7 @@ function renderChips(px) {
 function collectRewards(px) {
   return { coins: num($('#' + px + '-coins').value), bank: num($('#' + px + '-bank').value), levels: num($('#' + px + '-levels').value), xp: num($('#' + px + '-xp').value),
     vip_days: num($('#' + px + '-vip') ? $('#' + px + '-vip').value : 0),
-    properties: RB[px].properties, workers: RB[px].workers, items: RB[px].items, auto_hours: readHourFields(px) };
+    properties: RB[px].properties, workers: RB[px].workers, items: RB[px].items };
 }
 $('#g-builder').innerHTML = builderHtml('g');
 $('#p-builder').innerHTML = builderHtml('p');
@@ -457,7 +449,6 @@ async function loadStats() {
       ['🎮 بازی‌های فعال', fmt(d.games)], ['⏳ در صف', fmt(d.queue)], ['🎁 کدهای فعال', fmt(d.gifts)], ['🔑 Redis', d.redis ? '✅' : '❌']]
       .map(([a, b]) => `<div class="stat"><small>${a}</small><b>${b}</b></div>`).join('');
     fillKeys('g'); fillKeys('p');
-    for(const px of ['g','p'])drawHourFields(px,readHourFields(px));
     api('shop/orders', { status: 'review' }).then(o => { const b = $('#ord-badge'); b.textContent = fmt(o.review_count); b.classList.toggle('hidden', !o.review_count); }).catch(() => {});
   } catch (e) { if (e.message !== 'auth') toast(e.message, 'err'); }
 }
@@ -499,11 +490,8 @@ function renderUser() {
       ${adjRow('💰 موجودی', 'coins', fmt(u.balance))}${adjRow('🏦 بانک', 'bank', fmt(u.bank))}${adjRow('⭐ لول', 'levels', fmt(u.level))}${adjRow('✨ XP', 'xp', fmt(u.xp))}</tbody></table>
     ${u.gifts.length ? `<p class="muted">🎁 کدهای استفاده‌شده: ${u.gifts.map(g => '<code>' + esc(g.code) + '</code>').join(' ')}</p>` : ''}</div>
     <div class="grid2">${tbl('🏠 ملک‌ها', CAT.properties, u.properties, 'property', CAT.max_per_key)}${tbl('👷 کارگرها', CAT.workers, u.workers, 'worker', CAT.max_per_key)}</div>
-    ${tbl('انبار بازار سیاه', CAT.items, u.items, 'item', 0)}
-    <div class="card"><h3>حمله خودکار</h3><p class="muted">ساعت دریافت‌شده و زمان باقی‌مانده جداگانه نمایش داده می‌شوند.</p><div style="overflow-x:auto"><table><thead><tr><th>قابلیت</th><th>دریافت‌شده / باقی‌مانده</th><th>ساعت</th><th>تغییر</th></tr></thead><tbody>${(CAT.auto_hours||[]).map(i=>adjRow(esc(i.name),'auto',fmt(u.granted_hours?.[i.key]||0)+' / '+fmt(u.auto_hours?.[i.key]||0)+' ساعت',i.key)).join('')}</tbody></table></div></div>
-    <div class="card"><h3>حذف یک دارایی از حساب</h3><div class="row"><select id="remove-holding">${[['property',u.properties],['worker',u.workers],['item',u.items],['auto',u.auto_hours]].flatMap(([kind,values])=>Object.keys(values||{}).map(k=>{const group={property:'properties',worker:'workers',item:'items',auto:'auto_hours'}[kind],it=(CAT[group]||[]).find(x=>x.key===k);return `<option value="${esc(kind+':'+k)}">${esc(it?.name||k)} (${kind==='auto'?'ساعت':'تعداد'}: ${fmt(values[k])})</option>`})).join('')}</select><button class="btn red" onclick="clearHolding()">حذف از این حساب</button></div></div>`;
+    ${tbl('💀 اینونتوری بازار سیاه', CAT.items, u.items, 'item', 0)}`;
 }
-async function clearHolding(){const el=$('#remove-holding'),v=el?.value;if(!v||!CUR)return;const [kind,key]=v.split(':');if(!confirm('تمام دارایی انتخاب‌شده و دسترسی اختصاصی آن از حساب '+CUR.user_id+' حذف شود؟'))return;try{const d=await api('user/remove-holding',{user_id:CUR.user_id,kind,key});CUR=d.user;renderUser();toast('دارایی حذف شد.','ok');}catch(e){toast(e.message,'err');}}
 async function toggleBan(ban) {
   if (!CUR) return;
   if (ban && !confirm('کاربر ' + (CUR.first_name || CUR.user_id) + ' از ربات بن شود؟\nاگر در صف یا بازی باشد، پول صف برمی‌گردد و بازی را می‌بازد.')) return;
@@ -511,36 +499,32 @@ async function toggleBan(ban) {
   catch (e) { toast(e.message, 'err'); }
 }
 async function adj(kind, key, sign) {
-  const raw=$(`#a-${kind}-${key}`).value.trim().replace(/[۰-۹]/g,d=>'۰۱۲۳۴۵۶۷۸۹'.indexOf(d)).replace(/[٠-٩]/g,d=>'٠١٢٣٤٥٦٧٨٩'.indexOf(d));
-  const n = kind==='auto' ? (/^[0-9]+$/.test(raw)&&BigInt(raw)>0n?raw:'') : num(raw);
+  const n = num($(`#a-${kind}-${key}`).value);
   if (!n) { toast('مقدار را وارد کن', 'err'); return; }
-  try { const d = await api('adjust', { user_id: CUR.user_id, kind, key, amount: kind==='auto'?(sign<0?'-':'')+n:sign*n }); CUR = d.user; renderUser(); toast(d.message, 'ok'); }
+  try { const d = await api('adjust', { user_id: CUR.user_id, kind, key, amount: sign * n }); CUR = d.user; renderUser(); toast('✅ ' + d.message, 'ok'); }
   catch (e) { toast(e.message, 'err'); }
 }
 
 /* ── کد هدیه ── */
-let giftEditing=null,giftRows=[];
-function resetGift(){giftEditing=null;$('#gift-submit').textContent='ساخت کد هدیه';$('#gift-cancel').classList.add('hidden');['code','coins','bank','levels','xp','vip','max','minlvl','exp','note'].forEach(k=>{const el=$('#g-'+k);el.disabled=false;el.value='';});RB.g={properties:{},workers:{},items:{}};drawHourFields('g');renderChips('g');}
-function editGift(code){const g=giftRows.find(x=>x.code===code);if(!g)return;resetGift();giftEditing=code;$('#g-code').value=code;const r=g.rewards||{};for(const k of ['coins','bank','levels','xp'])$('#g-'+k).value=r[k]||'';$('#g-vip').value=r.vip_days||'';$('#g-max').value=g.max_uses;$('#g-minlvl').value=g.min_level;$('#g-note').value=g.note||'';['code','max','minlvl','exp','note'].forEach(k=>$('#g-'+k).disabled=true);RB.g={properties:{...r.properties},workers:{...r.workers},items:{...r.items}};const h={...r.auto_hours};for(const i of CAT.auto_hours||[]){if(RB.g.items[i.key]){h[i.key]=h[i.key]||RB.g.items[i.key];delete RB.g.items[i.key];}}drawHourFields('g',h);renderChips('g');$('#gift-submit').textContent='ذخیره محتوای هدیه';$('#gift-cancel').classList.remove('hidden');$('#t-gifts').scrollIntoView({behavior:'smooth'});}
 async function createGift() {
   try {
-    const d = await api(giftEditing?'gifts/update':'gifts/create', { code: giftEditing||$('#g-code').value, rewards: collectRewards('g'), max_uses: num($('#g-max').value), min_level: num($('#g-minlvl').value),
+    const d = await api('gifts/create', { code: $('#g-code').value, rewards: collectRewards('g'), max_uses: num($('#g-max').value), min_level: num($('#g-minlvl').value),
       expires_hours: num($('#g-exp').value), note: $('#g-note').value });
-    toast(giftEditing?'محتوای هدیه ذخیره شد.':'کد ساخته شد: '+d.code, 'ok');resetGift();
+    toast('✅ کد ساخته شد: ' + d.code, 'ok');
     ['#g-code', '#g-coins', '#g-bank', '#g-levels', '#g-xp', '#g-vip', '#g-max', '#g-minlvl', '#g-exp', '#g-note'].forEach(s => $(s).value = '');
-    RB.g = { properties: {}, workers: {}, items: {} }; drawHourFields('g'); renderChips('g'); loadGifts(); loadStats();
+    RB.g = { properties: {}, workers: {}, items: {} }; renderChips('g'); loadGifts(); loadStats();
   } catch (e) { toast(e.message, 'err'); }
 }
 async function loadGifts() {
   try {
-    const d = await api('gifts/list'); giftRows=d.gifts;const now = Date.now() / 1000;
+    const d = await api('gifts/list'); const now = Date.now() / 1000;
     $('#g-list').innerHTML = d.gifts.length ? d.gifts.map(g => {
       const expired = g.expires_at && g.expires_at < now;
       return `<tr><td><code>${esc(g.code)}</code><br><span class="muted">هدیه زر ${esc(g.code)}</span>${g.note ? '<br><span class="muted">📝 ' + esc(g.note) + '</span>' : ''}</td>
         <td style="white-space:pre-line;font-size:12.5px">${esc(g.rewards_text)}</td><td>${fmt(g.used)} / ${g.max_uses ? fmt(g.max_uses) : '∞'}</td>
         <td class="muted">${g.min_level ? 'لول ' + fmt(g.min_level) + '+' : '—'}<br>${g.expires_at ? (expired ? '⌛ منقضی' : 'تا ' + dt(g.expires_at)) : 'همیشگی'}</td>
         <td><span class="pill ${g.active && !expired ? 'ok' : 'no'}">${g.active ? (expired ? 'منقضی' : 'فعال') : 'غیرفعال'}</span></td>
-        <td style="white-space:nowrap"><button class="btn ghost sm" onclick="editGift('${esc(g.code)}')">ویرایش محتوا</button><button class="btn ghost sm" onclick="giftAct('toggle','${esc(g.code)}')">${g.active?'توقف':'فعال'}</button> <button class="btn red sm" onclick="giftAct('delete','${esc(g.code)}')">حذف</button></td></tr>`;
+        <td style="white-space:nowrap"><button class="btn ghost sm" onclick="giftAct('toggle','${esc(g.code)}')">${g.active ? '⏸' : '▶️'}</button> <button class="btn red sm" onclick="giftAct('delete','${esc(g.code)}')">🗑</button></td></tr>`;
     }).join('') : '<tr><td colspan="6" class="muted">هنوز کدی ساخته نشده</td></tr>';
   } catch (e) { toast(e.message, 'err'); }
 }
@@ -569,7 +553,6 @@ async function saveSettings() {
 function resetProduct() {
   ['#p-id', '#p-title', '#p-toman', '#p-stars', '#p-sort', '#p-coins', '#p-bank', '#p-levels', '#p-xp', '#p-vip', '#p-desc'].forEach(s => $(s).value = '');
   RB.p = { properties: {}, workers: {}, items: {} }; renderChips('p');
-  drawHourFields('p');
   $('#p-form-title').textContent = '➕ افزودن محصول'; $('#p-cancel').classList.add('hidden');
 }
 function editProduct(id) {
@@ -578,7 +561,6 @@ function editProduct(id) {
   $('#p-id').value = p.id; $('#p-title').value = p.title; $('#p-desc').value = p.description; $('#p-toman').value = p.price_toman || ''; $('#p-stars').value = p.price_stars || '';
   $('#p-sort').value = p.sort || ''; $('#p-coins').value = r.coins || ''; $('#p-bank').value = r.bank || ''; $('#p-levels').value = r.levels || ''; $('#p-xp').value = r.xp || ''; $('#p-vip').value = r.vip_days || '';
   RB.p = { properties: Object.assign({}, r.properties), workers: Object.assign({}, r.workers), items: Object.assign({}, r.items) }; renderChips('p');
-  const hours=Object.assign({},r.auto_hours);for(const item of CAT.auto_hours||[]){if(RB.p.items[item.key]){hours[item.key]=hours[item.key]||RB.p.items[item.key];delete RB.p.items[item.key];}}drawHourFields('p',hours);renderChips('p');
   $('#p-form-title').textContent = '✏️ ویرایش محصول #' + p.id; $('#p-cancel').classList.remove('hidden');
   window.scrollTo({ top: $('#p-form-title').offsetTop - 20, behavior: 'smooth' });
 }
@@ -602,7 +584,7 @@ async function loadOrders() {
     const b = $('#ord-badge'); b.textContent = fmt(d.review_count); b.classList.toggle('hidden', !d.review_count);
     $('#o-list').innerHTML = d.orders.length ? d.orders.map(o => {
       const st = ST[o.status] || [o.status, ''];
-      const canAct = o.status==='review' && o.method==='card' && o.receipt;
+      const canAct = ['review', 'awaiting_receipt'].includes(o.status);
       return `<tr><td>${o.id}</td><td>${esc(o.name || '—')}${o.username ? ' <span class="muted">@' + esc(o.username) + '</span>' : ''}<br><span class="muted">${o.user_id}</span></td>
         <td>${esc(o.title)}</td><td style="white-space:nowrap">${o.method === 'stars' ? '⭐ ' + fmt(o.amount) : '💳 ' + fmt(o.amount) + ' ت'}</td>
         <td><span class="pill ${st[1]}">${st[0]}</span></td><td class="muted">${dt(o.created_at)}</td>
@@ -762,8 +744,8 @@ async function saveDesign(reset) {
 }
 
 /* ── آیتم‌ها و قیمت‌های بازی ── */
-let GAME_ITEMS = { property: [], worker: [], item: [], auto: [] }, GAME_CAT = 'property';
-const GC_LABEL = { property: '🏠 ملک', worker: '👷 کارگر', item: '💀 آیتم بازار سیاه', auto:'قابلیت ساعتی' };
+let GAME_ITEMS = { property: [], worker: [], item: [] }, GAME_CAT = 'property';
+const GC_LABEL = { property: '🏠 ملک', worker: '👷 کارگر', item: '💀 آیتم بازار سیاه' };
 const TYPE_LABEL = { launcher: '🚀 وسیله شلیک', projectile: '💥 مهمات', defense: '🛡️ دفاعی', timed: '⏱ ساعتی' };
 function giExtra(it) {
   if (it.type === 'projectile') return '💥 تخریب ' + fmt(Math.round((it.damage || 0) * 100)) + '٪';
@@ -786,10 +768,10 @@ function renderGameItemsList() {
   const list = GAME_ITEMS[GAME_CAT] || [];
   $('#gi-list').innerHTML = list.length ? list.map(it => `<tr>
     <td><b>${esc(it.emoji || '')} ${esc(it.name)}</b><br><span class="muted">${esc(it._key)}${it.type ? ' · ' + (TYPE_LABEL[it.type] || it.type) : ''}</span></td>
-    <td style="white-space:nowrap">${fmt(it.price || 0)}${GAME_CAT==='auto'?' / ساعت':''}<br><small class="muted">${it.visibility==='shop'?'فقط فروشگاه':'عمومی'}</small></td>
+    <td style="white-space:nowrap">💰 ${fmt(it.price || 0)}</td>
     <td class="muted">${giExtra(it)}</td>
     <td><span class="pill ${it._active ? 'ok' : 'no'}">${it._active ? 'فعال' : 'غیرفعال'}</span></td>
-    <td style="white-space:nowrap"><button class="btn ghost sm" onclick="editGameItem('${it._key}')">ویرایش</button> <button class="btn ${it._active ? 'red' : 'green'} sm" onclick="toggleGameItem('${it._key}')">${it._active ? 'توقف' : 'فعال'}</button> <button class="btn red sm" onclick="removeCatalogItem('${it._key}')">حذف</button></td>
+    <td style="white-space:nowrap"><button class="btn ghost sm" onclick="editGameItem('${it._key}')">✏️</button> <button class="btn ${it._active ? 'red' : 'green'} sm" onclick="toggleGameItem('${it._key}')">${it._active ? '⏸' : '▶️'}</button></td>
   </tr>`).join('') : '<tr><td colspan="5" class="muted">آیتمی در این دسته ثبت نشده</td></tr>';
 }
 document.querySelectorAll('[data-gc]').forEach(b => b.onclick = () => {
@@ -802,10 +784,9 @@ document.querySelectorAll('[data-gc]').forEach(b => b.onclick = () => {
 function syncGameItemForm() {
   const isItem = GAME_CAT === 'item';
   const t = $('#gi-type').value;
-  $('#gi-income-wrap').style.display = isItem || GAME_CAT==='auto' ? 'none' : '';
+  $('#gi-income-wrap').style.display = isItem ? 'none' : '';
   $('#gi-type-wrap').style.display = isItem ? '' : 'none';
-  $('#gi-timedkind-wrap').style.display = GAME_CAT==='auto' ? '' : 'none';
-  $('#gi-visibility-wrap').style.display = isItem || GAME_CAT==='auto' ? '' : 'none';
+  $('#gi-timedkind-wrap').style.display = isItem && t === 'timed' ? '' : 'none';
   $('#gi-damage-wrap').style.display = isItem && t === 'projectile' ? '' : 'none';
   $('#gi-defchance-wrap').style.display = isItem && t === 'defense' ? '' : 'none';
   $('#gi-launches-wrap').style.display = isItem && t === 'launcher' ? '' : 'none';
@@ -818,7 +799,6 @@ function syncGameItemForm() {
 function resetGameItemForm() {
   ['#gi-key', '#gi-key-in', '#gi-name', '#gi-emoji', '#gi-price', '#gi-income', '#gi-damage', '#gi-defchance', '#gi-launches', '#gi-deftype', '#gi-defagainst', '#gi-command', '#gi-timedkind'].forEach(s => $(s).value = '');
   $('#gi-type').value = 'launcher';
-  $('#gi-visibility').value = 'public';$('#gi-timedkind').value='shield';
   $('#gi-form-title').textContent = '➕ افزودن ' + GC_LABEL[GAME_CAT] + ' جدید';
   $('#gi-cancel').classList.add('hidden');
   syncGameItemForm();
@@ -840,7 +820,6 @@ function editGameItem(key) {
   $('#gi-defagainst').value = it.defends_against || '';
   $('#gi-command').value = it.command || '';
   $('#gi-timedkind').value = it.timed_kind || '';
-  $('#gi-visibility').value = it.visibility || 'public';
   $('#gi-form-title').textContent = '✏️ ویرایش ' + GC_LABEL[GAME_CAT] + ' «' + (it.name || key) + '»';
   $('#gi-cancel').classList.remove('hidden');
   syncGameItemForm();
@@ -850,10 +829,7 @@ async function saveGameItem() {
   const key = ($('#gi-key').value || $('#gi-key-in').value || '').trim();
   if (!key) { toast('کلید آیتم را وارد کن', 'err'); return; }
   const data = { name: $('#gi-name').value, emoji: $('#gi-emoji').value, price: num($('#gi-price').value) };
-  data.visibility=(GAME_CAT==='auto'||GAME_CAT==='item')?$('#gi-visibility').value:'public';
-  if (GAME_CAT === 'auto') {
-    data.type='timed';data.timed_kind=$('#gi-timedkind').value;
-  } else if (GAME_CAT === 'item') {
+  if (GAME_CAT === 'item') {
     const t = $('#gi-type').value;
     data.type = t;
     if (t === 'timed') {
@@ -872,21 +848,16 @@ async function saveGameItem() {
     data.income = num($('#gi-income').value);
   }
   try {
-    await api('gameitems/save', { category: GAME_CAT, key, data, create:!$('#gi-key').value });
+    await api('gameitems/save', { category: GAME_CAT, key, data });
     toast('✅ آیتم ذخیره شد', 'ok');
     resetGameItemForm();
-    loadGameItems();loadStats();
+    loadGameItems();
   } catch (e) { toast(e.message, 'err'); }
 }
 async function toggleGameItem(key) {
-  try { await api('gameitems/toggle', { category: GAME_CAT, key }); loadGameItems();loadStats(); }
+  try { await api('gameitems/toggle', { category: GAME_CAT, key }); loadGameItems(); }
   catch (e) { toast(e.message, 'err'); }
 }
-async function removeCatalogItem(key){
-  if(!confirm('این آیتم از کاتالوگ حذف شود؟ بسته‌ها و هدیه‌های وابسته برای بازبینی غیرفعال می‌شوند.'))return;
-  try{await api('gameitems/delete',{category:GAME_CAT,key});resetGameItemForm();await loadGameItems();await loadStats();toast('آیتم حذف شد.','ok');}catch(e){toast(e.message,'err');}
-}
-$('#check-commands').onclick=async()=>{try{const d=await api('commands/check');$('#command-result').textContent=d.synced?'فیلتر پیام و نگاشت ربات با '+fmt(d.count)+' دستور فعال مطابقت دارند.':'هنوز اتصال هندلرها تأیید نشده است. وضعیت سرویس ربات را بررسی کنید.';}catch(e){toast(e.message,'err');}};
 async function saveGameSettings() {
   try {
     await api('gamesettings/save', { settings: {
@@ -894,6 +865,158 @@ async function saveGameSettings() {
       bank_rate: parseFloat($('#gs-bankrate').value), warehouse_base: num($('#gs-whbase').value) } });
     toast('✅ تنظیمات قیمت‌ها ذخیره شد', 'ok');
   } catch (e) { toast(e.message, 'err'); }
+}
+/* ── نسخه‌ی نهایی: آیتم‌ها، حمله خودکار، ساعت‌ها و کاربر ── */
+GC_LABEL.auto = '⚔️ حمله خودکار';
+function giExtra(it) {
+  if (it.type === 'projectile') return '💥 تخریب ' + fmt(Math.round((it.damage || 0) * 100)) + '٪ · دستور: ' + esc(it.command || '—');
+  if (it.type === 'defense') return '🛡️ دفاع ' + fmt(Math.round((it.defense_chance || 0) * 100)) + '٪';
+  if (it.type === 'launcher') return '🚀 شلیک: ' + ((it.launches || []).length) + ' نوع مهمات';
+  if (it.type === 'timed' || GAME_CAT === 'auto') return '⏱ ' + (it.timed_kind === 'shield' ? '🛡️ ابر سپر' : '👑 فرمانده هیتلر') + ' (ساعتی)';
+  return '📈 درآمد ' + fmt(it.income || 0) + ' /روز';
+}
+function renderGameItemsList() {
+  const list = GAME_ITEMS[GAME_CAT] || [];
+  $('#gi-list').innerHTML = list.length ? list.map(it => `<tr>
+    <td><b>${esc(it.emoji || '')} ${esc(it.name)}</b><br><span class="muted">${esc(it._key)}${it.type ? ' · ' + (TYPE_LABEL[it.type] || it.type) : ''}</span>
+      ${it.market === false ? '<br><span class="pill wait">🔒 فقط از فروشگاه</span>' : ''}</td>
+    <td style="white-space:nowrap">💰 ${fmt(it.price || 0)}${GAME_CAT === 'auto' ? ' <span class="muted">/ساعت</span>' : ''}</td>
+    <td class="muted">${giExtra(it)}</td>
+    <td><span class="pill ${it._active ? 'ok' : 'no'}">${it._active ? 'فعال' : 'غیرفعال'}</span></td>
+    <td style="white-space:nowrap"><button class="btn ghost sm" onclick="editGameItem('${it._key}')">✏️</button>
+      <button class="btn ${it._active ? 'red' : 'green'} sm" onclick="toggleGameItem('${it._key}')">${it._active ? '⏸' : '▶️'}</button>
+      <button class="btn red sm" onclick="deleteGameItem('${it._key}')">🗑</button></td></tr>`).join('')
+    : '<tr><td colspan="5" class="muted">آیتمی در این دسته ثبت نشده</td></tr>';
+}
+function syncGameItemForm() {
+  const cat = GAME_CAT, t = $('#gi-type').value;
+  const opt = $('#gi-type').querySelector('option[value=timed]'); if (opt) opt.remove();
+  const show = (id, on) => { const el = $(id); if (el) el.style.display = on ? '' : 'none'; };
+  const isItem = cat === 'item', isAuto = cat === 'auto', isEcon = cat === 'property' || cat === 'worker';
+  show('#gi-income-wrap', isEcon);
+  show('#gi-type-wrap', isItem);
+  show('#gi-timedkind-wrap', isAuto);
+  show('#gi-market-wrap', isItem);
+  show('#gi-damage-wrap', isItem && t === 'projectile');
+  show('#gi-defchance-wrap', isItem && t === 'defense');
+  show('#gi-launches-wrap', isItem && t === 'launcher');
+  show('#gi-deftype-wrap', isItem && t === 'projectile');
+  show('#gi-defagainst-wrap', isItem && t === 'defense');
+  show('#gi-command-wrap', isItem && t === 'projectile');
+  show('#gi-cmd-note', isItem && t === 'projectile');
+  const pl = $('#gi-price').closest('label'); if (pl) pl.childNodes[0].textContent = isAuto ? 'قیمت هر ساعت' : 'قیمت';
+  $('#gi-key-in').disabled = !!$('#gi-key').value;
+}
+function resetGameItemForm() {
+  ['#gi-key', '#gi-key-in', '#gi-name', '#gi-emoji', '#gi-price', '#gi-income', '#gi-damage', '#gi-defchance', '#gi-launches', '#gi-deftype', '#gi-defagainst', '#gi-command'].forEach(s => $(s).value = '');
+  $('#gi-timedkind').value = 'hitler';
+  $('#gi-market').checked = true;
+  $('#gi-type').value = 'launcher';
+  $('#gi-form-title').textContent = '➕ افزودن ' + (GC_LABEL[GAME_CAT] || 'آیتم') + ' جدید';
+  $('#gi-cancel').classList.add('hidden');
+  syncGameItemForm();
+}
+function editGameItem(key) {
+  const it = (GAME_ITEMS[GAME_CAT] || []).find(x => x._key === key);
+  if (!it) return;
+  $('#gi-key').value = key; $('#gi-key-in').value = key;
+  $('#gi-name').value = it.name || ''; $('#gi-emoji').value = it.emoji || ''; $('#gi-price').value = it.price || ''; $('#gi-income').value = it.income || '';
+  $('#gi-type').value = it.type && it.type !== 'timed' ? it.type : 'launcher';
+  $('#gi-timedkind').value = it.timed_kind || 'hitler';
+  $('#gi-market').checked = it.market !== false;
+  $('#gi-damage').value = it.damage != null ? it.damage : '';
+  $('#gi-defchance').value = it.defense_chance != null ? it.defense_chance : '';
+  $('#gi-launches').value = (it.launches || []).join(', ');
+  $('#gi-deftype').value = it.defense_type || '';
+  $('#gi-defagainst').value = it.defends_against || '';
+  $('#gi-command').value = it.command || '';
+  $('#gi-form-title').textContent = '✏️ ویرایش «' + (it.name || key) + '»';
+  $('#gi-cancel').classList.remove('hidden');
+  syncGameItemForm();
+  window.scrollTo({ top: $('#gi-form-title').offsetTop - 20, behavior: 'smooth' });
+}
+async function saveGameItem() {
+  const key = ($('#gi-key').value || $('#gi-key-in').value || '').trim();
+  if (!key) { toast('کلید آیتم را وارد کن', 'err'); return; }
+  const data = { name: $('#gi-name').value, emoji: $('#gi-emoji').value, price: num($('#gi-price').value) };
+  if (GAME_CAT === 'auto') {
+    data.timed_kind = $('#gi-timedkind').value;
+  } else if (GAME_CAT === 'item') {
+    const t = $('#gi-type').value; data.type = t; data.market = $('#gi-market').checked;
+    if (t === 'projectile') { data.damage = parseFloat($('#gi-damage').value); data.defense_type = $('#gi-deftype').value; data.command = $('#gi-command').value; }
+    else if (t === 'defense') { data.defense_chance = parseFloat($('#gi-defchance').value); data.defends_against = $('#gi-defagainst').value; }
+    else if (t === 'launcher') { data.launches = $('#gi-launches').value; }
+  } else {
+    data.income = num($('#gi-income').value);
+  }
+  try {
+    await api('gameitems/save', { category: GAME_CAT, key, data });
+    toast('✅ آیتم ذخیره شد', 'ok');
+    resetGameItemForm(); loadGameItems();
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function deleteGameItem(key) {
+  if (!confirm('آیتم «' + key + '» از همه‌جا حذف شود؟\nاز فروشگاه، کدهای هدیه و دارایی کاربران هم پاک می‌شود و قابل برگشت نیست.')) return;
+  try {
+    const d = await api('gameitems/delete', { key, purge: true });
+    const s = d.stats || {};
+    toast('🗑 حذف شد — دارایی کاربران: ' + fmt(s.users || 0) + ' · فروشگاه: ' + fmt(s.shop || 0) + ' · هدیه: ' + fmt(s.gifts || 0), 'ok');
+    resetGameItemForm(); loadGameItems();
+  } catch (e) { toast(e.message, 'err'); }
+}
+function builderHtml(px) {
+  return `<div class="row" style="margin-top:12px">
+    <select id="${px}-type" onchange="fillKeys('${px}')"><option value="properties">🏠 ملک</option><option value="workers">👷 کارگر</option><option value="items">💀 بازار سیاه</option><option value="timed">⚔️ ساعت (هیتلر / ابر سپر)</option></select>
+    <select id="${px}-key" style="flex:1"></select><input id="${px}-n" inputmode="numeric" value="1" style="width:80px;text-align:center"><span class="muted" id="${px}-nlbl">عدد</span>
+    <button class="btn ghost" onclick="addReward('${px}')">افزودن</button></div><div class="chips" id="${px}-chips"></div>`;
+}
+function fillKeys(px) {
+  if (!CAT) return;
+  const t = $('#' + px + '-type').value;
+  $('#' + px + '-key').innerHTML = (CAT[t] || []).map(i => `<option value="${i.key}">${i.emoji} ${esc(i.name)}</option>`).join('');
+  const l = $('#' + px + '-nlbl'); if (l) l.textContent = t === 'timed' ? 'ساعت' : 'عدد';
+}
+function addReward(px) {
+  const t = $('#' + px + '-type').value, k = $('#' + px + '-key').value, n = num($('#' + px + '-n').value);
+  if (!k || !n) return;
+  RB[px][t] = RB[px][t] || {}; RB[px][t][k] = n; renderChips(px);
+}
+function delReward(px, t, k) { if (RB[px][t]) delete RB[px][t][k]; renderChips(px); }
+function renderChips(px) {
+  const out = [];
+  for (const t of ['properties', 'workers', 'items', 'timed']) for (const [k, n] of Object.entries(RB[px][t] || {})) {
+    const it = ((CAT && CAT[t]) || []).find(i => i.key === k) || { emoji: '', name: k };
+    out.push(`<span class="chip">${it.emoji} ${esc(it.name)} × ${fmt(n)}${t === 'timed' ? ' ساعت' : ''}<button onclick="delReward('${px}','${t}','${k}')">✕</button></span>`);
+  }
+  $('#' + px + '-chips').innerHTML = out.join('');
+}
+function collectRewards(px) {
+  return { coins: num($('#' + px + '-coins').value), bank: num($('#' + px + '-bank').value), levels: num($('#' + px + '-levels').value), xp: num($('#' + px + '-xp').value),
+    vip_days: num($('#' + px + '-vip') ? $('#' + px + '-vip').value : 0),
+    properties: RB[px].properties || {}, workers: RB[px].workers || {}, items: RB[px].items || {}, timed: RB[px].timed || {} };
+}
+function renderUser() {
+  const u = CUR; if (!u || !CAT) return;
+  const tbl = (title, list, owned, kind, cap) => `<div class="card"><h3>${title}</h3><table><thead><tr><th>مورد</th><th>تعداد</th><th>مقدار</th><th></th></tr></thead><tbody>
+    ${list.map(it => adjRow(`${it.emoji} ${esc(it.name)}${it.type === 'defense' ? ' <span class="pill">حداکثر ۱</span>' : ''}`, kind, (owned[it.key] || 0) + (cap ? ' / ' + cap : ''), it.key)).join('')}</tbody></table></div>`;
+  const timed = u.timed || [];
+  const timedRows = (CAT.timed || []).map(it => {
+    const t = timed.find(x => x.key === it.key);
+    const left = t && t.active ? fmt(Math.floor(t.hours_left)) + ' ساعت' : 'غیرفعال';
+    return adjRow(`${it.emoji} ${esc(it.name)}`, 'timed', `${left} <span class="muted">(کل خرید: ${fmt(t ? t.hours_bought : 0)})</span>`, it.key);
+  }).join('');
+  $('#user').innerHTML = `<div class="card"><div class="uhead"><div><div class="big">${esc(u.first_name || '—')}</div>
+      <span class="muted">${u.username ? '@' + esc(u.username) + ' · ' : ''}آیدی: ${u.user_id} · کارت: ${esc(u.card || '-')}</span><br>
+      <span class="muted">درآمد روزانه: ${fmt(u.daily_income)} · 🏭 انبار لول ${fmt(u.warehouse_level || 1)} ${u.vip ? `· <span class="pill wait">👑 VIP (${fmt(u.vip_days)} روز)</span>` : ''}${u.in_game ? ' · 🎮 در بازی' : ''}${u.in_queue ? ' · ⏳ در صف' : ''}</span></div>
+      <div class="row">${u.banned ? `<button class="btn green" onclick="toggleBan(false)">✅ رفع بن</button>` : `<button class="btn red" onclick="toggleBan(true)">🚫 بن کردن از ربات</button>`}
+      <button class="btn ghost" onclick="openUser(${u.user_id})">🔄</button></div></div>
+    ${u.banned ? '<div class="warn" style="margin:0 0 12px">🚫 این کاربر بن است.</div>' : ''}
+    <table><thead><tr><th>مورد</th><th>فعلی</th><th>مقدار</th><th></th></tr></thead><tbody>
+      ${adjRow('💰 موجودی', 'coins', fmt(u.balance))}${adjRow('🏦 بانک', 'bank', fmt(u.bank))}${adjRow('⭐ لول', 'levels', fmt(u.level))}${adjRow('✨ XP', 'xp', fmt(u.xp))}</tbody></table>
+    ${u.gifts.length ? `<p class="muted">🎁 کدهای استفاده‌شده: ${u.gifts.map(g => '<code>' + esc(g.code) + '</code>').join(' ')}</p>` : ''}</div>
+    <div class="card"><h3>⚔️ حمله خودکار (ساعت)</h3><table><thead><tr><th>محصول</th><th>وضعیت فعلی</th><th>ساعت (+ اضافه / − کم)</th><th></th></tr></thead><tbody>${timedRows || '<tr><td colspan="4" class="muted">محصولی ثبت نشده</td></tr>'}</tbody></table></div>
+    <div class="grid2">${tbl('🏠 ملک‌ها', CAT.properties, u.properties, 'property', CAT.max_per_key)}${tbl('👷 کارگرها', CAT.workers, u.workers, 'worker', CAT.max_per_key)}</div>
+    ${tbl('💀 اینونتوری بازار سیاه', CAT.items, u.items, 'item', 0)}`;
 }
 loadStats();
 </script>
