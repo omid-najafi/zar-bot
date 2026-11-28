@@ -26,8 +26,6 @@ import re
 import secrets
 import time
 import urllib.parse
-from contextvars import ContextVar
-from types import SimpleNamespace
 from pathlib import Path
 
 import aiomysql
@@ -85,6 +83,7 @@ SHIELD_KEY = "super_shield"                                   # ابر سپر (�
 SHIELD_DEFLECT_CHANCE = 0.85                                  # احتمال دفع ابر سپر
 WAREHOUSE_DAMAGE_CHANCE = 0.03                                # احتمال آسیب به انبار در هر حمله
 WAREHOUSE_REPAIR_RATE = 0.5                                   # هزینه تعمیر انبار = ۵۰٪ آسیب
+_timed_expires: dict = {}                                     # (user_id, item_key) -> زمان انقضا
 _warehouse_dmg: dict[int, int] = {}                           # user_id -> آسیب انبار (قابل تعمیر)
 
 # تزریق محصولات ساعتی به بازار سیاه (تا در پنل آیتم‌ها هم قابل ویرایش باشند)
@@ -476,16 +475,8 @@ async def _ensure_tables():
                     "PRIMARY KEY (category, item_key)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
                 await cur.execute(
                     "CREATE TABLE IF NOT EXISTS timed_items (user_id BIGINT NOT NULL, item_key VARCHAR(64) NOT NULL, "
-                    "expires_at DOUBLE NOT NULL, hours DECIMAL(65,0) NOT NULL DEFAULT 0, created_at DOUBLE NOT NULL, "
+                    "expires_at DOUBLE NOT NULL, hours INT NOT NULL DEFAULT 0, created_at DOUBLE NOT NULL, "
                     "PRIMARY KEY (user_id, item_key)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
-                await cur.execute("CREATE TABLE IF NOT EXISTS item_entitlements (user_id BIGINT NOT NULL, "
-                                  "item_key VARCHAR(64) NOT NULL, order_id INT NOT NULL, "
-                                  "PRIMARY KEY(user_id,item_key)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
-                await cur.execute("SELECT DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() "
-                                  "AND TABLE_NAME='timed_items' AND COLUMN_NAME='hours'")
-                hours_column = await cur.fetchone()
-                if hours_column and hours_column[0] != 'decimal':
-                    await cur.execute("ALTER TABLE timed_items MODIFY hours DECIMAL(65,0) NOT NULL DEFAULT 0")
                 await cur.execute(
                     "CREATE TABLE IF NOT EXISTS warehouse_damage (user_id BIGINT PRIMARY KEY, amount BIGINT NOT NULL DEFAULT 0, "
                     "updated_at DOUBLE NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
@@ -546,63 +537,6 @@ def _now_iso() -> str:
 
 def _bm_items() -> dict:
     return getattr(config, "BLACKMARKET_ITEMS", {}) or {}
-
-
-def _auto_items():
-    return {k: v for k, v in _bm_items().items() if v.get('type') == 'timed'}
-
-
-def _stock_items():
-    return {k: v for k, v in _bm_items().items() if v.get('type') != 'timed'}
-
-
-def _shop_only(key):
-    return _bm_items().get(key, {}).get('visibility') == 'shop'
-
-
-async def _entitlements(uid):
-    if not any(v.get('visibility') == 'shop' for v in _bm_items().values()):
-        return set()
-    rows = await _fetch('SELECT item_key FROM item_entitlements WHERE user_id=%s', (uid,))
-    return {r['item_key'] for r in rows}
-
-
-async def _allowed_item(uid, key):
-    return key in _bm_items() and (not _shop_only(key) or key in await _entitlements(uid))
-
-
-def _hours(value):
-    text = str(value).translate(_FA_DIGITS).strip()
-    if not re.fullmatch(r'[0-9]+', text):
-        raise ValueError('تعداد ساعت باید یک عدد صحیح مثبت باشد.')
-    n = int(text)
-    if n < 1:
-        raise ValueError('حداقل یک ساعت وارد کنید.')
-    return n
-
-
-async def _change_hours(cur, uid, key, delta):
-    # The user row also serializes two simultaneous first-time grants.
-    await cur.execute('SELECT user_id FROM users WHERE user_id=%s FOR UPDATE', (uid,))
-    if not await cur.fetchone():
-        raise ValueError('کاربر پیدا نشد.')
-    await cur.execute('SELECT expires_at FROM timed_items WHERE user_id=%s AND item_key=%s FOR UPDATE', (uid, key))
-    row = await cur.fetchone()
-    now = time.time()
-    before = max(now, float(row['expires_at'])) if row else now
-    try:
-        after = max(now, before + delta * 3600)
-    except OverflowError:
-        raise ValueError('این عدد در پایگاه داده قابل نمایش نیست.')
-    if not math.isfinite(after):
-        raise ValueError('مدت واردشده در پایگاه داده قابل نمایش نیست.')
-    if delta > 0:
-        await cur.execute('INSERT INTO timed_items (user_id,item_key,expires_at,hours,created_at) '
-                          'VALUES (%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE '
-                          'expires_at=VALUES(expires_at),hours=hours+VALUES(hours)', (uid, key, after, delta, now))
-    elif row:
-        await cur.execute('UPDATE timed_items SET expires_at=%s WHERE user_id=%s AND item_key=%s', (after, uid, key))
-    return after, min(abs(delta), math.ceil(abs(after-before)/3600))
 
 
 def _defense_keys() -> set:
@@ -687,29 +621,13 @@ def _section_disabled(sec: str) -> bool:
     return sec in (_controls.get("disabled_sections") or [])
 
 
-GRANT_KINDS = ("coins", "bank", "xp", "levels", "vip_days", "property", "worker", "item", "auto")
+GRANT_KINDS = ("coins", "bank", "xp", "levels", "vip_days", "property", "worker", "item")
 
 
-async def _grant(cur, uid: int, kind: str, key: str, n: int, *, order_id=None) -> int:
+async def _grant(cur, uid: int, kind: str, key: str, n: int) -> int:
     """افزودن (داخل تراکنش). خروجی: مقدار واقعاً اعمال‌شده"""
     if n <= 0:
         return 0
-    if kind in ('auto', 'item'):
-        spec = _bm_items().get(key)
-        if not spec:
-            return 0
-        if order_id is not None:
-            await cur.execute('INSERT IGNORE INTO item_entitlements (user_id,item_key,order_id) VALUES (%s,%s,%s)',
-                              (uid, key, order_id))
-        elif _shop_only(key):
-            await cur.execute('SELECT 1 FROM item_entitlements WHERE user_id=%s AND item_key=%s', (uid, key))
-            if not await cur.fetchone():
-                return 0
-        if spec.get('type') == 'timed':
-            await _change_hours(cur, uid, key, n)
-            return n
-        if kind == 'auto':
-            return 0
     if kind == "coins":
         await cur.execute("UPDATE users SET balance = balance + %s WHERE user_id=%s", (n, uid))
         return n if cur.rowcount else 0
@@ -786,9 +704,6 @@ async def _revoke(cur, uid: int, kind: str, key: str, n: int) -> int:
     """کم کردن (داخل تراکنش). خروجی: مقدار واقعاً کم‌شده"""
     if n <= 0:
         return 0
-    if kind == 'auto':
-        _, applied = await _change_hours(cur, uid, key, -n)
-        return applied
     if kind in ("coins", "bank"):
         col = "balance" if kind == "coins" else "bank_balance"
         await cur.execute(f"SELECT {col} AS v FROM users WHERE user_id=%s FOR UPDATE", (uid,))
@@ -829,11 +744,9 @@ def _kind_label(kind: str, key: str) -> str:
         return "⭐ لول"
     if kind == "vip_days":
         return "👑 اشتراک VIP (روز)"
-    if kind == 'auto':
-        return f"{_esc(_auto_items().get(key, {}).get('name', key))} (ساعت)"
     store = {"property": config.PROPERTIES, "worker": config.WORKERS, "item": _bm_items()}.get(kind, {})
     info = store.get(key, {})
-    return f"{_esc(info.get('emoji', ''))} {_esc(info.get('name', key))}"
+    return f"{info.get('emoji', '•')} {info.get('name', key)}"
 
 
 # ═══════════ کد هدیه ═══════════
@@ -849,11 +762,11 @@ def _rewards_list(rewards: dict) -> list:
         n = _to_int(rewards.get(kind), 0) or 0
         if n > 0:
             out.append((kind, "", n))
-    for kind, field in (("property", "properties"), ("worker", "workers"), ("item", "items"), ("auto", "auto_hours")):
+    for kind, field in (("property", "properties"), ("worker", "workers"), ("item", "items")):
         for key, n in (rewards.get(field) or {}).items():
-            n = int(n or 0)
+            n = _to_int(n, 0) or 0
             if n > 0:
-                out.append(('auto' if kind == 'item' and key in _auto_items() else kind, key, n))
+                out.append((kind, key, n))
     return out
 
 
@@ -884,11 +797,6 @@ async def redeem_gift(user_id: int, code_raw: str) -> tuple[bool, str]:
         lvl = _calc_level(int(u["total_xp"] or 0))
         if int(gc["min_level"] or 0) > lvl:
             return False, f"🔒 این کد برای لول {gc['min_level']} به بالاست (لول تو: {lvl})."
-        for kind, key, _ in _rewards_list(_loads(gc['rewards'])):
-            if kind in ('item', 'auto') and _shop_only(key):
-                await cur.execute('SELECT 1 FROM item_entitlements WHERE user_id=%s AND item_key=%s', (user_id, key))
-                if not await cur.fetchone():
-                    return False, 'این هدیه شامل آیتم اختصاصی است. ابتدا دسترسی آن را از فروشگاه تهیه کنید.'
         await cur.execute("SELECT 1 FROM gift_redemptions WHERE code=%s AND user_id=%s", (code, user_id))
         if await cur.fetchone():
             return False, "⚠️ قبلاً از این کد هدیه استفاده کرده‌ای."
@@ -1721,10 +1629,8 @@ def _catalog() -> dict:
                        for k, v in config.PROPERTIES.items()],
         "workers": [{"key": k, "name": v["name"], "emoji": v["emoji"], "price": v["price"]}
                     for k, v in config.WORKERS.items()],
-        "items": [{"key": k, "name": v["name"], "emoji": v["emoji"], "price": v["price"], "type": v.get("type"),
-                   "visibility": v.get('visibility', 'public')} for k, v in _stock_items().items()],
-        "auto_hours": [{"key": k, "name": v['name'], "emoji": v.get('emoji', ''), "price": v['price'],
-                        "visibility": v.get('visibility', 'public')} for k, v in _auto_items().items()],
+        "items": [{"key": k, "name": v["name"], "emoji": v["emoji"], "price": v["price"], "type": v.get("type")}
+                  for k, v in _bm_items().items()],
         "max_per_key": int(getattr(config, "MAX_PER_KEY", 5)),
     }
 
@@ -1743,7 +1649,6 @@ async def _user_detail(uid: int) -> dict | None:
     except Exception:
         gifts = []
     xp = int(u["total_xp"] or 0)
-    timed = await _fetch('SELECT item_key,hours,expires_at FROM timed_items WHERE user_id=%s', (uid,))
     return {
         "user_id": int(u["user_id"]), "username": u["username"], "first_name": u["first_name"],
         "balance": int(u["balance"] or 0), "bank": int(u["bank_balance"] or 0), "xp": xp, "level": _calc_level(xp),
@@ -1752,8 +1657,6 @@ async def _user_detail(uid: int) -> dict | None:
         "workers": {r["asset_key"]: int(r["c"]) for r in assets if r["asset_type"] == "worker"},
         "daily_income": sum(int(r["inc"] or 0) for r in assets),
         "items": {r["item_key"]: int(r["c"]) for r in inv},
-        "auto_hours": {r['item_key']: max(0, math.ceil((float(r['expires_at'])-time.time())/3600)) for r in timed},
-        "granted_hours": {r['item_key']: str(r['hours']) for r in timed},
         "gifts": [{"code": g["code"], "at": float(g["redeemed_at"])} for g in gifts],
         "in_game": uid in _user_games, "in_queue": uid in _waiting, "banned": uid in _banned,
         "vip": is_vip(uid), "vip_days": vip_days_left(uid),
@@ -1768,37 +1671,6 @@ async def admin_page(request):
     except FileNotFoundError:
         return web.Response(text="templates/admin.html پیدا نشد", status=500)
     return web.Response(text=html_txt, content_type="text/html", charset="utf-8")
-
-
-async def catalog_page(request):
-    page = BASE_DIR / 'index.html'
-    if not page.is_file():
-        raise web.HTTPFound('/admin#game')
-    return web.Response(text=page.read_text(encoding='utf-8'), content_type='text/html', charset='utf-8')
-
-
-@_admin
-async def admin_remove_holding(request, body):
-    uid, key, kind = _to_int(body.get('user_id')), str(body.get('key') or ''), body.get('kind')
-    if not uid or not re.fullmatch('[a-zA-Z0-9_]{1,64}', key) or kind not in ('auto','item','property','worker'):
-        return _err('دارایی نامعتبر است.')
-    async def remove(cur):
-        await cur.execute('SELECT user_id FROM users WHERE user_id=%s FOR UPDATE', (uid,))
-        if not await cur.fetchone():
-            return False
-        if kind == 'auto':
-            await cur.execute('DELETE FROM timed_items WHERE user_id=%s AND item_key=%s', (uid, key))
-        elif kind == 'item':
-            await cur.execute('DELETE FROM inventory WHERE user_id=%s AND item_key=%s', (uid, key))
-        else:
-            await cur.execute('DELETE FROM assets WHERE user_id=%s AND asset_type=%s AND asset_key=%s', (uid, kind, key))
-        if kind in ('item', 'auto'):
-            await cur.execute('DELETE FROM item_entitlements WHERE user_id=%s AND item_key=%s', (uid, key))
-        return True
-    if not await _tx(remove):
-        return _err('کاربر پیدا نشد.', 404)
-    _invalidate(uid)
-    return _json({'ok': True, 'user': await _user_detail(uid)})
 
 
 @_admin
@@ -1854,22 +1726,14 @@ async def admin_adjust(request, body):
     amount = _to_int(body.get("amount"), 0) or 0
     if kind not in GRANT_KINDS:
         return _err("نوع تغییر نامعتبر است")
-    if kind != 'auto' and (not amount or abs(amount) > 10 ** 15):
+    if not amount or abs(amount) > 10 ** 15:
         return _err("مقدار نامعتبر است")
-    if kind == 'auto':
-        try:
-            text = str(body.get('amount', '')).strip()
-            amount = -_hours(text[1:]) if text.startswith('-') else _hours(text)
-        except ValueError as e:
-            return _err(str(e))
-    if kind in ("property", "worker", "item", "auto"):
-        store = {"property": config.PROPERTIES, "worker": config.WORKERS, "item": _stock_items(), 'auto': _auto_items()}[kind]
+    if kind in ("property", "worker", "item"):
+        store = {"property": config.PROPERTIES, "worker": config.WORKERS, "item": _bm_items()}[kind]
         if key not in store:
             return _err("آیتم نامعتبر است")
     if not uid or not await _fetch("SELECT user_id FROM users WHERE user_id=%s", (uid,), one=True):
         return _err("کاربر پیدا نشد", 404)
-    if amount > 0 and kind in ('auto','item') and not await _allowed_item(uid,key):
-        return _err('این کاربر هنوز دسترسی خرید این آیتم را از فروشگاه دریافت نکرده است.')
     fn = _grant if amount > 0 else _revoke
     done = await _tx(lambda cur: fn(cur, uid, kind, key, abs(amount)))
     _invalidate(uid)
@@ -1903,9 +1767,25 @@ async def admin_gifts_create(request, body):
     await _ensure_tables()
     code = _norm_code(body.get("code")) or secrets.token_hex(4).upper()
     raw = body.get("rewards") or {}
-    rewards, error = _clean_rewards(raw)
-    if error:
-        return _err(error)
+    rewards = {}
+    for k in ("coins", "bank", "xp", "levels"):
+        n = _to_int(raw.get(k), 0) or 0
+        if n < 0 or n > 10 ** 15:
+            return _err("مقدار جایزه نامعتبر است")
+        if n:
+            rewards[k] = min(n, MAX_LEVEL) if k == "levels" else n
+    for field, store in (("properties", config.PROPERTIES), ("workers", config.WORKERS), ("items", _bm_items())):
+        sub = {}
+        for key, n in (raw.get(field) or {}).items():
+            n = _to_int(n, 0) or 0
+            if key not in store:
+                return _err(f"آیتم نامعتبر: {key}")
+            if n > 0:
+                sub[key] = min(n, 100)
+        if sub:
+            rewards[field] = sub
+    if not rewards:
+        return _err("حداقل یک جایزه تعیین کن")
     max_uses = max(0, _to_int(body.get("max_uses"), 0) or 0)
     min_level = max(0, _to_int(body.get("min_level"), 0) or 0)
     hours = max(0, _to_int(body.get("expires_hours"), 0) or 0)
@@ -1924,18 +1804,6 @@ async def admin_gifts_toggle(request, body):
     await _ensure_tables()
     n = await _exec("UPDATE gift_codes SET active = 1 - active WHERE code=%s", (_norm_code(body.get("code")),))
     return _json({"ok": bool(n)})
-
-
-@_admin
-async def admin_gifts_update(request, body):
-    rewards, err = _clean_rewards(body.get('rewards'))
-    if err:
-        return _err(err)
-    code = _norm_code(body.get('code'))
-    if not await _fetch('SELECT code FROM gift_codes WHERE code=%s', (code,), one=True):
-        return _err('کد هدیه یافت نشد.', 404)
-    await _exec('UPDATE gift_codes SET rewards=%s WHERE code=%s', (json.dumps(rewards, ensure_ascii=False), code))
-    return _json({'ok': True})
 
 
 @_admin
@@ -2103,17 +1971,6 @@ def _patch_blackmarket_kb():
         return
     from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M
 
-    def visible():
-        allowed = _market_access.get()
-        return [(k, v) for k, v in _stock_items().items() if not _shop_only(k) or k in allowed]
-
-    def page_items(page):
-        size = config.BLACKMARKET_PER_PAGE
-        return visible()[max(0, page)*size:(max(0, page)+1)*size]
-
-    _bm_mod._page_items = page_items
-    _bm_mod._total_pages = lambda: max(1, math.ceil(len(visible())/config.BLACKMARKET_PER_PAGE))
-
     def _menu_kb_wrapped(*args, **kwargs):
         kb = orig(*args, **kwargs)
         rows = []
@@ -2125,7 +1982,6 @@ def _patch_blackmarket_kb():
                 else:
                     new_row.append(btn)
             rows.append(new_row)
-        rows.insert(max(0, len(rows)-1), [B('قابلیت‌های ساعتی', callback_data='auto:menu')])
         return M(rows)
 
     _menu_kb_wrapped._zar = True
@@ -2144,12 +2000,6 @@ def _patch_blackmarket_inventory():
 
     async def handle_callback_wrapped(query, context, data, user_id):
         parts = (data or "").split(":")
-        allowed = await _entitlements(user_id)
-        if len(parts) > 2 and parts[1] in ('select', 'buy'):
-            k = parts[2]
-            if k not in _bm_items() or (_shop_only(k) and k not in allowed):
-                await _utils.safe_answer(query, 'این آیتم برای حساب شما در دسترس نیست.', show_alert=True)
-                return
         if len(parts) > 1 and parts[1] == "inventory":
             try:
                 await db.ensure_user(query.from_user)
@@ -2162,11 +2012,7 @@ def _patch_blackmarket_inventory():
             except Exception:
                 logger.exception("warehouse via blackmarket patch error")
             return
-        scope = _market_access.set(allowed)
-        try:
-            return await orig(query, context, data, user_id)
-        finally:
-            _market_access.reset(scope)
+        return await orig(query, context, data, user_id)
 
     handle_callback_wrapped._zar = True
     _bm_mod.handle_callback = handle_callback_wrapped
@@ -2199,16 +2045,7 @@ def patch_bot_ui():
         _utils.BACK_GAMES_KB = M([[B("🔙 بازگشت", callback_data="menu:main")]])
     _patch_blackmarket_kb()
     _patch_blackmarket_inventory()
-    for method in ('buy_inventory_item', 'has_item'):
-        original = getattr(db, method, None)
-        if not original or getattr(original, '_catalog_guard', False):
-            continue
-        async def checked(uid, key, *args, _original=original, _method=method, **kwargs):
-            if not await _allowed_item(uid, key) or key in _auto_items():
-                return 'locked' if _method == 'buy_inventory_item' else False
-            return await _original(uid, key, *args, **kwargs)
-        checked._catalog_guard = True
-        setattr(db, method, checked)
+    _patch_blackmarket_hide()
     global _orig_apply_damage, _orig_transfer, _orig_bank_deposit, _orig_bank_withdraw
     global _orig_peek_income, _orig_accrue_income, _orig_hourly_payout, _orig_daily_payout
     if not getattr(getattr(db, "apply_damage", None), "_zar", False):
@@ -2334,9 +2171,6 @@ async def _h_bm_guard(update, context):
     if _not_owner(q):
         return
     uid = q.from_user.id
-    if not await _allowed_item(uid, key):
-        await _utils.safe_answer(q, 'این آیتم برای شما قابل خرید نیست.', show_alert=True)
-        raise _stop()
     # محصولات ساعتی (هیتلر / ابر سپر) از بخش «حمله خودکار» خریداری می‌شوند
     if _bm_items().get(key, {}).get("type") == "timed":
         await _utils.safe_answer(q, "⏱ این محصول ساعتی است و از بخش «⚔️ حمله خودکار» خریداری می‌شود.", show_alert=True)
@@ -2422,12 +2256,6 @@ async def _build_warehouse_view(uid: int):
     if not any_item:
         lines.append("📭 انبارت فعلاً خالی است.")
         lines.append("")
-    timed = await _fetch('SELECT item_key,hours,expires_at FROM timed_items WHERE user_id=%s', (uid,))
-    for r in timed:
-        it = _auto_items().get(r['item_key'])
-        if it:
-            left = max(0, math.ceil((float(r['expires_at'])-time.time())/3600))
-            lines.append(f"{_esc(it['name'])}: {_fmt(r['hours'])} ساعت دریافت‌شده، {_fmt(left)} ساعت باقی‌مانده")
     btns = []
     if dmg > 0:
         btns.append([B(f"🔧 تعمیر انبار (💰 {_fmt(dmg // 2)})", callback_data="bm:wh_repair")])
@@ -2536,49 +2364,11 @@ async def _h_bank_cb(update, context):
 
 
 def _cmd_map() -> dict:
-    return _live_commands
-
-
-_live_commands = {}
-_market_access = ContextVar('market_access', default=frozenset())
-_command_filter = None
-_retired_commands = set()
-
-
-def _sync_commands():
-    mapping = {v['command']: k for k, v in _stock_items().items() if v.get('type') == 'projectile' and v.get('command')}
-    _retired_commands.update(set(_live_commands) - set(mapping))
-    _retired_commands.difference_update(mapping)
-    _live_commands.clear()
-    _live_commands.update(mapping)
-    if _bot_app and _command_filter is not None:
-        for handlers in _bot_app.handlers.values():
-            for handler in handlers:
-                callback = getattr(handler, 'callback', None)
-                if getattr(callback, '__name__', '') == 'handle_attack':
-                    # Keep bot.py's existing game handler, but not its startup-only regex or map.
-                    callback.__globals__['ATTACK_COMMANDS'] = _live_commands
-                    handler.filters = _command_filter
-
-
-@_admin
-async def admin_check_commands(request, body):
-    expected = {v['command']: k for k, v in _stock_items().items() if v.get('command') and v.get('type') == 'projectile'}
-    routes = [h for hs in _bot_app.handlers.values() for h in hs] if _bot_app else []
-    core = [h for h in routes if getattr(h.callback, '__name__', '') == 'handle_attack']
-    wired = len(core) == 1 and _command_filter is not None and core[0].filters is _command_filter
-    wired = bool(wired and core[0].callback.__globals__.get('ATTACK_COMMANDS') is _live_commands)
-    wired = wired and all(any(h.callback is fn and h.filters is _command_filter for h in routes)
-                          for fn in (_h_attack_pre, _h_attack_post))
-    accepted = _command_filter is not None and all(_command_filter.filter(SimpleNamespace(text=c)) for c in expected)
-    stale = [c for c in _retired_commands if _command_filter is not None and _command_filter.filter(SimpleNamespace(text=c))]
-    return _json({'ok': True, 'synced': bool(wired and accepted and not stale and expected == _live_commands),
-                  'bound': wired, 'count': len(expected), 'retired': len(_retired_commands)})
+    return {v["command"]: k for k, v in _bm_items().items() if v.get("type") == "projectile" and v.get("command")}
 
 
 async def _h_attack_pre(update, context):
     """خنک شدن ۱ ساعته‌ی هر وسیله شلیک (هر واحد جداگانه)"""
-    from telegram.ext import ApplicationHandlerStop
     msg = update.effective_message
     if not msg or not msg.text or not msg.reply_to_message:
         return
@@ -2586,20 +2376,12 @@ async def _h_attack_pre(update, context):
     if not proj:
         return
     target = msg.reply_to_message.from_user
-    if not target or target.is_bot or target.id == update.effective_user.id:
-        return
     if target and target.id in _banned:
         await msg.reply_text("🚫 این کاربر از ربات محروم است و نمی‌توان به او حمله کرد.")
         raise _stop()
-    owned_keys = await _entitlements(update.effective_user.id)
-    if _shop_only(proj) and proj not in owned_keys:
-        await msg.reply_text('دسترسی این آیتم فقط با خرید از فروشگاه فعال می‌شود.')
-        raise _stop()
-    launchers = [k for k, v in _bm_items().items() if v.get("type") == "launcher" and proj in v.get("launches", [])
-                 and (not _shop_only(k) or k in owned_keys)]
+    launchers = [k for k, v in _bm_items().items() if v.get("type") == "launcher" and proj in v.get("launches", [])]
     if not launchers:
-        await msg.reply_text('وسیله سازگار و قابل استفاده‌ای برای این آیتم نداری.')
-        raise _stop()
+        return
     uid = update.effective_user.id
     try:
         await _ensure_tables()
@@ -2608,13 +2390,10 @@ async def _h_attack_pre(update, context):
                             (uid, *launchers))
         proj_count = await _count_items(uid, proj) if rows else 0
         if not rows or proj_count <= 0:
-            await msg.reply_text('مهمات یا وسیله سازگار در انبارت موجود نیست.')
-            raise _stop()
-    except ApplicationHandlerStop:
-        raise
+            return  # هندلر اصلی پیام «وسیله/مهمات نداری» را می‌دهد
     except Exception:
         logger.exception("attack pre-check error")
-        raise _stop()
+        return
     now = time.time()
     ready = [r for r in rows if not r["last_used"] or now - float(r["last_used"]) >= LAUNCH_COOLDOWN]
     if not ready:
@@ -2629,7 +2408,7 @@ async def _h_attack_pre(update, context):
             parse_mode="HTML")
         raise _stop()
     # ابر سپر: ۸۵٪ احتمال دفع کامل حمله (مهمات مصرف و وسیله خنک می‌شود)
-    if target and await _has_effect(target.id, 'shield') and _rng.random() < SHIELD_DEFLECT_CHANCE:
+    if target and await _has_active_timed(target.id, SHIELD_KEY) and _rng.random() < SHIELD_DEFLECT_CHANCE:
         try:
             await db.consume_item(uid, proj)
         except Exception:
@@ -2652,7 +2431,7 @@ async def _h_attack_pre(update, context):
 async def _hitler_buy(uid: int, item_key: str) -> bool:
     """خرید خودکار یک آیتم توسط هیتلر (اگر موجودی کافی باشد)"""
     price = int(_bm_items().get(item_key, {}).get("price", 0))
-    if price <= 0 or not await _allowed_item(uid, item_key):
+    if price <= 0:
         return False
     try:
         if not await db.deduct_balance(uid, price):
@@ -2667,8 +2446,7 @@ async def _hitler_buy(uid: int, item_key: str) -> bool:
 
 async def _hitler_pick_weapon(uid: int, incoming_proj: str, incoming_dmg: float):
     """انتخاب سلاح ضدحمله هیتلر. خروجی: (proj_key, damage) یا (None, 0)"""
-    access = await _entitlements(uid)
-    items = {k: v for k, v in _stock_items().items() if not _shop_only(k) or k in access}
+    items = _bm_items()
     rows = await _fetch("SELECT item_key, COUNT(*) AS c FROM inventory WHERE user_id=%s GROUP BY item_key", (uid,))
     counts = {r["item_key"]: int(r["c"]) for r in rows}
     launchers = {k: v for k, v in items.items() if v.get("type") == "launcher" and counts.get(k, 0) > 0}
@@ -2677,7 +2455,7 @@ async def _hitler_pick_weapon(uid: int, incoming_proj: str, incoming_dmg: float)
         return any(proj in l.get("launches", []) for l in launchers.values())
 
     # ۱) همان مهمات ورودی (موجود + لانچر موجود)
-    if incoming_proj in items and counts.get(incoming_proj, 0) > 0 and launcher_for(incoming_proj):
+    if counts.get(incoming_proj, 0) > 0 and launcher_for(incoming_proj):
         await db.consume_item(uid, incoming_proj)
         return incoming_proj, incoming_dmg
 
@@ -2685,7 +2463,7 @@ async def _hitler_pick_weapon(uid: int, incoming_proj: str, incoming_dmg: float)
     suitable = [k for k, v in items.items() if v.get("type") == "launcher" and incoming_proj in v.get("launches", [])]
     need_ammo = counts.get(incoming_proj, 0) <= 0
     need_launcher = not any(counts.get(k, 0) > 0 for k in suitable)
-    if incoming_proj in items and suitable and (need_ammo or need_launcher):
+    if suitable and (need_ammo or need_launcher):
         cost = 0
         if need_ammo:
             cost += int(items.get(incoming_proj, {}).get("price", 0))
@@ -2746,11 +2524,9 @@ async def _hitler_counter(target_uid: int, attacker_uid: int, incoming_proj: str
 
 async def _h_attack_post(update, context):
     p = _pending_launch.pop(update.update_id, None)
-    completed = False
     if p:
         try:
             if await _count_items(p["uid"], p["proj"]) < p["count"]:  # شلیک واقعاً انجام شد
-                completed = True
                 await _exec("UPDATE inventory SET last_used=%s WHERE id=%s", (time.time(), p["row"]))
         except Exception:
             logger.exception("attack post error")
@@ -2777,7 +2553,7 @@ async def _h_attack_post(update, context):
         msg = update.effective_message
         rep = msg.reply_to_message if msg else None
         tgt = rep.from_user.id if rep and rep.from_user else None
-        if tgt and completed and await _has_effect(tgt, 'hitler'):
+        if tgt and p and await _has_active_timed(tgt, HITLER_KEY):
             await _hitler_counter(tgt, p["uid"], p["proj"], context)
     except Exception:
         logger.exception("hitler counter error")
@@ -2797,8 +2573,12 @@ async def _build_auto_view(uid: int):
     """منوی «⚔️ حمله خودکار» (فرمانده هیتلر و ابر سپر)"""
     from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M
     items = _bm_items()
-    access = await _entitlements(uid)
-    periods = {r['item_key']: r for r in await _fetch('SELECT item_key,hours,expires_at FROM timed_items WHERE user_id=%s', (uid,))}
+    hitler = items.get(HITLER_KEY, {})
+    shield = items.get(SHIELD_KEY, {})
+    hitler_price = int(hitler.get("price", 5_000_000_000))
+    shield_price = int(shield.get("price", 10_000_000_000))
+    hitler_exp = await _get_timed_expiry(uid, HITLER_KEY)
+    shield_exp = await _get_timed_expiry(uid, SHIELD_KEY)
     intro = _ctrl_text("auto_text", "")
     lines = [
         "⚔️ <b>حمله خودکار</b>",
@@ -2807,19 +2587,24 @@ async def _build_auto_view(uid: int):
     if intro:
         lines.append(_esc(intro))
         lines.append("")
-    btns = []
-    for k, v in _auto_items().items():
-        if _shop_only(k) and k not in access:
-            continue
-        r = periods.get(k, {})
-        remaining = max(0, math.ceil((float(r.get('expires_at', 0))-time.time())/3600))
-        lines += [f"<b>{_esc(v['name'])}</b> | ساعتی {_fmt(v['price'])} زرکوین",
-                  _esc(v.get('description') or ('محافظت خودکار' if v.get('timed_kind') == 'shield' else 'پاسخ خودکار فرمانده')),
-                  f"ساعت دریافت‌شده: {_fmt(r.get('hours', 0))} | باقی‌مانده: {_fmt(remaining)} ساعت", '']
-        btns.append([B(f"خرید ساعت {v['name']}", callback_data=f'auto:buy:{k}')])
-    if not btns:
-        lines.append('در حال حاضر قابلیتی برای خرید در دسترس نیست.')
-    btns.append([B('بازگشت', callback_data='menu:main')])
+    lines += [
+        f"👑 <b>فرمانده هیتلر</b> — ساعتی {_fmt(hitler_price)} زرکوین",
+        f"   وضعیت: {_timed_status(hitler_exp)}",
+        "   وقتی به تو حمله شود، هیتلر خودکار با <b>همان سلاح</b> به مهاجم حمله می‌کند.",
+        "   اگر آن مهمات یا وسیله‌اش را نداشته باشی، با موجودی‌ات می‌خرد و می‌زند؛",
+        "   اگر موجودی نداشته باشی، نزدیک‌ترین سلاح موجودت را می‌زند.",
+        "",
+        f"🛡️ <b>ابر سپر</b> — ساعتی {_fmt(shield_price)} زرکوین",
+        f"   وضعیت: {_timed_status(shield_exp)}",
+        f"   <b>{int(SHIELD_DEFLECT_CHANCE * 100)}٪</b> از حملات به تو توسط ابر سپر دفع می‌شود.",
+        "",
+        "🔧 در هر حمله <b>۳٪</b> احتمال دارد انبارت آسیب ببیند؛ تعمیرش در بخش «🏭 انبار من» با ۵۰٪ هزینه ممکن است.",
+    ]
+    btns = [
+        [B("👑 خرید فرمانده هیتلر", callback_data="auto:buy_hitler")],
+        [B("🛡️ خرید ابر سپر", callback_data="auto:buy_shield")],
+        [B("🔙 بازگشت", callback_data="menu:main")],
+    ]
     return "\n".join(lines), M(btns)
 
 
@@ -2838,18 +2623,15 @@ async def _h_auto_cb(update, context):
         m = await _utils.safe_edit(q, text, kb)
         if m:
             _utils.remember_owner(m, uid)
-    elif q.data.startswith('auto:buy:') or q.data in ("auto:buy_hitler", "auto:buy_shield"):
-        key = q.data.split(':', 2)[2] if q.data.startswith('auto:buy:') else (HITLER_KEY if q.data == 'auto:buy_hitler' else SHIELD_KEY)
-        if key not in _auto_items() or not await _allowed_item(uid, key):
-            await _utils.safe_answer(q, 'خرید این قابلیت در دسترس نیست.', show_alert=True)
-            raise _stop()
+    elif q.data in ("auto:buy_hitler", "auto:buy_shield"):
+        key = HITLER_KEY if q.data == "auto:buy_hitler" else SHIELD_KEY
         item = _bm_items().get(key, {})
         price = int(item.get("price", 0))
-        _utils.user_states[uid] = {"action": f"buy_timed:{key}", 'price': price, 'chat_id': update.effective_chat.id}
+        _utils.user_states[uid] = {"action": f"buy_timed:{key}"}
         await _utils.safe_answer(q)
         m = await _utils.safe_edit(
             q,
-            f"<b>{_esc(item.get('name', key))}</b>\n"
+            f"⏰ <b>{item.get('emoji', '')} {item.get('name', key)}</b>\n━━━━━━━━━━━━━━━━━━\n"
             f"💰 قیمت ساعتی: <b>{_fmt(price)}</b> زرکوین\n\n"
             "چند ساعت می‌خوای بخری؟ (عدد بفرست)",
             _utils.BACK_MAIN_KB)
@@ -2867,55 +2649,21 @@ async def _h_buy_timed_text(update, context):
     state = _utils.user_states.get(uid) if _utils else None
     if not state or not str(state.get("action", "")).startswith("buy_timed:"):
         return
-    if state.get('chat_id') != update.effective_chat.id:
-        return
-    if msg.text.strip() == 'لغو':
-        _utils.user_states.pop(uid, None)
-        await msg.reply_text('خرید ساعت لغو شد.')
-        raise _stop()
     key = str(state["action"]).split(":", 1)[1]
-    try:
-        hours = _hours(msg.text)
-    except ValueError as e:
-        await msg.reply_text(str(e))
+    hours = _utils.parse_amount(msg.text) if (_utils and hasattr(_utils, "parse_amount")) else _to_int(msg.text, 0)
+    if not hours or hours <= 0 or hours > 8760:
+        await msg.reply_text("❌ تعداد ساعت نامعتبر است (۱ تا ۸۷۶۰ ساعت).")
         raise _stop()
-    item = _auto_items().get(key)
-    if not item or not await _allowed_item(uid, key) or _section_disabled('auto'):
-        _utils.user_states.pop(uid, None)
-        await msg.reply_text('این قابلیت در دسترس نیست.')
-        raise _stop()
+    item = _bm_items().get(key, {})
     price = int(item.get("price", 0))
     total = hours * price
     _utils.user_states.pop(uid, None)
-    async def purchase(cur):
-        await cur.execute("SELECT data,active FROM game_items WHERE category='item' AND item_key=%s FOR UPDATE", (key,))
-        current = await cur.fetchone()
-        spec = _loads(current['data']) if current else {}
-        if not current or current['active'] != 1 or spec.get('type') != 'timed' or spec.get('price') != state.get('price'):
-            raise ValueError('مشخصات یا قیمت آیتم تغییر کرده است. دوباره از منو انتخاب کنید.')
-        if spec.get('visibility') == 'shop':
-            await cur.execute('SELECT 1 FROM item_entitlements WHERE user_id=%s AND item_key=%s', (uid, key))
-            if not await cur.fetchone():
-                raise ValueError('این خرید نیاز به دسترسی فروشگاهی دارد.')
-        await cur.execute('SELECT balance FROM users WHERE user_id=%s FOR UPDATE', (uid,))
-        wallet = await cur.fetchone()
-        if not wallet or int(wallet['balance']) < total:
-            return None
-        await cur.execute('UPDATE users SET balance=balance-%s WHERE user_id=%s', (total, uid))
-        expiry, _ = await _change_hours(cur, uid, key, hours)
-        return expiry
-    try:
-        expiry = await _tx(purchase)
-    except ValueError as e:
-        await msg.reply_text(str(e))
-        raise _stop()
-    if expiry is None:
+    if not await db.deduct_balance(uid, total):
         await msg.reply_text(f"❌ موجودی کافی نیست!\nنیاز به {_fmt(total)} زرکوین داری.")
         raise _stop()
-    _invalidate(uid)
+    await _activate_timed(uid, key, hours)
     await msg.reply_text(
-        f"<b>{_esc(item['name'])}</b> فعال شد.\nساعت خریداری‌شده: <b>{_fmt(hours)} ساعت</b>\n"
-        f"باقی‌مانده پس از تمدید: <b>{_fmt(max(0, math.ceil((expiry-time.time())/3600)))} ساعت</b>\n"
+        f"✅ <b>{item.get('emoji', '')} {item.get('name', key)}</b> برای <b>{hours} ساعت</b> فعال شد!\n"
         f"💰 پرداخت: {_fmt(total)} زرکوین",
         parse_mode="HTML")
     raise _stop()
@@ -2950,17 +2698,12 @@ def setup_bot(app):
     app.add_handler(CallbackQueryHandler(_h_warehouse_cb, pattern=r"^bm:(inventory|warehouse|wh_upgrade|wh_repair)$"), group=-2)
     app.add_handler(CallbackQueryHandler(_h_bank_cb, pattern=r"^bank:(menu|withdraw)$"), group=-2)
     app.add_handler(CallbackQueryHandler(_h_auto_cb, pattern=r"^auto:"), group=-2)
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _h_buy_timed_text), group=-4)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _h_buy_timed_text), group=-2)
     app.add_handler(CallbackQueryHandler(_h_bm_guard, pattern=r"^bm:buy:"), group=-2)
     app.add_handler(CallbackQueryHandler(_h_bm_post, pattern=r"^bm:buy:"), group=1)
-    class CatalogCommand(filters.MessageFilter):
-        def filter(self, message):
-            return (message.text or '').strip() in _live_commands
-    global _command_filter
-    _command_filter = CatalogCommand()
-    _sync_commands()
-    app.add_handler(MessageHandler(_command_filter, _h_attack_pre), group=-3)
-    app.add_handler(MessageHandler(_command_filter, _h_attack_post), group=1)
+    # دستورهای شلیک پویا هستند: تغییر/افزودن/حذف از پنل مدیریت بدون ری‌استارت و بدون ثبت دوباره
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _h_attack_dynamic), group=-2)
+    app.add_handler(CallbackQueryHandler(_h_bm_select_guard, pattern=r"^bm:select:"), group=-2)
 
     old_init = getattr(app, "post_init", None)
     old_shutdown = getattr(app, "post_shutdown", None)
@@ -2985,6 +2728,7 @@ def setup_bot(app):
             await _seed_vip_products()
             await _load_game_items()
             await _load_game_settings()
+            await _load_timed_items()
             await _load_warehouse_damage()
         except Exception:
             logger.exception("بارگذاری ادمین/VIP/تنظیمات ناموفق")
@@ -3106,9 +2850,9 @@ def _damage_report(d: dict) -> str:
 # ═══════════════════════════════════════════════
 # ═══════════ راهنمای صفحه‌بندی‌شده ═══════════
 # ═══════════════════════════════════════════════
-def _help_pages(access=()) -> list:
+def _help_pages() -> list:
     c = config
-    bm = {k:v for k,v in _bm_items().items() if not _shop_only(k) or k in access}
+    bm = _bm_items()
     one = [g for g in GAMES.values() if g["type"] == "1p"]
     two = [g for g in GAMES.values() if g["type"] == "2p"]
 
@@ -3122,10 +2866,10 @@ def _help_pages(access=()) -> list:
                 extra = f" — {int(v.get('damage', 0) * 100)}٪ تخریب"
             elif t == "defense":
                 extra = f" — {int(v.get('defense_chance', 0) * 100)}٪ دفاع"
-            out.append(f" • {_esc(v['emoji'])} {_esc(v['name'])} ({_fmt(v['price'])}){extra}")
+            out.append(f" • {v['emoji']} {v['name']} ({_fmt(v['price'])}){extra}")
         return "\n".join(out) or " —"
 
-    cmds = "\n".join(f" • <code>{_esc(v['command'])}</code> ← {_esc(v['emoji'])} {_esc(v['name'])}"
+    cmds = "\n".join(f" • <code>{v['command']}</code> ← {v['emoji']} {v['name']}"
                      for v in bm.values() if v.get("type") == "projectile" and v.get("command"))
     extra_h = _ctrl_text("help_extra", "")
     extra_block = f"\n\n📢 {_esc(extra_h)}" if extra_h else ""
@@ -3160,6 +2904,15 @@ def _help_pages(access=()) -> list:
           f"🚀 <b>وسایل شلیک</b> (از هر کدام حداکثر {LAUNCHER_MAX} عدد — 👑 VIP: {VIP_LAUNCHER_MAX} عدد):\n{items('launcher')}\n\n"
           f"💥 <b>مهمات</b> (مصرفی):\n{items('projectile')}\n\n"
           f"🛡️ <b>دفاعی</b> (از هر کدام فقط ۱ عدد):\n{items('defense')}")
+    p_auto = ("⚔️ <b>راهنما — حمله خودکار</b>\n━━━━━━━━━━━━━━━━━━\n"
+              "از منوی اصلی روی «⚔️ حمله خودکار» بزن و محصولات ساعتی را بخر (قیمت‌ها ساعتی هستند و هنگام خرید تعداد ساعت را وارد می‌کنی):\n\n"
+              f"👑 <b>فرمانده هیتلر</b> — ساعتی {_fmt(int(_bm_items().get(HITLER_KEY, {}).get('price', 5_000_000_000)))} زرکوین\n"
+              "   وقتی به تو حمله شود، هیتلر خودکار با <b>همان سلاح</b> به مهاجم حمله می‌کند.\n"
+              "   اگر آن مهمات یا وسیله‌اش را نداشته باشی، با موجودی‌ات می‌خرد و می‌زند؛\n"
+              "   اگر موجودی نداشته باشی، نزدیک‌ترین سلاح موجودت را می‌زند.\n\n"
+              f"🛡️ <b>ابر سپر</b> — ساعتی {_fmt(int(_bm_items().get(SHIELD_KEY, {}).get('price', 10_000_000_000)))} زرکوین\n"
+              f"   <b>{int(SHIELD_DEFLECT_CHANCE * 100)}٪</b> از حملات به تو توسط ابر سپر دفع می‌شود (مهمات مهاجم مصرف و وسیله‌اش خنک می‌شود).\n\n"
+              "🔧 <b>آسیب انبار:</b> در هر حمله ۳٪ احتمال دارد انبارت آسیب ببیند؛ تعمیرش در «🏭 انبار من» با ۵۰٪ هزینه ممکن است.")
     p_vip = ("👑 <b>راهنما — اشتراک VIP</b>\n━━━━━━━━━━━━━━━━━━\n"
              "با فعال کردن اشتراک VIP از این امکانات ویژه برخوردار می‌شوی:\n\n"
              f"🚀 <b>وسایل شلیک:</b> خرید تا <b>{VIP_LAUNCHER_MAX} عدد</b> از هر وسیله (به‌جای {LAUNCHER_MAX} عدد)\n"
@@ -3180,12 +2933,6 @@ def _help_pages(access=()) -> list:
           " • به کاربران بن‌شده نمی‌توان حمله کرد یا پول انتقال داد\n"
           " • بمب‌ها قابل دفاع نیستند، فقط موشک و پهپاد\n"
           " • هر شلیک یک مهمات مصرف می‌کند")
-    timed_lines = [f"{_esc(v['name'])}: {_fmt(v['price'])} زرکوین برای هر ساعت" for v in bm.values() if v.get('type')=='timed']
-    p_auto = ('<b>حمله خودکار</b>\n\n' + '\n'.join(timed_lines) +
-              '\n\nدر منوی حمله خودکار، قابلیت و تعداد ساعت را انتخاب کن. سقف زمانی ثابت وجود ندارد؛ موجودی باید هزینه را پوشش دهد. '
-              'زمان تمدید به باقی‌مانده اضافه می‌شود. قابلیت محافظت به دفاع و قابلیت فرمانده به پاسخ خودکار در بازی مربوط است. '
-              'ساعت‌های دریافت‌شده و باقی‌مانده در بخش حمله خودکار و انبار نمایش داده می‌شود. '
-              'دسترسی آیتم اختصاصی فقط پس از تحویل سفارش فروشگاه فعال می‌شود.')
     return [p1, p2, p3, p_vip, p4, p_auto, p5]
 
 
@@ -3199,7 +2946,7 @@ async def _h_help_cb(update, context):
     if _not_owner(q):
         await _utils.safe_answer(q, "❌ این منو برای شما نیست!\nبرای منوی خودت /menu را بفرست.", show_alert=True)
         raise _stop()
-    pages = _help_pages(await _entitlements(q.from_user.id))
+    pages = _help_pages()
     page = 0 if q.data == "help:menu" else max(0, min(int(q.data.split(":")[2]), len(pages) - 1))
     nav = []
     if page > 0:
@@ -3252,19 +2999,14 @@ def _clean_rewards(raw) -> tuple:
             return None, "مقدار جایزه نامعتبر است"
         if n:
             rewards[k] = min(n, MAX_LEVEL) if k == "levels" else (min(n, 3650) if k == "vip_days" else n)
-    for field, store in (("properties", config.PROPERTIES), ("workers", config.WORKERS), ("items", _stock_items()), ('auto_hours', _auto_items())):
+    for field, store in (("properties", config.PROPERTIES), ("workers", config.WORKERS), ("items", _bm_items())):
         sub = {}
-        entries = raw.get(field) or {}
-        if not isinstance(entries, dict):
-            return None, 'ساختار جایزه معتبر نیست.'
-        for key, value in entries.items():
+        for key, n in (raw.get(field) or {}).items():
+            n = _to_int(n, 0) or 0
             if key not in store:
                 return None, f"آیتم نامعتبر: {key}"
-            try:
-                n = _hours(value)
-            except ValueError as e:
-                return None, str(e)
-            sub[key] = str(n) if field == 'auto_hours' else min(n, 100)
+            if n > 0:
+                sub[key] = min(n, 100)
         if sub:
             rewards[field] = sub
     if not rewards:
@@ -3308,7 +3050,7 @@ async def _create_order(uid: int, p: dict, method: str, amount: int, status: str
     return int(oid)
 
 
-async def _deliver_order(oid: int, allowed: tuple, charge_id=None, payment=None):
+async def _deliver_order(oid: int, allowed: tuple, charge_id=None):
     """تحویل سفارش (اتمیک). خروجی: (user_id یا None, متن)"""
     now = time.time()
 
@@ -3319,14 +3061,9 @@ async def _deliver_order(oid: int, allowed: tuple, charge_id=None, payment=None)
             return None, "سفارش پیدا نشد"
         if o["status"] not in allowed:
             return None, f"وضعیت فعلی سفارش: {o['status']}"
-        if charge_id is not None:
-            if o['method'] != 'stars' or payment != (int(o['user_id']), int(o['amount']), 'XTR'):
-                return None, 'اطلاعات پرداخت با سفارش مطابقت ندارد.'
-        elif o['method'] != 'card' or o['status'] != 'review' or not o['receipt_file_id']:
-            return None, 'فقط سفارش دارای رسید قابل تأیید است.'
         granted, skipped = [], []
         for kind, key, n in _rewards_list(_loads(o["rewards"])):
-            done = await _grant(cur, int(o["user_id"]), kind, key, n, order_id=oid)
+            done = await _grant(cur, int(o["user_id"]), kind, key, n)
             if done:
                 granted.append((kind, key, done))
             if done < n:
@@ -3517,8 +3254,7 @@ async def _h_paid(update, context):
         return
     oid = int(sp.invoice_payload.split(":")[1])
     try:
-        buyer, text = await _deliver_order(oid, ("pending", "cancelled"), charge_id=sp.telegram_payment_charge_id,
-                                           payment=(update.effective_user.id, sp.total_amount, sp.currency))
+        buyer, text = await _deliver_order(oid, ("pending", "cancelled"), charge_id=sp.telegram_payment_charge_id)
     except Exception:
         logger.exception("deliver stars order failed")
         buyer, text = None, "خطا در تحویل"
@@ -3546,10 +3282,8 @@ async def _h_receipt(update, context):
     if not o:
         return  # عکس مربوط به فروشگاه نیست
     file_id = msg.photo[-1].file_id
-    updated = await _exec("UPDATE shop_orders SET status='review', receipt_file_id=%s, updated_at=%s "
-                          "WHERE id=%s AND status='awaiting_receipt'", (file_id, time.time(), o["id"]))
-    if not updated:
-        return
+    await _exec("UPDATE shop_orders SET status='review', receipt_file_id=%s, updated_at=%s WHERE id=%s",
+                (file_id, time.time(), o["id"]))
     caption = (f"🧾 رسید جدید — سفارش #{o['id']}\n👤 {update.effective_user.first_name} ({uid})\n"
                f"🛒 {o['title']}\n💰 {_fmt(o['amount'])} تومان")
     kb = M([[B("✅ تأیید و تحویل", callback_data=f"shop:ok:{o['id']}"), B("❌ رد", callback_data=f"shop:no:{o['id']}")]])
@@ -3962,17 +3696,6 @@ async def _load_controls_and_design():
 
 # ═══════════ آیتم‌ها و قیمت‌های بازی (قابل ویرایش از پنل) ═══════════
 GAME_ITEM_CATS = ("property", "worker", "item")
-_catalog_lock = asyncio.Lock()
-_catalog_ready = False
-
-
-def _catalog_edit(fn):
-    async def serialized(request, body):
-        async with _catalog_lock:
-            if not _catalog_ready:
-                await _load_game_items()
-            return await fn(request, body)
-    return serialized
 
 
 def _item_store(cat: str) -> dict:
@@ -3986,26 +3709,23 @@ def _apply_item_to_config(cat: str, key: str, data: dict, active: bool):
         store[key] = data
     else:
         store.pop(key, None)
-    _sync_commands()
 
 
 async def _load_game_items():
     """بارگذاری آیتم‌های بازی از دیتابیس و جایگزینی در config (ثبت اولیه از config.py در اولین اجرا)"""
-    global _catalog_ready
     await _ensure_tables()
     rows = await _fetch("SELECT category, item_key FROM game_items")
     existing = {(r["category"], r["item_key"]) for r in rows}
     # افزودن آیتم‌های جدید config.py که هنوز در دیتابیس نیستند (آیتم حذف‌شده با active=0 دوباره اضافه نمی‌شود)
-    missing = [(cat, k, json.dumps(v, ensure_ascii=False)) for cat in GAME_ITEM_CATS
-               for k, v in _item_store(cat).items() if (cat, k) not in existing]
-    if missing:
-        async def seed(cur):
-            await cur.executemany('INSERT IGNORE INTO game_items (category,item_key,data,active,sort) VALUES (%s,%s,%s,1,0)', missing)
-        await _tx(seed)
+    for cat in GAME_ITEM_CATS:
+        for k, v in _item_store(cat).items():
+            if (cat, k) not in existing:
+                await _exec("INSERT INTO game_items (category, item_key, data, active, sort) VALUES (%s,%s,%s,1,0)",
+                            (cat, k, json.dumps(v, ensure_ascii=False)))
     rows = await _fetch("SELECT category, item_key, data, active FROM game_items")
     stores = {"property": {}, "worker": {}, "item": {}}
     for r in rows:
-        if int(r["active"]) != 1:
+        if not r["active"]:
             continue
         try:
             d = json.loads(r["data"])
@@ -4017,28 +3737,6 @@ async def _load_game_items():
         store = _item_store(cat)
         store.clear()
         store.update(stores[cat])
-    _sync_commands()
-    if await _get_setting('catalog_access_migrated') != '1':
-        # Backfill rights only from fulfilled orders, never from a pending receipt or inventory count.
-        async def migrate(cur):
-            await cur.execute("SELECT id,user_id,rewards FROM shop_orders WHERE status='paid'")
-            for order in await cur.fetchall():
-                for kind, key, n in _rewards_list(_loads(order['rewards'])):
-                    if kind in ('item', 'auto') and n > 0:
-                        await cur.execute('INSERT IGNORE INTO item_entitlements (user_id,item_key,order_id) VALUES (%s,%s,%s)',
-                                          (order['user_id'], key, order['id']))
-            # Legacy gifts stored timed rewards as single inventory units. Convert once, without losing existing time.
-            for k in _auto_items():
-                await cur.execute('SELECT id,user_id FROM inventory WHERE item_key=%s FOR UPDATE', (k,))
-                by_user = {}
-                for row in await cur.fetchall():
-                    by_user.setdefault(row['user_id'], []).append(row['id'])
-                for owner, ids in by_user.items():
-                    await _change_hours(cur, owner, k, len(ids))
-                    await cur.executemany('DELETE FROM inventory WHERE id=%s', [(i,) for i in ids])
-        await _tx(migrate)
-        await _set_setting('catalog_access_migrated', '1')
-    _catalog_ready = True
     logger.info(f"🎮 آیتم‌های بازی بارگذاری شد: ملک {len(stores['property'])} | کارگر {len(stores['worker'])} | بازار سیاه {len(stores['item'])}")
 
 
@@ -4061,15 +3759,42 @@ async def _load_game_settings():
 
 
 # ═══════════ محصولات ساعتی و آسیب انبار ═══════════
-async def _has_effect(uid, effect):
-    if _section_disabled('auto'):
-        return False
-    keys = {k for k, v in _auto_items().items() if v.get('timed_kind') == effect}
-    if not keys:
-        return False
-    access = await _entitlements(uid)
-    rows = await _fetch('SELECT item_key FROM timed_items WHERE user_id=%s AND expires_at>%s', (uid, time.time()))
-    return any(r['item_key'] in keys and (not _shop_only(r['item_key']) or r['item_key'] in access) for r in rows)
+async def _get_timed_expiry(uid: int, key: str) -> float:
+    ck = (int(uid), key)
+    if ck in _timed_expires:
+        return _timed_expires[ck]
+    try:
+        await _ensure_tables()
+        r = await _fetch("SELECT expires_at FROM timed_items WHERE user_id=%s AND item_key=%s", (uid, key), one=True)
+        exp = float(r["expires_at"]) if r else 0.0
+    except Exception:
+        exp = 0.0
+    _timed_expires[ck] = exp
+    return exp
+
+
+async def _has_active_timed(uid: int, key: str) -> bool:
+    return await _get_timed_expiry(uid, key) > time.time()
+
+
+async def _activate_timed(uid: int, key: str, hours: int):
+    now_t = time.time()
+    cur = await _get_timed_expiry(uid, key)
+    new_exp = max(now_t, cur) + int(hours) * 3600
+    await _ensure_tables()
+    await _exec("INSERT INTO timed_items (user_id, item_key, expires_at, hours, created_at) VALUES (%s,%s,%s,%s,%s) "
+                "ON DUPLICATE KEY UPDATE expires_at=VALUES(expires_at), hours=hours+VALUES(hours), created_at=VALUES(created_at)",
+                (int(uid), key, new_exp, int(hours), now_t))
+    _timed_expires[(int(uid), key)] = new_exp
+    return new_exp
+
+
+async def _load_timed_items():
+    await _ensure_tables()
+    rows = await _fetch("SELECT user_id, item_key, expires_at FROM timed_items WHERE expires_at > %s", (time.time(),))
+    _timed_expires.clear()
+    for r in rows:
+        _timed_expires[(int(r["user_id"]), r["item_key"])] = float(r["expires_at"])
 
 
 async def _get_warehouse_damage(uid: int) -> int:
@@ -4227,12 +3952,9 @@ async def admin_design_save(request, body):
 
 @_admin
 async def admin_gameitems_list(request, body):
-    if not _catalog_ready:
-        async with _catalog_lock:
-            if not _catalog_ready:
-                await _load_game_items()
-    rows = await _fetch("SELECT category, item_key, data, active, sort FROM game_items WHERE active>=0 ORDER BY sort, item_key")
-    out = {"property": [], "worker": [], "item": [], "auto": []}
+    await _load_game_items()
+    rows = await _fetch("SELECT category, item_key, data, active, sort FROM game_items ORDER BY sort, item_key")
+    out = {"property": [], "worker": [], "item": []}
     for r in rows:
         try:
             d = json.loads(r["data"])
@@ -4243,88 +3965,60 @@ async def admin_gameitems_list(request, body):
         d["_key"] = r["item_key"]
         d["_active"] = bool(r["active"])
         d["_sort"] = int(r["sort"] or 0)
-        group = 'auto' if r['category'] == 'item' and d.get('type') == 'timed' else r['category']
-        if group in out:
-            out[group].append(d)
+        out[r["category"]].append(d)
     return _json({"ok": True, "items": out})
 
 
 @_admin
-@_catalog_edit
 async def admin_gameitems_save(request, body):
     cat = str(body.get("category") or "")
-    is_auto = cat == 'auto'
-    if is_auto:
-        cat = 'item'
     key = str(body.get("key") or "").strip()
     data = body.get("data") if isinstance(body.get("data"), dict) else {}
     if cat not in GAME_ITEM_CATS:
         return _err("دسته نامعتبر است")
-    if not re.fullmatch(r"[a-zA-Z0-9_]{2,48}", key):
-        return _err('شناسه باید ۲ تا ۴۸ حرف یا عدد انگلیسی یا آندرلاین باشد.')
+    if not re.fullmatch(r"[a-zA-Z0-9_]{2,64}", key):
+        return _err("کلید آیتم باید حروف/عدد/آندرلاین انگلیسی باشد (۲ تا ۶۴ کاراکتر)")
     await _ensure_tables()
-    existing = await _fetch("SELECT data,active,sort FROM game_items WHERE category=%s AND item_key=%s", (cat, key), one=True)
-    if existing and (int(existing['active']) < 0 or body.get('create')):
-        return _err('این شناسه قبلاً استفاده شده است؛ شناسه دیگری انتخاب کنید.', 409)
+    existing = await _fetch("SELECT data FROM game_items WHERE category=%s AND item_key=%s", (cat, key), one=True)
     base = json.loads(existing["data"]) if existing else {}
-    if cat == 'item' and existing and (base.get('type') == 'timed') != is_auto:
-        return _err('شناسه متعلق به دسته دیگری است.', 409)
-    if not existing and body.get('edit'):
-        return _err('آیتم دیگر موجود نیست.', 404)
     name = str(data.get("name") or base.get("name") or "").strip()[:100]
     if not name:
         return _err("نام آیتم را وارد کن")
     emoji = str(data.get("emoji") or base.get("emoji") or "•").strip()[:16]
-    price = _to_int(data.get("price", base.get("price", 0)))
-    if price is None or price < 0 or price > 10 ** 15:
+    price = _to_int(data.get("price", base.get("price", 0)), 0) or 0
+    if price < 0 or price > 10 ** 15:
         return _err("قیمت نامعتبر است")
     merged = dict(base)
     merged.update({"name": name, "emoji": emoji, "price": price})
-    visibility = data.get('visibility', base.get('visibility', 'public'))
-    if visibility not in ('public', 'shop') or (cat != 'item' and visibility != 'public'):
-        return _err('نوع دسترسی معتبر نیست.')
-    merged['visibility'] = visibility
-    merged['description'] = str(data.get('description', base.get('description', '')))[:300]
     if cat in ("property", "worker"):
         income = _to_int(data.get("income", base.get("income", 0)), 0) or 0
         if income < 0 or income > 10 ** 15:
             return _err("درآمد نامعتبر است")
         merged["income"] = income
     else:
-        itype = 'timed' if is_auto else str(data.get("type") or base.get("type") or "projectile")
+        itype = str(data.get("type") or base.get("type") or "projectile")
         if itype not in ("launcher", "projectile", "defense", "timed"):
             return _err("نوع آیتم نامعتبر است")
-        if not is_auto and itype == 'timed':
-            return _err('قابلیت ساعتی را در دسته حمله خودکار ثبت کنید.')
         merged["type"] = itype
         if itype == "timed":
             merged["timed_kind"] = str(data.get("timed_kind") or base.get("timed_kind") or "").strip()[:32]
-            if merged['timed_kind'] not in ('shield', 'hitler'):
-                return _err('یکی از دو اثر پشتیبانی‌شده را انتخاب کنید.')
         elif itype == "projectile":
             try:
                 dmg = float(data.get("damage", base.get("damage", 0)))
             except (TypeError, ValueError):
                 return _err("درصد تخریب نامعتبر است")
-            if not 0 <= dmg <= 1:
+            if dmg < 0 or dmg > 1:
                 return _err("درصد تخریب باید بین ۰ تا ۱ باشد (مثلاً 0.2 = ۲۰٪)")
             merged["damage"] = dmg
-            command = str(data.get('command', base.get('command', ''))).strip()
-            if not command or len(command) > 100 or '\n' in command or command.startswith('/'):
-                return _err('یک دستور متنی یکتا با حداکثر ۱۰۰ نویسه وارد کنید.')
-            if command in ('زر', 'زربات', 'کازینو زربات', 'زر بازی', 'لغو') or command.startswith(('هدیه زر', 'انتقال زرکوین')):
-                return _err('این دستور برای بخش دیگری رزرو شده است.')
-            other = await _fetch("SELECT data FROM game_items WHERE category='item' AND item_key<>%s AND active>=0", (key,))
-            if any(_loads(r['data']).get('command') == command for r in other):
-                return _err('این دستور برای آیتم دیگری ثبت شده است.', 409)
-            merged['command'] = command
+            if data.get("command"):
+                merged["command"] = str(data["command"])[:100]
             merged["defense_type"] = str(data.get("defense_type") or base.get("defense_type") or "") or None
         elif itype == "defense":
             try:
                 dc = float(data.get("defense_chance", base.get("defense_chance", 0)))
             except (TypeError, ValueError):
                 return _err("احتمال دفاع نامعتبر است")
-            if not 0 <= dc <= 1:
+            if dc < 0 or dc > 1:
                 return _err("احتمال دفاع باید بین ۰ تا ۱ باشد")
             merged["defense_chance"] = dc
             merged["defends_against"] = str(data.get("defends_against") or base.get("defends_against") or "") or None
@@ -4336,74 +4030,29 @@ async def admin_gameitems_save(request, body):
                 return _err("لیست مهمات نامعتبر است")
             valid_proj = {k for k, v in _bm_items().items() if v.get("type") == "projectile"}
             merged["launches"] = [str(x) for x in launches if str(x) in valid_proj]
-    sort = _to_int(body.get('sort', existing['sort'] if existing else 0), 0) or 0
-    active = int(body.get('active', bool(existing['active']) if existing else True) is True)
-    await _exec("INSERT INTO game_items (category, item_key, data, active, sort) VALUES (%s,%s,%s,%s,%s) "
-                "ON DUPLICATE KEY UPDATE data=VALUES(data), active=VALUES(active), sort=VALUES(sort)",
-                (cat, key, json.dumps(merged, ensure_ascii=False), active, sort))
-    _apply_item_to_config(cat, key, merged, bool(active))
+    sort = _to_int(body.get("sort", 0), 0) or 0
+    await _exec("INSERT INTO game_items (category, item_key, data, active, sort) VALUES (%s,%s,%s,1,%s) "
+                "ON DUPLICATE KEY UPDATE data=VALUES(data), active=1, sort=VALUES(sort)",
+                (cat, key, json.dumps(merged, ensure_ascii=False), sort))
+    _apply_item_to_config(cat, key, merged, True)
     logger.warning(f"🛠 آیتم بازی ذخیره شد: {cat}:{key} price={price}")
     return _json({"ok": True})
 
 
 @_admin
-@_catalog_edit
 async def admin_gameitems_toggle(request, body):
     cat = str(body.get("category") or "")
-    cat = 'item' if cat == 'auto' else cat
     key = str(body.get("key") or "")
     if cat not in GAME_ITEM_CATS or not key:
         return _err("آیتم نامعتبر است")
     await _ensure_tables()
-    n = await _exec("UPDATE game_items SET active = 1 - active WHERE category=%s AND item_key=%s AND active>=0", (cat, key))
+    n = await _exec("UPDATE game_items SET active = 1 - active WHERE category=%s AND item_key=%s", (cat, key))
     if not n:
         return _err("آیتم پیدا نشد", 404)
     r = await _fetch("SELECT data, active FROM game_items WHERE category=%s AND item_key=%s", (cat, key), one=True)
     if r:
         _apply_item_to_config(cat, key, json.loads(r["data"]), bool(r["active"]))
     return _json({"ok": True})
-
-
-@_admin
-@_catalog_edit
-async def admin_gameitems_delete(request, body):
-    category, key = body.get('category'), str(body.get('key', ''))
-    cat = 'item' if category == 'auto' else category
-    if cat not in GAME_ITEM_CATS or not key:
-        return _err('دسته یا شناسه نامعتبر است.')
-    field = {'item': 'items', 'auto': 'auto_hours', 'property': 'properties', 'worker': 'workers'}[category]
-    fields = (field, 'items') if category == 'auto' else (field,)
-    async def remove(cur):
-        await cur.execute('SELECT data,active FROM game_items WHERE category=%s AND item_key=%s FOR UPDATE', (cat, key))
-        row = await cur.fetchone()
-        if not row or row['active'] < 0:
-            return 'آیتم پیدا نشد.'
-        if cat == 'item' and (_loads(row['data']).get('type') == 'timed') != (category == 'auto'):
-            return 'دسته درست را انتخاب کنید.'
-        await cur.execute("SELECT rewards FROM shop_orders WHERE status IN ('pending','awaiting_receipt','review') FOR UPDATE")
-        if any(any(key in (_loads(o['rewards']).get(f) or {}) for f in fields) for o in await cur.fetchall()):
-            return 'این آیتم در یک سفارش باز است. ابتدا سفارش را تعیین تکلیف کنید.'
-        for table, pk in (('shop_products', 'id'), ('gift_codes', 'code')):
-            await cur.execute(f'SELECT {pk},rewards FROM {table} FOR UPDATE')
-            for offer in await cur.fetchall():
-                reward = _loads(offer['rewards'])
-                if not any(key in (reward.get(f) or {}) for f in fields):
-                    continue
-                for f in fields:
-                    if f in reward:
-                        reward[f].pop(key, None)
-                        if not reward[f]:
-                            reward.pop(f)
-                await cur.execute(f'UPDATE {table} SET rewards=%s,active=0 WHERE {pk}=%s',
-                                  (json.dumps(reward, ensure_ascii=False), offer[pk]))
-        # A tombstone prevents config.py defaults reappearing after restart.
-        await cur.execute('UPDATE game_items SET active=-1 WHERE category=%s AND item_key=%s', (cat, key))
-        return None
-    err = await _tx(remove)
-    if err:
-        return _err(err, 409)
-    _apply_item_to_config(cat, key, {}, False)
-    return _json({'ok': True})
 
 
 @_admin
@@ -4426,9 +4075,9 @@ async def admin_gamesettings_save(request, body):
         bank_rate = float(s.get("bank_rate", getattr(config, "BANK_RATE", 0.02)))
     except (TypeError, ValueError):
         return _err("سود بانک نامعتبر است")
-    if min_bet is None or min_bet < 1 or max_bet is None or not min_bet <= max_bet <= 10**15:
+    if min_bet is None or min_bet < 0 or max_bet is None or max_bet < min_bet:
         return _err("حداقل/حداکثر شرط نامعتبر است")
-    if not 0 <= bank_rate <= 1:
+    if bank_rate < 0 or bank_rate > 1:
         return _err("سود بانک باید بین ۰ تا ۱ باشد (مثلاً 0.02 = ۲٪)")
     if wh_base is None or wh_base <= 0:
         return _err("مبلغ پایه ارتقای انبار نامعتبر است")
@@ -4618,13 +4267,6 @@ _CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline' https://telegram.
 
 @web.middleware
 async def _security_mw(request: web.Request, handler):
-    if request.method == 'POST' and request.path.startswith('/admin/api/') and request.path != '/admin/api/logout':
-        if request.content_type != 'application/json':
-            return _err('درخواست باید از فرم پنل مدیریت ارسال شود.', 415)
-        origin = request.headers.get('Origin')
-        public_host = urllib.parse.urlsplit(getattr(config, 'WEBAPP_PUBLIC_URL', '') or '').netloc
-        if origin and urllib.parse.urlsplit(origin).netloc not in {request.host, public_host}:
-            return _err('مبدأ درخواست معتبر نیست.', 403)
     resp = web.Response(status=204) if request.method == "OPTIONS" else await handler(request)
     resp.headers["X-Content-Type-Options"] = "nosniff"
     resp.headers["Referrer-Policy"] = "no-referrer"
@@ -4664,7 +4306,6 @@ def create_app() -> web.Application:
     app.router.add_get("/health", handle_health)
     app.router.add_get("/admin", admin_page)
     app.router.add_get("/admin/", admin_page)
-    app.router.add_get('/admin/catalog', catalog_page)
     app.router.add_post("/admin/api/login", admin_login)
     app.router.add_post("/admin/api/logout", admin_logout)
     admin_routes = {
@@ -4680,10 +4321,7 @@ def create_app() -> web.Application:
         "controls/get": admin_controls_get, "controls/save": admin_controls_save,
         "design/get": admin_design_get, "design/save": admin_design_save,
         "gameitems/list": admin_gameitems_list, "gameitems/save": admin_gameitems_save,
-        "gameitems/toggle": admin_gameitems_toggle,
-        "gameitems/delete": admin_gameitems_delete,
-        "user/remove-holding": admin_remove_holding, "gifts/update": admin_gifts_update,
-        "commands/check": admin_check_commands,
+        "gameitems/toggle": admin_gameitems_toggle, "gameitems/delete": admin_gameitems_delete,
         "gamesettings/get": admin_gamesettings_get, "gamesettings/save": admin_gamesettings_save,
     }
     for p, h in admin_routes.items():
@@ -4711,11 +4349,10 @@ _sweeper_task: asyncio.Task | None = None
 def _find_tg_app():
     """پیدا کردن Application تلگرام از فریم‌های فراخوانی (برای ثبت خودکار هندلرها)"""
     import sys
-    from telegram.ext import Application
     frame = sys._getframe(1)
     while frame is not None:
-        for v in tuple(frame.f_locals.values()):
-            if isinstance(v, Application):
+        for v in frame.f_locals.values():
+            if v is not None and hasattr(v, "add_handler") and hasattr(v, "handlers") and hasattr(v, "bot"):
                 return v
         frame = frame.f_back
     return None
@@ -4740,6 +4377,7 @@ async def start_webapp(*args, **kwargs):
             await _seed_vip_products()
             await _load_game_items()
             await _load_game_settings()
+            await _load_timed_items()
             await _load_warehouse_damage()
     except Exception:
         logger.exception("setup_bot خودکار ناموفق")
@@ -4809,3 +4447,704 @@ def __getattr__(name):
     async def _noop(*a, **k):
         logger.warning(f"webapp.{name} دیگر وجود ندارد — نادیده گرفته شد")
     return _noop
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ═══════════ نسخه‌ی نهایی: آیتم‌ها، ساعت‌ها، حمله و دستورهای شلیک ═══════════
+# این بخش توابع قبلی را بازنویسی می‌کند؛ نسخه‌ی آخرِ هر تابع در زمان اجرا استفاده می‌شود.
+# ═══════════════════════════════════════════════════════════════════
+GAME_ITEM_CATS = ("property", "worker", "item", "auto")   # auto = حمله خودکار (ساعتی)
+_LEGACY_CMDS = {"شلیک موشک کروز", "شلیک موشک بالستیک", "شلیک موشک هایپرسونیک", "مادر همه بمب ها", "بمب هسته ای",
+                "کمی بکنش", "پهپاد شاهد", "پهباد شاهد", "شلیک پهپاد MQ", "شلیک پهباد MQ"}
+_TIMED_DESC = {
+    "hitler": "👑 هر حمله به تو با همان سلاح به مهاجم برمی‌گردد (اگر نداشته باشی، از موجودی می‌خرد یا نزدیک‌ترین سلاحت را می‌زند)",
+    "shield": f"🛡️ {int(SHIELD_DEFLECT_CHANCE * 100)}٪ حملات به تو کاملاً دفع می‌شود",
+}
+
+
+def _timed_items_list():
+    return [(k, v) for k, v in _bm_items().items() if v.get("type") == "timed"]
+
+
+def _active_timed_kind(uid, kind) -> bool:
+    """آیا کاربر محصول ساعتی فعال از نوع kind (hitler / shield) دارد؟"""
+    now_t = time.time()
+    uid = int(uid)
+    for (u, k), exp in list(_timed_expires.items()):
+        if u == uid and exp > now_t and _bm_items().get(k, {}).get("timed_kind") == kind:
+            return True
+    return False
+
+
+async def _timed_info(uid, key):
+    r = await _fetch("SELECT expires_at, hours FROM timed_items WHERE user_id=%s AND item_key=%s", (int(uid), key), one=True)
+    if not r:
+        return 0.0, 0
+    return float(r["expires_at"]), int(r["hours"] or 0)
+
+
+async def _timed_add_cur(cur, uid, key, hours):
+    """افزودن ساعت (داخل تراکنش). ساعت‌ها روی زمان انقضای فعلی اضافه می‌شوند."""
+    now_t = time.time()
+    await cur.execute("SELECT expires_at FROM timed_items WHERE user_id=%s AND item_key=%s FOR UPDATE", (int(uid), key))
+    r = await cur.fetchone()
+    base = max(now_t, float(r["expires_at"])) if r else now_t
+    new_exp = base + int(hours) * 3600
+    await cur.execute(
+        "INSERT INTO timed_items (user_id, item_key, expires_at, hours, created_at) VALUES (%s,%s,%s,%s,%s) "
+        "ON DUPLICATE KEY UPDATE expires_at=VALUES(expires_at), hours=hours+VALUES(hours)",
+        (int(uid), key, new_exp, int(hours), now_t))
+    _timed_expires[(int(uid), key)] = new_exp
+    return int(hours)
+
+
+async def _timed_sub_cur(cur, uid, key, hours):
+    """کم کردن ساعت (داخل تراکنش)"""
+    now_t = time.time()
+    await cur.execute("SELECT expires_at FROM timed_items WHERE user_id=%s AND item_key=%s FOR UPDATE", (int(uid), key))
+    r = await cur.fetchone()
+    if not r:
+        return 0
+    new_exp = max(now_t, float(r["expires_at"]) - int(hours) * 3600)
+    await cur.execute("UPDATE timed_items SET expires_at=%s, hours=GREATEST(hours-%s,0) WHERE user_id=%s AND item_key=%s",
+                      (new_exp, int(hours), int(uid), key))
+    _timed_expires[(int(uid), key)] = new_exp
+    return int(hours)
+
+
+async def _consume_item(uid, key) -> bool:
+    """مصرف یک عدد از یک آیتم انبار (هر کجا لازم شد)"""
+    n = await _exec("DELETE FROM inventory WHERE user_id=%s AND item_key=%s ORDER BY id LIMIT 1", (int(uid), key))
+    return bool(n)
+
+
+db.consume_item = _consume_item  # فرمانده هیتلر و شلیک‌ها از همین تابع استفاده می‌کنند
+
+
+# ─── دارایی‌ها: پشتیبانی از ساعت هیتلر / ابر سپر در همه‌ی جایزه‌ها ───
+_grant_base = _grant
+
+
+async def _grant(cur, uid, kind, key, n):
+    if kind == "timed":
+        if n <= 0 or _bm_items().get(key, {}).get("type") != "timed":
+            return 0
+        return await _timed_add_cur(cur, uid, key, min(int(n), 10 ** 6))
+    return await _grant_base(cur, uid, kind, key, n)
+
+
+_kind_label_base = _kind_label
+
+
+def _kind_label(kind, key):
+    if kind == "timed":
+        info = _bm_items().get(key, {})
+        return f"{info.get('emoji', '⏱')} {info.get('name', key)} (ساعت)"
+    return _kind_label_base(kind, key)
+
+
+_rewards_list_base = _rewards_list
+
+
+def _rewards_list(rewards):
+    out = list(_rewards_list_base(rewards))
+    for key, n in ((rewards or {}).get("timed") or {}).items():
+        n = _to_int(n, 0) or 0
+        if n > 0 and _bm_items().get(key, {}).get("type") == "timed":
+            out.append(("timed", key, n))
+    return out
+
+
+_clean_rewards_base = _clean_rewards
+
+
+def _clean_rewards(raw):
+    raw0 = raw if isinstance(raw, dict) else {}
+    timed = {}
+    for key, n in (raw0.get("timed") or {}).items():
+        n = _to_int(n, 0) or 0
+        if n <= 0:
+            continue
+        if _bm_items().get(key, {}).get("type") != "timed":
+            return None, f"آیتم ساعتی نامعتبر: {key}"
+        timed[key] = min(n, 10 ** 6)
+    rest = {k: v for k, v in raw0.items() if k != "timed"}
+    rewards, err = _clean_rewards_base(rest)
+    if err:
+        if timed and err.startswith("حداقل"):
+            rewards = {}
+        else:
+            return None, err
+    if timed:
+        rewards["timed"] = timed
+    if not rewards:
+        return None, "حداقل یک مورد تعیین کن"
+    return rewards, None
+
+
+_catalog_base = _catalog
+
+
+def _catalog():
+    c = _catalog_base()
+    c["items"] = [i for i in c["items"] if i.get("type") != "timed"]
+    c["timed"] = [{"key": k, "name": v.get("name", k), "emoji": v.get("emoji", "⏱"), "price": v.get("price", 0),
+                   "type": "timed", "timed_kind": v.get("timed_kind", "")} for k, v in _timed_items_list()]
+    return c
+
+
+_user_detail_base = _user_detail
+
+
+async def _user_detail(uid):
+    d = await _user_detail_base(uid)
+    if not d:
+        return d
+    rows = await _fetch("SELECT item_key, expires_at, hours FROM timed_items WHERE user_id=%s", (int(uid),))
+    now_t = time.time()
+    d["timed"] = []
+    for r in rows:
+        info = _bm_items().get(r["item_key"], {})
+        if info.get("type") != "timed":
+            continue
+        exp = float(r["expires_at"])
+        d["timed"].append({"key": r["item_key"], "name": info.get("name", r["item_key"]), "emoji": info.get("emoji", "⏱"),
+                           "active": exp > now_t, "hours_left": round(max(0.0, exp - now_t) / 3600, 2),
+                           "hours_bought": int(r["hours"] or 0)})
+    return d
+
+
+_admin_adjust_base = admin_adjust
+
+
+@_admin
+async def admin_adjust(request, body):
+    if str(body.get("kind") or "") != "timed":
+        return await _admin_adjust_base(request, body)
+    uid = _to_int(body.get("user_id"), 0) or 0
+    key = str(body.get("key") or "")
+    hours = _to_int(body.get("amount"), 0) or 0
+    if not uid or not hours or abs(hours) > 10 ** 6:
+        return _err("مقدار ساعت نامعتبر است")
+    if _bm_items().get(key, {}).get("type") != "timed":
+        return _err("آیتم ساعتی نامعتبر است")
+    if not await _fetch("SELECT user_id FROM users WHERE user_id=%s", (uid,), one=True):
+        return _err("کاربر پیدا نشد", 404)
+    if hours > 0:
+        done = await _tx(lambda cur: _timed_add_cur(cur, uid, key, hours))
+    else:
+        done = await _tx(lambda cur: _timed_sub_cur(cur, uid, key, -hours))
+    _invalidate(uid)
+    info = _bm_items()[key]
+    msg = f"{info.get('emoji', '⏱')} {info.get('name', key)}: {'+' if hours > 0 else '−'}{_fmt(abs(hours))} ساعت"
+    if hours < 0 and not done:
+        msg += " (ساعتی برای کم کردن وجود نداشت)"
+    return _json({"ok": True, "done": done, "message": msg, "user": await _user_detail(uid)})
+
+
+@_admin
+async def admin_gifts_create(request, body):
+    await _ensure_tables()
+    code = _norm_code(body.get("code")) or secrets.token_hex(4).upper()
+    rewards, err = _clean_rewards(body.get("rewards") or {})
+    if err:
+        return _err(err)
+    max_uses = max(0, _to_int(body.get("max_uses"), 0) or 0)
+    min_level = max(0, _to_int(body.get("min_level"), 0) or 0)
+    hours = max(0, _to_int(body.get("expires_hours"), 0) or 0)
+    expires = time.time() + hours * 3600 if hours else None
+    note = str(body.get("note") or "")[:255]
+    if await _fetch("SELECT code FROM gift_codes WHERE code=%s", (code,), one=True):
+        return _err("این کد قبلاً ساخته شده")
+    await _exec("INSERT INTO gift_codes (code, rewards, max_uses, used_count, min_level, expires_at, active, note, created_at) "
+                "VALUES (%s,%s,%s,0,%s,%s,1,%s,%s)",
+                (code, json.dumps(rewards, ensure_ascii=False), max_uses, min_level, expires, note, time.time()))
+    return _json({"ok": True, "code": code})
+
+
+# ─── آیتم‌ها (ملک / کارگر / بازار سیاه / حمله خودکار) ───
+async def _deleted_set() -> set:
+    try:
+        return set(json.loads(await _get_setting("deleted_items", "[]") or "[]"))
+    except Exception:
+        return set()
+
+
+async def _save_deleted(s: set):
+    await _set_setting("deleted_items", json.dumps(sorted(s)))
+
+
+def _apply_item_to_config(cat, key, data, active):
+    store = {"property": config.PROPERTIES, "worker": config.WORKERS}.get(cat, config.BLACKMARKET_ITEMS)
+    if active:
+        store[key] = data
+    else:
+        store.pop(key, None)
+
+
+async def _load_game_items():
+    """بارگذاری همه آیتم‌ها از دیتابیس؛ آیتم‌های پیش‌فرض config.py فقط یک‌بار (اگر حذف نشده باشند) ثبت می‌شوند"""
+    await _ensure_tables()
+    rows = await _fetch("SELECT category, item_key FROM game_items")
+    keys = {r["item_key"] for r in rows}
+    dels = await _deleted_set()
+    for cat, store in (("property", config.PROPERTIES), ("worker", config.WORKERS), ("item", config.BLACKMARKET_ITEMS)):
+        for k, v in list(store.items()):
+            if k in keys or k in dels or not isinstance(v, dict):
+                continue
+            c = "auto" if v.get("type") == "timed" else cat
+            await _exec("INSERT INTO game_items (category, item_key, data, active, sort) VALUES (%s,%s,%s,1,0)",
+                        (c, k, json.dumps(v, ensure_ascii=False)))
+            keys.add(k)
+    rows = await _fetch("SELECT category, item_key, data, active FROM game_items")
+    props, workers, bm = {}, {}, {}
+    for r in rows:
+        if not r["active"]:
+            continue
+        try:
+            d = json.loads(r["data"])
+        except Exception:
+            continue
+        if not isinstance(d, dict):
+            continue
+        if r["category"] == "property":
+            props[r["item_key"]] = d
+        elif r["category"] == "worker":
+            workers[r["item_key"]] = d
+        else:
+            bm[r["item_key"]] = d
+    for store, new in ((config.PROPERTIES, props), (config.WORKERS, workers), (config.BLACKMARKET_ITEMS, bm)):
+        store.clear()
+        store.update(new)
+
+
+@_admin
+async def admin_gameitems_list(request, body):
+    await _load_game_items()
+    rows = await _fetch("SELECT category, item_key, data, active, sort FROM game_items ORDER BY sort, item_key")
+    out = {"property": [], "worker": [], "item": [], "auto": []}
+    for r in rows:
+        try:
+            d = json.loads(r["data"])
+        except Exception:
+            continue
+        if not isinstance(d, dict):
+            continue
+        d["_key"] = r["item_key"]
+        d["_active"] = bool(r["active"])
+        d["_sort"] = int(r["sort"] or 0)
+        if r["category"] in ("property", "worker"):
+            out[r["category"]].append(d)
+        elif d.get("type") == "timed":
+            out["auto"].append(d)
+        else:
+            out["item"].append(d)
+    return _json({"ok": True, "items": out})
+
+
+@_admin
+async def admin_gameitems_save(request, body):
+    cat = str(body.get("category") or "")
+    key = str(body.get("key") or "").strip()
+    data = body.get("data") if isinstance(body.get("data"), dict) else {}
+    if cat not in GAME_ITEM_CATS:
+        return _err("دسته نامعتبر است")
+    if not re.fullmatch(r"[a-zA-Z0-9_]{2,64}", key):
+        return _err("کلید آیتم باید حروف/عدد/آندرلاین انگلیسی باشد (۲ تا ۶۴ کاراکتر)")
+    await _ensure_tables()
+    existing = await _fetch("SELECT category, data FROM game_items WHERE item_key=%s", (key,), one=True)
+    shop_cats = ("item", "auto")
+    if existing and not (existing["category"] == cat or (existing["category"] in shop_cats and cat in shop_cats)):
+        return _err("این کلید قبلاً برای دسته‌ی دیگری استفاده شده")
+    base = json.loads(existing["data"]) if existing else {}
+    name = str(data.get("name") or base.get("name") or "").strip()[:100]
+    if not name:
+        return _err("نام آیتم را وارد کن")
+    emoji = str(data.get("emoji") or base.get("emoji") or "•").strip()[:16]
+    price = _to_int(data.get("price", base.get("price", 0)), 0) or 0
+    if price < 0 or price > 10 ** 15:
+        return _err("قیمت نامعتبر است")
+    merged = dict(base)
+    merged.update({"name": name, "emoji": emoji, "price": price})
+    mk = data.get("market", base.get("market", True))
+    merged["market"] = False if mk in (False, "false", "0", 0) else True
+
+    if cat in ("property", "worker"):
+        income = _to_int(data.get("income", base.get("income", 0)), 0) or 0
+        if income < 0 or income > 10 ** 15:
+            return _err("درآمد نامعتبر است")
+        merged["income"] = income
+        for f in ("type", "timed_kind", "command", "damage", "launches"):
+            merged.pop(f, None)
+    elif cat == "auto":
+        kind = str(data.get("timed_kind") or base.get("timed_kind") or "").strip()
+        if kind not in ("hitler", "shield"):
+            return _err("نوع اثر ساعتی باید hitler یا shield باشد")
+        merged.update({"type": "timed", "timed_kind": kind, "market": True})
+        for f in ("damage", "defense_chance", "launches", "command", "defense_type", "defends_against", "income"):
+            merged.pop(f, None)
+    else:
+        itype = str(data.get("type") or base.get("type") or "projectile")
+        if itype not in ("launcher", "projectile", "defense"):
+            return _err("نوع آیتم نامعتبر است")
+        merged["type"] = itype
+        merged.pop("timed_kind", None)
+        merged.pop("income", None)
+        if itype == "projectile":
+            try:
+                dmg = float(data.get("damage", base.get("damage", 0)))
+            except (TypeError, ValueError):
+                return _err("درصد تخریب نامعتبر است")
+            if dmg < 0 or dmg > 1:
+                return _err("درصد تخریب باید بین ۰ تا ۱ باشد (مثلاً 0.2 = ۲۰٪)")
+            cmd = str(data.get("command") or base.get("command") or "").strip()[:100]
+            if not cmd:
+                return _err("دستور شلیک را وارد کن (این دستور در ربات به‌صورت خودکار فعال می‌شود)")
+            for k2, v2 in _bm_items().items():
+                if k2 != key and v2.get("type") == "projectile" and v2.get("command") == cmd:
+                    return _err("این دستور شلیک قبلاً برای آیتم دیگری ثبت شده")
+            merged.update({"damage": dmg, "command": cmd,
+                           "defense_type": str(data.get("defense_type") or base.get("defense_type") or "") or None})
+            merged.pop("launches", None)
+            merged.pop("defense_chance", None)
+            merged.pop("defends_against", None)
+        elif itype == "defense":
+            try:
+                dc = float(data.get("defense_chance", base.get("defense_chance", 0)))
+            except (TypeError, ValueError):
+                return _err("احتمال دفاع نامعتبر است")
+            if dc < 0 or dc > 1:
+                return _err("احتمال دفاع باید بین ۰ تا ۱ باشد")
+            merged.update({"defense_chance": dc,
+                           "defends_against": str(data.get("defends_against") or base.get("defends_against") or "") or None})
+            for f in ("damage", "command", "launches", "defense_type"):
+                merged.pop(f, None)
+        else:
+            launches = data.get("launches", base.get("launches", []))
+            if isinstance(launches, str):
+                launches = [x.strip() for x in launches.split(",") if x.strip()]
+            if not isinstance(launches, list):
+                return _err("لیست مهمات نامعتبر است")
+            valid_proj = {k2 for k2, v2 in _bm_items().items() if v2.get("type") == "projectile"} | {
+                k2 for k2 in [key]}
+            merged["launches"] = [str(x) for x in launches if str(x) in valid_proj]
+            for f in ("damage", "command", "defense_type", "defense_chance", "defends_against"):
+                merged.pop(f, None)
+
+    sort = _to_int(body.get("sort", 0), 0) or 0
+    if existing:
+        await _exec("DELETE FROM game_items WHERE item_key=%s", (key,))
+    await _exec("INSERT INTO game_items (category, item_key, data, active, sort) VALUES (%s,%s,%s,1,%s)",
+                (cat, key, json.dumps(merged, ensure_ascii=False), sort))
+    dels = await _deleted_set()
+    if key in dels:
+        dels.discard(key)
+        await _save_deleted(dels)
+    _apply_item_to_config(cat, key, merged, True)
+    logger.warning(f"🛠 آیتم ذخیره شد: {cat}:{key}")
+    return _json({"ok": True})
+
+
+@_admin
+async def admin_gameitems_delete(request, body):
+    """حذف کامل آیتم از همه‌جا: کاتالوگ، فروشگاه، کد هدیه و (با purge) دارایی کاربران"""
+    key = str(body.get("key") or "").strip()
+    purge = body.get("purge", True) is not False
+    await _ensure_tables()
+    row = await _fetch("SELECT category, data FROM game_items WHERE item_key=%s", (key,), one=True)
+    if not row:
+        return _err("آیتم پیدا نشد", 404)
+    cat = row["category"]
+    try:
+        d = json.loads(row["data"])
+    except Exception:
+        d = {}
+    await _exec("DELETE FROM game_items WHERE item_key=%s", (key,))
+    if cat == "property":
+        config.PROPERTIES.pop(key, None)
+    elif cat == "worker":
+        config.WORKERS.pop(key, None)
+    else:
+        config.BLACKMARKET_ITEMS.pop(key, None)
+    stats = {"users": 0, "shop": 0, "gifts": 0}
+    if purge:
+        if cat in ("property", "worker"):
+            stats["users"] = await _exec("DELETE FROM assets WHERE asset_key=%s AND asset_type=%s", (key, cat))
+            field = "properties" if cat == "property" else "workers"
+        else:
+            stats["users"] = await _exec("DELETE FROM inventory WHERE item_key=%s", (key,))
+            await _exec("DELETE FROM timed_items WHERE item_key=%s", (key,))
+            for k in list(_timed_expires):
+                if k[1] == key:
+                    _timed_expires.pop(k, None)
+            field = "timed" if d.get("type") == "timed" else "items"
+        stats["shop"] = await _strip_rewards("shop_products", "id", field, key)
+        stats["gifts"] = await _strip_rewards("gift_codes", "code", field, key)
+    dels = await _deleted_set()
+    dels.add(key)
+    await _save_deleted(dels)
+    logger.warning(f"🗑 آیتم حذف شد: {cat}:{key} stats={stats}")
+    return _json({"ok": True, "stats": stats})
+
+
+async def _strip_rewards(table, pk, field, key) -> int:
+    rows = await _fetch(f"SELECT {pk} AS pk, rewards FROM {table}")
+    n = 0
+    for r in rows:
+        rw = _loads(r["rewards"])
+        sub = rw.get(field)
+        if isinstance(sub, dict) and key in sub:
+            sub.pop(key, None)
+            if not sub:
+                rw.pop(field, None)
+            if table == "shop_products" and not rw:
+                await _exec("UPDATE shop_products SET active=0 WHERE id=%s", (r["pk"],))
+            await _exec(f"UPDATE {table} SET rewards=%s WHERE {pk}=%s", (json.dumps(rw, ensure_ascii=False), r["pk"]))
+            n += 1
+    return n
+
+
+# ─── حمله خودکار: منو و خرید ساعتی ───
+async def _build_auto_view(uid: int):
+    from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M
+    lines = ["⚔️ <b>حمله خودکار</b>", "━━━━━━━━━━━━━━━━━━"]
+    intro = _ctrl_text("auto_text", "")
+    if intro:
+        lines += [_esc(intro), ""]
+    btns = []
+    for k, v in _timed_items_list():
+        exp, bought = await _timed_info(uid, k)
+        lines.append(f"{v.get('emoji', '⏱')} <b>{_esc(v.get('name', k))}</b> — ساعتی <b>{_fmt(v.get('price', 0))}</b> زرکوین")
+        lines.append(f"   وضعیت: {_timed_status(exp)}")
+        lines.append(f"   🕒 مجموع ساعت خریداری‌شده: <b>{_fmt(bought)}</b>")
+        desc = _TIMED_DESC.get(v.get("timed_kind"), "")
+        if desc:
+            lines.append(f"   {desc}")
+        lines.append("")
+        btns.append([B(f"{v.get('emoji', '⏱')} خرید {v.get('name', k)}", callback_data=f"auto:buy:{k}")])
+    if not btns:
+        lines.append("📭 فعلاً محصول ساعتی فعالی وجود ندارد.")
+    lines.append(f"🔧 در هر حمله {int(WAREHOUSE_DAMAGE_CHANCE * 100)}٪ احتمال آسیب به انبار؛ تعمیر در «🏭 انبار من».")
+    btns.append([B("🔙 بازگشت", callback_data="menu:main")])
+    return "\n".join(lines), M(btns)
+
+
+async def _h_auto_cb(update, context):
+    q = update.callback_query
+    uid = q.from_user.id
+    if _not_owner(q):
+        await _utils.safe_answer(q, "❌ این منو برای شما نیست!\nبرای منوی خودت /menu را بفرست.", show_alert=True)
+        raise _stop()
+    if _utils and not await _utils.verify_membership(update, context):
+        raise _stop()
+    await db.ensure_user(q.from_user)
+    if q.data.startswith("auto:buy:"):
+        key = q.data.split(":", 2)[2]
+        item = _bm_items().get(key, {})
+        if item.get("type") != "timed":
+            await _utils.safe_answer(q, "❌ این محصول دیگر موجود نیست", show_alert=True)
+        else:
+            _utils.user_states[uid] = {"action": f"buy_timed:{key}"}
+            await _utils.safe_answer(q)
+            m = await _utils.safe_edit(
+                q,
+                f"⏰ <b>{item.get('emoji', '')} {item.get('name', key)}</b>\n━━━━━━━━━━━━━━━━━━\n"
+                f"💰 قیمت هر ساعت: <b>{_fmt(item.get('price', 0))}</b> زرکوین\n\n"
+                "🕒 چند ساعت می‌خواهی بخری؟ (بدون محدودیت — فقط عدد را بفرست)",
+                _utils.BACK_MAIN_KB)
+            if m:
+                _utils.remember_owner(m, uid)
+    else:
+        await _utils.safe_answer(q)
+        text, kb = await _build_auto_view(uid)
+        m = await _utils.safe_edit(q, text, kb)
+        if m:
+            _utils.remember_owner(m, uid)
+    raise _stop()
+
+
+async def _h_buy_timed_text(update, context):
+    """دریافت تعداد ساعت برای خرید (بدون محدودیت زمانی)"""
+    msg = update.effective_message
+    if not msg or not msg.text or not update.effective_user or not _utils:
+        return
+    uid = update.effective_user.id
+    action = str((_utils.user_states.get(uid) or {}).get("action", ""))
+    if not action.startswith("buy_timed:"):
+        return
+    key = action.split(":", 1)[1]
+    item = _bm_items().get(key, {})
+    _utils.user_states.pop(uid, None)
+    if item.get("type") != "timed":
+        await msg.reply_text("❌ این محصول دیگر موجود نیست.")
+        raise _stop()
+    hours = _utils.parse_amount(msg.text)
+    if not hours or hours < 1 or hours > 10 ** 6:
+        await msg.reply_text("❌ تعداد ساعت نامعتبر است (عدد صحیح و مثبت بفرست).")
+        raise _stop()
+    price = int(item.get("price", 0))
+    total = hours * price
+    if not await db.deduct_balance(uid, total):
+        await msg.reply_text(f"❌ موجودی کافی نیست!\nنیاز به {_fmt(total)} زرکوین داری.")
+        raise _stop()
+    try:
+        await _activate_timed(uid, key, hours)
+    except Exception:
+        logger.exception("activate timed failed")
+        await db.add_balance(uid, total)
+        await msg.reply_text("❌ خطا در فعال‌سازی — مبلغ برگشت داده شد.")
+        raise _stop()
+    exp, bought = await _timed_info(uid, key)
+    await msg.reply_text(
+        f"✅ <b>{item.get('emoji', '')} {item.get('name', key)}</b> برای <b>{_fmt(hours)} ساعت</b> فعال شد!\n"
+        f"💰 پرداخت: {_fmt(total)} زرکوین\n⏳ وضعیت: {_timed_status(exp)}\n"
+        f"🕒 مجموع ساعت خریداری‌شده: <b>{_fmt(bought)}</b>",
+        parse_mode="HTML")
+    raise _stop()
+
+
+# ─── بازار سیاه: آیتم‌های «فقط فروشگاه» و ساعتی ───
+def _market_locked(key: str) -> bool:
+    item = _bm_items().get(key, {})
+    return item.get("market") is False or item.get("type") == "timed"
+
+
+_h_bm_guard_base = _h_bm_guard
+
+
+async def _h_bm_guard(update, context):
+    q = update.callback_query
+    parts = (q.data or "").split(":")
+    key = parts[2] if len(parts) > 2 else ""
+    if _market_locked(key) and not _not_owner(q) and _bm_items().get(key, {}).get("type") != "timed":
+        await _utils.safe_answer(q, "🔒 این آیتم فقط از طریق فروشگاه قابل دریافت است.", show_alert=True)
+        raise _stop()
+    return await _h_bm_guard_base(update, context)
+
+
+async def _h_bm_select_guard(update, context):
+    q = update.callback_query
+    parts = (q.data or "").split(":")
+    key = parts[2] if len(parts) > 2 else ""
+    if _bm_items().get(key, {}).get("market") is False and not _not_owner(q):
+        await _utils.safe_answer(q, "🔒 این آیتم فقط از طریق فروشگاه قابل دریافت است.", show_alert=True)
+        raise _stop()
+
+
+def _patch_blackmarket_hide():
+    """پنهان کردن آیتم‌های «فقط فروشگاه» و ساعتی از صفحه‌ی بازار سیاه"""
+    try:
+        import blackmarket as _bm_mod
+    except Exception:
+        return
+    orig = getattr(_bm_mod, "_page_items", None)
+    if not orig or getattr(orig, "_zar", False):
+        return
+
+    def _page_items_visible(page):
+        return [(k, v) for k, v in orig(page) if v.get("market") is not False and v.get("type") != "timed"]
+
+    _page_items_visible._zar = True
+    _bm_mod._page_items = _page_items_visible
+
+
+# ─── دستورهای شلیک: پویا، بدون ری‌استارت، و همه‌ی حملات از این مسیر ───
+async def _h_attack_dynamic(update, context):
+    msg = update.effective_message
+    if not msg or not msg.text or not update.effective_user:
+        return
+    text = msg.text.strip()
+    cmds = _cmd_map()
+    if text not in cmds:
+        if text in _LEGACY_CMDS:
+            await msg.reply_text("⚠️ این دستور شلیک دیگر فعال نیست. دستور فعلی را در راهنما ببین.")
+            raise _stop()
+        return
+    items = _bm_items()
+    proj = cmds[text]
+    pinfo = items.get(proj, {})
+    pname = f"{pinfo.get('emoji', '')} {pinfo.get('name', proj)}"
+    uid = update.effective_user.id
+    rep = msg.reply_to_message
+    if not rep or not rep.from_user:
+        await msg.reply_text("🎯 برای شلیک باید روی پیام هدف ریپلای کنی.")
+        raise _stop()
+    target = rep.from_user
+    tgt = target.id
+    if tgt == uid:
+        await msg.reply_text("😅 نمی‌توانی به خودت شلیک کنی.")
+        raise _stop()
+    if tgt in _banned:
+        await msg.reply_text("🚫 این کاربر از ربات محروم است و نمی‌توان به او حمله کرد.")
+        raise _stop()
+    launchers = [k for k, v in items.items() if v.get("type") == "launcher" and proj in v.get("launches", [])]
+    try:
+        await _ensure_tables()
+        rows = []
+        if launchers:
+            ph = ",".join(["%s"] * len(launchers))
+            rows = await _fetch(f"SELECT id, item_key, last_used FROM inventory WHERE user_id=%s AND item_key IN ({ph}) "
+                                "ORDER BY id", (uid, *launchers))
+        proj_count = await _count_items(uid, proj)
+    except Exception:
+        logger.exception("attack check error")
+        await msg.reply_text("❌ خطای داخلی — دوباره تلاش کن.")
+        raise _stop()
+    if not rows:
+        names = "، ".join(f"{items[k].get('emoji', '')} {items[k].get('name', k)}" for k in launchers) or "—"
+        await msg.reply_text(f"🚀 برای شلیک {pname} اول یکی از این وسیله‌ها را از بازار سیاه بخر:\n{names}")
+        raise _stop()
+    if proj_count <= 0:
+        await msg.reply_text(f"💥 {pname} نداری! اول از بازار سیاه بخر.")
+        raise _stop()
+    now = time.time()
+    ready = [r for r in rows if not r["last_used"] or now - float(r["last_used"]) >= LAUNCH_COOLDOWN]
+    if not ready:
+        wait = min(float(r["last_used"]) + LAUNCH_COOLDOWN for r in rows) - now
+        await msg.reply_text(
+            f"⏳ <b>وسیله شلیک در حال خنک شدن است</b>\n━━━━━━━━━━━━━━━━━━\n"
+            f"⏰ زمان باقی‌مانده: <b>{max(1, math.ceil(wait / 60))} دقیقه</b>\n"
+            "💡 با خرید یک وسیله دیگر از بازار سیاه می‌توانی همین الان شلیک کنی.",
+            parse_mode="HTML")
+        raise _stop()
+    row = ready[0]
+    async with _ulock(uid):
+        if not await _consume_item(uid, proj):
+            await msg.reply_text("💥 مهمات کافی نداری.")
+            raise _stop()
+        await _exec("UPDATE inventory SET last_used=%s WHERE id=%s", (now, row["id"]))
+    a_name = _esc(update.effective_user.first_name)
+    t_name = _esc(target.first_name)
+    if _active_timed_kind(tgt, "shield") and _rng.random() < SHIELD_DEFLECT_CHANCE:
+        await msg.reply_text(
+            f"🛡️ <b>ابر سپر فعال شد!</b>\n━━━━━━━━━━━━━━━━━━\n🚀 مهاجم: {a_name}\n🎯 هدف: {t_name}\n"
+            f"💥 حمله با {pname} دفع شد و هیچ خسارتی وارد نشد!", parse_mode="HTML")
+        raise _stop()
+    dtype = pinfo.get("defense_type")
+    if dtype:
+        for dk, dv in items.items():
+            if (dv.get("type") == "defense" and dv.get("defends_against") == dtype
+                    and await _count_items(tgt, dk) > 0 and _rng.random() < float(dv.get("defense_chance", 0))):
+                await msg.reply_text(f"🛡️ <b>حمله دفع شد!</b>\n{dv.get('emoji', '')} {dv.get('name', dk)} "
+                                     f"{t_name} را محافظت کرد.", parse_mode="HTML")
+                raise _stop()
+    pct = float(pinfo.get("damage", 0))
+    total = await apply_damage_split(tgt, pct)
+    d = _last_damage.pop(tgt, None) if total > 0 else None
+    head = (f"{pinfo.get('emoji', '💥')} <b>حمله موفق!</b>\n━━━━━━━━━━━━━━━━━━\n"
+            f"🎯 مهاجم: {a_name}\n🎯 هدف: {t_name}\n🚀 سلاح: {pname}\n💥 درصد تخریب: {int(pct * 100)}%\n")
+    if d and d.get("total", 0) > 0:
+        report = _damage_report(d)
+        await msg.reply_text(head + f"💰 خسارت مالی: <b>{_fmt(d['total'])}</b>\n\n🏚 <b>جزئیات:</b>\n{report}",
+                             parse_mode="HTML")
+        if d.get("assets"):
+            try:
+                await context.bot.send_message(tgt, f"🏚 <b>در حمله {a_name} این موارد از دست رفت:</b>\n{report}",
+                                               parse_mode="HTML")
+            except Exception:
+                pass
+    else:
+        await msg.reply_text(head + "\n😶 هدف هیچ ثروتی نداشت که تخریب شود.", parse_mode="HTML")
+    if _active_timed_kind(tgt, "hitler"):
+        await _hitler_counter(tgt, uid, proj, context)
+    raise _stop()
