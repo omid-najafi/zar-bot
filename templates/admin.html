@@ -318,7 +318,8 @@ a{color:var(--gold)}
             <option value="timed">⏱ ساعتی (هیتلر / ابر سپر)</option>
           </select>
         </label>
-        <label id="gi-timedkind-wrap">نوع اثر ساعتی<select id="gi-timedkind"><option value="hitler">👑 فرمانده هیتلر (ضدحمله خودکار)</option><option value="shield">🛡️ ابر سپر (دفع حملات)</option></select></label>
+        <label id="gi-timedkind-wrap">نوع اثر ساعتی<select id="gi-timedkind" onchange="document.getElementById('gi-place').value = this.value === 'shield' ? 'market' : 'auto'"><option value="hitler">👑 فرمانده هیتلر (ضدحمله خودکار)</option><option value="shield">🛡️ ابر سپر (دفع حملات)</option></select></label>
+        <label id="gi-place-wrap">محل فروش در ربات<select id="gi-place"><option value="auto">⚔️ منوی «حمله خودکار»</option><option value="market">💀 بازار سیاه</option></select></label>
         <label id="gi-damage-wrap">درصد تخریب (۰ تا ۱ — مثلاً 0.2)<input id="gi-damage" placeholder="0.2"></label>
         <label id="gi-defchance-wrap">احتمال دفاع (۰ تا ۱)<input id="gi-defchance" placeholder="0.35"></label>
         <label id="gi-launches-wrap">کلیدهای مهمات قابل شلیک (با کاما)<input id="gi-launches" placeholder="cruise_missile, ballistic_missile"></label>
@@ -327,7 +328,7 @@ a{color:var(--gold)}
         <label id="gi-command-wrap">دستور شلیک<input id="gi-command" placeholder="شلیک موشک کروز"></label>
         <label id="gi-market-wrap" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="gi-market" checked style="width:auto"> 🛒 در بازار سیاه قابل خرید باشد (خاموش = فقط از فروشگاه دریافت می‌شود)</label>
       </div>
-      <p class="muted" id="gi-cmd-note" style="margin-top:8px">⚠️ دستور شلیک باید در <code>bot.py</code> هم ثبت شود تا شلیک با آن دستور کار کند.</p>
+      <p class="muted" id="gi-cmd-note" style="margin-top:8px">⚠️ دستور شلیک نباید تکراری باشد. هر وقت آن را عوض یا اضافه کنی، همان لحظه در ربات فعال می‌شود (بدون ری‌استارت و بدون دست زدن به <code>bot.py</code>).</p>
       <div class="row" style="margin-top:12px">
         <button class="btn gold" style="flex:1" onclick="saveGameItem()">💾 ذخیره آیتم</button>
         <button class="btn ghost hidden" id="gi-cancel" onclick="resetGameItemForm()">انصراف از ویرایش</button>
@@ -872,14 +873,14 @@ function giExtra(it) {
   if (it.type === 'projectile') return '💥 تخریب ' + fmt(Math.round((it.damage || 0) * 100)) + '٪ · دستور: ' + esc(it.command || '—');
   if (it.type === 'defense') return '🛡️ دفاع ' + fmt(Math.round((it.defense_chance || 0) * 100)) + '٪';
   if (it.type === 'launcher') return '🚀 شلیک: ' + ((it.launches || []).length) + ' نوع مهمات';
-  if (it.type === 'timed' || GAME_CAT === 'auto') return '⏱ ' + (it.timed_kind === 'shield' ? '🛡️ ابر سپر' : '👑 فرمانده هیتلر') + ' (ساعتی)';
+  if (it.type === 'timed' || GAME_CAT === 'auto') return '⏱ ' + (it.timed_kind === 'shield' ? '🛡️ ابر سپر' : '👑 فرمانده هیتلر') + ' (ساعتی) · فروش در ' + ((it.place || (it.timed_kind === 'shield' ? 'market' : 'auto')) === 'market' ? '💀 بازار سیاه' : '⚔️ حمله خودکار');
   return '📈 درآمد ' + fmt(it.income || 0) + ' /روز';
 }
 function renderGameItemsList() {
   const list = GAME_ITEMS[GAME_CAT] || [];
   $('#gi-list').innerHTML = list.length ? list.map(it => `<tr>
     <td><b>${esc(it.emoji || '')} ${esc(it.name)}</b><br><span class="muted">${esc(it._key)}${it.type ? ' · ' + (TYPE_LABEL[it.type] || it.type) : ''}</span>
-      ${it.market === false ? '<br><span class="pill wait">🔒 فقط از فروشگاه</span>' : ''}</td>
+      ${it.market === false ? '<br><span class="pill wait">🔒 فقط از فروشگاه</span>' : ''}${giShopBtns(it)}</td>
     <td style="white-space:nowrap">💰 ${fmt(it.price || 0)}${GAME_CAT === 'auto' ? ' <span class="muted">/ساعت</span>' : ''}</td>
     <td class="muted">${giExtra(it)}</td>
     <td><span class="pill ${it._active ? 'ok' : 'no'}">${it._active ? 'فعال' : 'غیرفعال'}</span></td>
@@ -896,6 +897,7 @@ function syncGameItemForm() {
   show('#gi-income-wrap', isEcon);
   show('#gi-type-wrap', isItem);
   show('#gi-timedkind-wrap', isAuto);
+  show('#gi-place-wrap', isAuto);
   show('#gi-market-wrap', isItem);
   show('#gi-damage-wrap', isItem && t === 'projectile');
   show('#gi-defchance-wrap', isItem && t === 'defense');
@@ -910,6 +912,7 @@ function syncGameItemForm() {
 function resetGameItemForm() {
   ['#gi-key', '#gi-key-in', '#gi-name', '#gi-emoji', '#gi-price', '#gi-income', '#gi-damage', '#gi-defchance', '#gi-launches', '#gi-deftype', '#gi-defagainst', '#gi-command'].forEach(s => $(s).value = '');
   $('#gi-timedkind').value = 'hitler';
+  $('#gi-place').value = 'auto';
   $('#gi-market').checked = true;
   $('#gi-type').value = 'launcher';
   $('#gi-form-title').textContent = '➕ افزودن ' + (GC_LABEL[GAME_CAT] || 'آیتم') + ' جدید';
@@ -923,6 +926,7 @@ function editGameItem(key) {
   $('#gi-name').value = it.name || ''; $('#gi-emoji').value = it.emoji || ''; $('#gi-price').value = it.price || ''; $('#gi-income').value = it.income || '';
   $('#gi-type').value = it.type && it.type !== 'timed' ? it.type : 'launcher';
   $('#gi-timedkind').value = it.timed_kind || 'hitler';
+  $('#gi-place').value = it.place || (it.timed_kind === 'shield' ? 'market' : 'auto');
   $('#gi-market').checked = it.market !== false;
   $('#gi-damage').value = it.damage != null ? it.damage : '';
   $('#gi-defchance').value = it.defense_chance != null ? it.defense_chance : '';
@@ -941,6 +945,7 @@ async function saveGameItem() {
   const data = { name: $('#gi-name').value, emoji: $('#gi-emoji').value, price: num($('#gi-price').value) };
   if (GAME_CAT === 'auto') {
     data.timed_kind = $('#gi-timedkind').value;
+    data.place = $('#gi-place').value;
   } else if (GAME_CAT === 'item') {
     const t = $('#gi-type').value; data.type = t; data.market = $('#gi-market').checked;
     if (t === 'projectile') { data.damage = parseFloat($('#gi-damage').value); data.defense_type = $('#gi-deftype').value; data.command = $('#gi-command').value; }
@@ -1017,6 +1022,30 @@ function renderUser() {
     <div class="card"><h3>⚔️ حمله خودکار (ساعت)</h3><table><thead><tr><th>محصول</th><th>وضعیت فعلی</th><th>ساعت (+ اضافه / − کم)</th><th></th></tr></thead><tbody>${timedRows || '<tr><td colspan="4" class="muted">محصولی ثبت نشده</td></tr>'}</tbody></table></div>
     <div class="grid2">${tbl('🏠 ملک‌ها', CAT.properties, u.properties, 'property', CAT.max_per_key)}${tbl('👷 کارگرها', CAT.workers, u.workers, 'worker', CAT.max_per_key)}</div>
     ${tbl('💀 اینونتوری بازار سیاه', CAT.items, u.items, 'item', 0)}`;
+}
+/* ── حذف برای عموم و افزودن به فروشگاه ── */
+function giShopBtns(it) {
+  if (GAME_CAT !== 'item') return '';
+  const locked = it.market === false;
+  return `<div style="margin-top:6px;white-space:normal"><button class="btn gold sm" onclick="moveToShop('${it._key}')">${locked ? '🛒 تغییر قیمت فروشگاه' : '🛒 حذف برای عموم و افزودن به فروشگاه'}</button>${locked ? ` <button class="btn ghost sm" onclick="restoreMarket('${it._key}')">↩️ برگشت به بازار سیاه</button>` : ''}</div>`;
+}
+async function moveToShop(key) {
+  const it = (GAME_ITEMS.item || []).find(x => x._key === key); if (!it) return;
+  const p = prompt('قیمت «' + it.name + '» در فروشگاه چند تومان باشد؟');
+  if (p === null) return;
+  const toman = num(p);
+  if (!toman) { toast('قیمت را به تومان وارد کن', 'err'); return; }
+  const purge = confirm('«' + it.name + '» از بازار سیاه حذف و با قیمت ' + fmt(toman) + ' تومان به فروشگاه اضافه می‌شود.\n\nاز انبار کاربرانی که از قبل این آیتم را دارند هم پاک شود؟\n\nOK = پاک شود     Cancel = دست نخورد');
+  try {
+    const d = await api('gameitems/toshop', { key, price_toman: toman, purge });
+    toast('🛒 «' + it.name + '» فقط از فروشگاه قابل خرید شد' + (purge ? ' — ' + fmt(d.removed || 0) + ' عدد از انبار کاربران پاک شد' : ''), 'ok');
+    loadGameItems();
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function restoreMarket(key) {
+  if (!confirm('این آیتم دوباره در بازار سیاه قابل خرید شود؟\nمحصولِ فروشگاه دست نمی‌خورد؛ اگر لازم نیست از تب «فروشگاه» حذفش کن.')) return;
+  try { await api('gameitems/save', { category: 'item', key, data: { market: true } }); toast('✅ به بازار سیاه برگشت', 'ok'); loadGameItems(); }
+  catch (e) { toast(e.message, 'err'); }
 }
 loadStats();
 </script>
